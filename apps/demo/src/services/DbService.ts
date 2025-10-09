@@ -410,18 +410,22 @@ export class DbService {
   }
 
   /* --------------------------------- SYNC --------------------------------- */
-  getLastKnownBlock() {
-    return this.getSetting("lastKnownBlock");
-  }
-  setLastKnownBlock(n: number) {
-    return this.setSetting("lastKnownBlock", n);
-  }
-  getOldestScannedBlock() {
-    return this.getSetting("oldestScannedBlock");
-  }
-  setOldestScannedBlock(n: number) {
-    return this.setSetting("oldestScannedBlock", n);
-  }
+  getLastKnownBlock(addr: string) {
+  const normalizedAddr = this.normalizeAddress(addr);
+  return this.getSetting(`lastKnownBlock_${normalizedAddr}`);
+}
+  setLastKnownBlock(addr: string, n: number) {
+  const normalizedAddr = this.normalizeAddress(addr);
+  return this.setSetting(`lastKnownBlock_${normalizedAddr}`, n);
+}
+  getOldestScannedBlock(addr: string) {
+  const normalizedAddr = this.normalizeAddress(addr);
+  return this.getSetting(`oldestScannedBlock_${normalizedAddr}`);
+}
+  setOldestScannedBlock(addr: string, n: number) {
+  const normalizedAddr = this.normalizeAddress(addr);
+  return this.setSetting(`oldestScannedBlock_${normalizedAddr}`, n);
+}
   getInitialScanComplete(addr: string) {
     const normalizedAddr = this.normalizeAddress(addr);
     return this.getSetting(`initialScanComplete_${normalizedAddr}`);
@@ -490,6 +494,8 @@ export class DbService {
         for (const s of staleSettings) {
           await this.db.settings.delete(s.name);
         }
+        await this.db.settings.delete(`lastKnownBlock_${normalizedAddr}`);
+        await this.db.settings.delete(`oldestScannedBlock_${normalizedAddr}`);
       }
     );
     //this.deduplicator.clear();

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import nacl from "tweetnacl";
 import { JsonRpcProvider } from "ethers";
 
-import { MessageDeduplicator, sendEncryptedMessage } from "../src/index.js";
+import { sendEncryptedMessage } from "../src/index.js";
 import { getNextNonce } from "../src/utils/nonce.js";
 import { convertPublicKeyToX25519 } from "../src/utils/x25519.js";
 import { isSmartContract1271, parseBindingMessage } from "../src/utils.js";
@@ -21,16 +21,6 @@ const fakeProvider = {
   },
 } as unknown as JsonRpcProvider;
 
-describe("MessageDeduplicator", () => {
-  it("detects duplicates and enforces maxSize", () => {
-    const dedup = new MessageDeduplicator(2);
-    expect(dedup.isDuplicate("A", "T", 1n)).toBe(false);
-    expect(dedup.isDuplicate("A", "T", 1n)).toBe(true);
-    expect(dedup.isDuplicate("A", "T", 2n)).toBe(false);
-    expect(dedup.isDuplicate("A", "T", 3n)).toBe(false);
-    expect(dedup.isDuplicate("A", "T", 1n)).toBe(false); // not duplicate anymore
-  });
-});
 
 describe("getNextNonce", () => {
   it("increments per (sender, topic) and returns bigint", () => {
