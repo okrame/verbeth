@@ -53,7 +53,7 @@ export interface Message {
   decrypted?: string; // Decrypted content (if available)
   read: boolean; // Read status
   nonce: number; // Sender nonce for replay protection
-  dedupKey: string; // `${sender}:${topic}:${nonce}`
+  dedupKey: string; 
   type: 'text' | 'system';
   status: 'pending' | 'confirmed' | 'failed';
   verified?: boolean;

@@ -267,28 +267,52 @@ export const useMessageListener = ({
         (c) => c.status === "established"
       );
       if (establishedContacts.length > 0) {
+        // 1) INBOUND ONLY: listen exclusively to topics where we receive messages
         const inboundTopics = establishedContacts
           .map((c) => c.topicInbound)
           .filter(Boolean);
 
-        const outboundTopics = establishedContacts
-          .map((c) => c.topicOutbound)
-          .filter(Boolean);
-
-        const allTopics = [...new Set([...inboundTopics, ...outboundTopics])];
-
-        if (allTopics.length > 0) {
-          const messageFilter = {
+        if (inboundTopics.length > 0) {
+          const messageFilterIn = {
             address: LOGCHAIN_SINGLETON_ADDR,
-            topics: [EVENT_SIGNATURES.MessageSent, null, allTopics],
+            topics: [EVENT_SIGNATURES.MessageSent, null, inboundTopics],
           };
-          const messageLogs = await safeGetLogs(
-            messageFilter,
+          const inboundLogs = await safeGetLogs(
+            messageFilterIn,
             fromBlock,
             toBlock
           );
 
-          for (const log of messageLogs) {
+          for (const log of inboundLogs) {
+            const logKey = `${log.transactionHash}-${log.logIndex}`;
+            if (!processedLogs.current.has(logKey)) {
+              processedLogs.current.add(logKey);
+              allEvents.push({
+                logKey,
+                eventType: "message",
+                rawLog: log,
+                blockNumber: log.blockNumber,
+                timestamp: Date.now(),
+              });
+            }
+          }
+        }
+
+        // 2) OUTBOUND CONFIRMATION: we do not need topic filter, we match logs where sender = our address
+        if (address) {
+          const senderTopic =
+            "0x000000000000000000000000" + address.slice(2).toLowerCase();
+          const messageFilterOutConfirm = {
+            address: LOGCHAIN_SINGLETON_ADDR,
+            topics: [EVENT_SIGNATURES.MessageSent, senderTopic],
+          };
+          const outLogs = await safeGetLogs(
+            messageFilterOutConfirm,
+            fromBlock,
+            toBlock
+          );
+
+          for (const log of outLogs) {
             const logKey = `${log.transactionHash}-${log.logIndex}`;
             if (!processedLogs.current.has(logKey)) {
               processedLogs.current.add(logKey);

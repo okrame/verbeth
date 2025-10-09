@@ -9,8 +9,8 @@
     <a href="LICENSE">
         <img src="https://img.shields.io/badge/license-MPL--2.0-blue?style=flat-square">
     </a>
-    <a href="https://github.com/okrame/verbeth-sdk/actions">
-  <img src="https://img.shields.io/github/actions/workflow/status/okrame/verbeth-sdk/ci.yml?branch=main&style=flat-square">
+    <a href="https://github.com/okrame/verbeth-sdk/actions/workflows/ci.yml">
+  <img src="https://github.com/okrame/verbeth-sdk/actions/workflows/ci.yml/badge.svg?branch=dev%2Fstealth-hsr" />
 </a>
     <a href="https://www.typescriptlang.org/">
         <img src="https://img.shields.io/badge/TypeScript-5.4+-blue?style=flat-square&logo=typescript">
@@ -49,24 +49,27 @@ Alice wants to initiate a secure chat with Bob:
    - verifies Alice’s identity with the included identityProof,
    - prepares his `HandshakeResponse`
 4. Bob computes a response tag and emits the response event:
-   - Bob generates an ephemeral keypair (R, r) dedicated to the tag.
+
+   - Bob generates an ephemeral keypair (R, r) dedicated to the tag (i.e. Bob can't forge a response for someone else other than Alice)
    - He computes the tag `H( HKDF( ECDH( r, Alice.viewPub ), "verbeth:hsr"))`
    - He encrypts the response to Alice’s handshake ephemeral public key and includes:
-      - his ephemeral public key for post-handshake
-      - his identity keys (unified) + identityProof
-      - topicInfo (see below) inside the encrypted payload
-      - the public R and response tag in the log
+     - his ephemeral public key for post-handshake
+     - his identity keys (unified) + identityProof
+     - topicInfo (see below) inside the encrypted payload
+     - the public R and response tag in the log
 
-5. Using her view secret key and Bob’s public R, Alice recomputes the tag. She can then filter handshake response logs by this tag and decrypt the matching one.
+5. Using her view (ephemeral) secret key and Bob’s public R, Alice recomputes the tag. She can then filter handshake response logs by this tag and decrypt the matching one.
 
 6. Once handshake is complete, both derive duplex topics and start emitting `MessageSent` events:
-  - Using a long-term diffie–hellman shared secret and the response tag as salt, they derive:
-      ```
-      shared  = ECDH( Alice , Bob )
-      topic = keccak256( HKDF(sha256, shared, salt, info) )
-      ```
-   - Alice encrypts messages using Bob’s identity key with a fresh ephemeral key per message (and vice versa).
-   - They can sign messages with their long term signing key
+
+- Using a long-term diffie–hellman shared secret and the response tag as salt, they derive:
+  ```
+  shared  = ECDH( Alice , Bob )
+  topic = keccak256( HKDF(sha256, shared, salt, info) )
+  ```
+  N.B: with the tag salt, each handshake creates fresh topics
+- Alice encrypts messages using Bob’s identity key with a fresh ephemeral key per message (and vice versa).
+- They can sign messages with their long term signing key
 
 ```
 ALICE (Initiator)              BLOCKCHAIN               BOB (Responder)
@@ -140,15 +143,15 @@ ALICE (Initiator)              BLOCKCHAIN               BOB (Responder)
 
 ## Contract
 
- We include `sender` (= `msg.sender`) as an **indexed event field** to bind each log to the actual caller account (EOA or smart account) and make it "bloom-filterable".  
+We include `sender` (= `msg.sender`) as an **indexed event field** to bind each log to the actual caller account (EOA or smart account) and make it "bloom-filterable".
 
-A transaction receipt does not expose the immediate caller of this contract — it only contains the emitter address (this contract) and the topics/data — so recovering `msg.sender` would require execution traces.  
+A transaction receipt does not expose the immediate caller of this contract — it only contains the emitter address (this contract) and the topics/data — so recovering `msg.sender` would require execution traces.
 
-Under ERC-4337 this becomes even trickier: the outer transaction targets the EntryPoint and tx.from is the bundler, not the smart account.  Without including sender in the event, reliably linking a log to the originating account would require correlating EntryPoint internals or traces.
+Under ERC-4337 this becomes even trickier: the outer transaction targets the EntryPoint and tx.from is the bundler, not the smart account. Without including sender in the event, reliably linking a log to the originating account would require correlating EntryPoint internals or traces.
 
 ### Deployed Addresses
 
-LogChainV1 `0x41a3eaC0d858028E9228d1E2092e6178fc81c4f0`
+LogChainV1 (singleton) `0x41a3eaC0d858028E9228d1E2092e6178fc81c4f0`
 
 ERC1967Proxy `0x62720f39d5Ec6501508bDe4D152c1E13Fd2F6707`
 
@@ -169,7 +172,7 @@ It supports both EOAs and Smart Contract Accounts — whether they’re already 
 
 ### Notes on the current model
 
-**Discoverability**: If the sender does not yet know the recipient’s long-term public key (X25519), the sender must emit a `Handshake` event. The recipient replies with their keys and identity proof, after which the sender caches the verified mapping. If the key is already known (from a past `HandshakeResponse`, an on-chain announcement, or a static mapping), the handshake can be skipped.
+**Discoverability**: If the sender does not yet know the recipient’s long-term public key (X25519), the sender (i.e. initiator) must emit a `Handshake` event. The recipient (i.e. reponder) replies with their keys and identity proof, after which the sender caches the verified mapping. If the key is already known (from a past `HandshakeResponse`, an on-chain announcement, or a static mapping), the handshake can be skipped.
 
 **Identity key binding**: The message (es. “VerbEth Key Binding v1\nAddress: …\nPkEd25519: …\nPkX25519: …\nContext: …\nVersion: …”) is signed by the evm account directly binding its address to the long-term keys (i.e. preventing impersonation).
 
@@ -177,7 +180,10 @@ It supports both EOAs and Smart Contract Accounts — whether they’re already 
 
 **Forward secrecy**: Each message uses a fresh sender ephemeral key. This provides sender-side forward secrecy for sent messages: once the sender deletes the ephemeral secret, a future compromise of their long-term keys does not expose past ciphertexts. Handshake responses also use ephemeral↔ephemeral, enjoying the same property. However, if a recipient’s long-term X25519 key is compromised, all past messages addressed to them remain decryptable. A double-ratchet (or ephemeral↔ephemeral messaging) can extend forward secrecy to the recipient side (see [here](#improvement-ideas)).
 
-**Messaging linkability**: Current version has duplex topics by default: one topic per direction, obtained with HKDF. So, each side writes on its own secret topic and we don’t get the “two accounts posting on the same topic, hence they’re chatting” giveaway. Also, the topic is optionally bound to each message by covering it in the detached Ed25519 signature `(topic || epk || nonce || ciphertext)`, which kills cross-topic replays. NB: The handshake phase and timing analysis can still reveal communication patterns.
+**Handshake linkability:**
+Each handshake relies on a diffie–hellman exchange between the initiator’s handshake ephemeral key and the responder’s tag ephemeral R. The resulting tag is an opaque pointer that hides who the initiator is. Reusing only the responder’s R lets observers group his responses that reused the same tag key, but it does not reveal which initiator each response targets. Reusing only initiator's ephemeral pubkey lets observers group her handshakes (which already show sender in this design, but breaking unlinkability if hidden behind a relay). The tag repeats only if both ephemerals are reused together. The real issue is a lack of forward secrecy during handshaking: if either handshake-ephemeral secret is later compromised and had been reused, an attacker could retroactively derive all matching tags and link multiple past handshakes between the same parties. In practice, both sides should generate fresh ephemerals per handshake and securely erase them after use.
+
+**Communication channels linkability**: Current version has duplex topics by default: one topic per direction, obtained with HKDF. So, each side writes on its own secret topic and we don’t get the “two accounts posting on the same topic, hence they’re chatting” giveaway. Also, the topic is optionally bound to each message by covering it in the detached Ed25519 signature (topic || epk || nonce || ciphertext), which kills cross-topic replays. At the application level, each client queries only its inbound topics so the RPC endpoint never learns both sides of a duplex pair. Note: timing during the handshake phase (and general traffic analysis) can still reveal communication patterns.
 
 ## Example Usage (WIP)
 

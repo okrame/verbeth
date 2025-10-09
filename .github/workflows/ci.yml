@@ -1,10 +1,14 @@
+# .github/workflows/ci.yml
 name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - '**'          
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+  workflow_dispatch:   
 
 permissions:
   contents: read
@@ -12,29 +16,19 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 9
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
-
-      - name: Install Foundry (for anvil)
-        uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: nightly
-
       - name: Install deps
         run: pnpm install --no-frozen-lockfile
-
       - name: Run tests (unit → contracts → integration)
         run: pnpm -w run test

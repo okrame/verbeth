@@ -303,9 +303,7 @@ export const useChatActions = ({
           type: "text" as const,
           ownerAddress: currentAddress,
           status: "pending" as const,
-        };
-
-        await addMessage(pendingMessage);
+        };        
 
         await sendEncryptedMessage({
           executor,
@@ -316,6 +314,8 @@ export const useChatActions = ({
           senderSignKeyPair: identityAsSigningKey,
           timestamp,
         });
+
+        await addMessage(pendingMessage);
 
         const updatedContact: Contact = {
           ...contact,
