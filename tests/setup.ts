@@ -27,6 +27,7 @@ export class AnvilSetup {
       "30000000",
     ];
 
+    // Only add fork block if explicitly specified
     if (forkBlock) {
       params.push("--fork-block-number", forkBlock.toString());
     }
@@ -61,7 +62,7 @@ export class AnvilSetup {
   async stop(): Promise<void> {
     if (this.process) {
       console.log(`Stopping Anvil on port ${this.port}…`);
-      this.process.kill("SIGTERM");
+      this.process.kill('SIGTERM');
 
       await new Promise<void>((resolve) => {
         if (!this.process) {
@@ -77,7 +78,7 @@ export class AnvilSetup {
         setTimeout(() => {
           console.log(`Anvil stop timeout on port ${this.port}`);
           if (this.process) {
-            this.process.kill("SIGKILL");
+            this.process.kill('SIGKILL');
           }
           resolve();
         }, 3000);
