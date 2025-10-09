@@ -24,14 +24,13 @@
 E2EE messaging over Ethereum logs, using the blockchain as the only transport layer.
 </p>
 
-### Built With
+### Built with
 
-This SDK and [demo app](https://verbeth-demo.vercel.app/) rely on few battle-tested libraries:
 
-- [**TweetNaCl**](https://tweetnacl.js.org/) – Encryption/decryption (NaCl box)
-- [**Ethers v6**](https://docs.ethers.org/v6/) – Core Ethereum interactions, providers, contracts, signing
-- [**Viem**](https://viem.sh/) – Specific for EIP-1271/6492 verification and WebAuthn accounts
-- [**Dexie**](https://dexie.org/) – Local IndexedDB storage
+- [**TweetNaCl**](https://tweetnacl.js.org/) – for encryption/decryption with NaCl box
+- [**Ethers v6**](https://docs.ethers.org/v6/) – for all Ethereum interactions
+- [**Viem**](https://viem.sh/) – specific for EIP-1271/6492 verification
+- [**Dexie**](https://dexie.org/) – used for the local IndexedDB storage in the [demo app](https://verbeth-demo.vercel.app/)
 
 ---
 

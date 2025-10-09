@@ -59,10 +59,29 @@ export class AnvilSetup {
   }
 
   async stop(): Promise<void> {
-    if (this.process) {
-      console.log("Stopping Anvil…");
-      this.process.kill();
-      this.process = null;
-    }
+  if (this.process) {
+    console.log("Stopping Anvil…");
+    this.process.kill();
+    
+    await new Promise<void>((resolve) => {
+      if (!this.process) {
+        resolve();
+        return;
+      }
+      
+      this.process.on('exit', () => {
+        console.log("Anvil process exited");
+        resolve();
+      });
+      
+      setTimeout(() => {
+        console.log("Anvil stop timeout reached");
+        resolve();
+      }, 3000);
+    });
+    
+    this.process = null;
+    await new Promise(resolve => setTimeout(resolve, 500));
   }
+}
 }

@@ -10,6 +10,7 @@ export default {
         singleFork: true
       }
     },
+    fileParallelism: false,
     include: ['tests/handshaking.test.ts', 'tests/messaging.test.ts', 'tests/e2e.test.ts', '*.test.ts'],
     exclude: ['**/node_modules/**', 'packages/**']
   },
