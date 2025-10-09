@@ -56,7 +56,7 @@ describe("Smart Account Secure Messaging (Phase 5)", () => {
   let bobIdentityKeys: any;
 
   beforeAll(async () => {
-    anvil = new AnvilSetup();
+    anvil = new AnvilSetup(8546);
     const forkUrl = "https://base-rpc.publicnode.com";
 
     await anvil.start(forkUrl);

@@ -83,7 +83,7 @@ describe("End-to-End Handshake and Messaging Tests", () => {
   let deployerNM: NonceManager;
 
   beforeAll(async () => {
-    anvil = new AnvilSetup();
+    anvil = new AnvilSetup(8547);
     const forkUrl = "https://base-rpc.publicnode.com";
     await anvil.start(forkUrl);
     provider = anvil.provider;

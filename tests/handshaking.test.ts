@@ -56,7 +56,7 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
   let responderIdentityKeys: any;
 
   beforeAll(async () => {
-    anvil = new AnvilSetup();
+    anvil = new AnvilSetup(8545);
     const forkUrl = "https://base-rpc.publicnode.com";
 
     await anvil.start(forkUrl);
