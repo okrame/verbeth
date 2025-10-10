@@ -31,4 +31,4 @@ jobs:
       - name: Install deps
         run: pnpm install --no-frozen-lockfile
       - name: Run tests (unit → contracts → integration)
-        run: pnpm -w run test
+        run: ANVIL_BASE_PORT=8500 pnpm -w run test
