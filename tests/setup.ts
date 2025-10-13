@@ -6,7 +6,11 @@ export class AnvilSetup {
   public provider: JsonRpcProvider;
 
   constructor(private port: number = 8545) {
-    this.provider = new JsonRpcProvider(`http://localhost:${this.port}`);
+    this.provider = new JsonRpcProvider(
+      `http://127.0.0.1:${this.port}`,
+      { chainId: 8453, name: "base-fork" },
+      { staticNetwork: true }
+    );
   }
 
   async start(forkUrl: string, forkBlock?: number): Promise<void> {
@@ -62,7 +66,7 @@ export class AnvilSetup {
   async stop(): Promise<void> {
     if (this.process) {
       console.log(`Stopping Anvil on port ${this.port}…`);
-      this.process.kill('SIGTERM');
+      this.process.kill("SIGTERM");
 
       await new Promise<void>((resolve) => {
         if (!this.process) {
@@ -78,7 +82,7 @@ export class AnvilSetup {
         setTimeout(() => {
           console.log(`Anvil stop timeout on port ${this.port}`);
           if (this.process) {
-            this.process.kill('SIGKILL');
+            this.process.kill("SIGKILL");
           }
           resolve();
         }, 3000);
