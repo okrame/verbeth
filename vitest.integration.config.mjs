@@ -2,8 +2,8 @@ export default {
   test: {
     globals: true,
     environment: 'node',
-    testTimeout: 30000,
-    hookTimeout: 30000,
+    testTimeout: 60000,
+    hookTimeout: 120000,
     pool: 'threads',
     poolOptions: { threads: { singleThread: true, minThreads: 1, maxThreads: 1, isolate: true } },
     fileParallelism: false,

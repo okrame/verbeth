@@ -29,6 +29,10 @@ export class AnvilSetup {
       "1000",
       "--gas-limit",
       "30000000",
+      "--timeout",
+      "60000", 
+      "--retries",
+      "5", 
     ];
 
     // Only add fork block if explicitly specified
@@ -46,7 +50,7 @@ export class AnvilSetup {
     await new Promise<void>((resolve, reject) => {
       const t = setTimeout(
         () => reject(new Error(`Anvil start timeout on port ${this.port}`)),
-        20_000
+        60_000
       );
 
       const ping = async () => {
@@ -56,7 +60,7 @@ export class AnvilSetup {
           console.log(`Anvil ready on port ${this.port} (mainnet fork)!`);
           resolve();
         } catch {
-          setTimeout(ping, 300);
+          setTimeout(ping, 500);
         }
       };
       ping();
