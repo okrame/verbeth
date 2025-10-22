@@ -1,17 +1,20 @@
 // apps/demo/src/hooks/useMessageProcessor.ts
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { AbiCoder } from "ethers";
 import {
   decryptMessage,
-  decryptHandshakeResponse,
   parseHandshakePayload,
   verifyHandshakeIdentity,
-  verifyHandshakeResponseIdentity,
   IdentityKeyPair,
-  extractKeysFromHandshakeResponse,
   decodeUnifiedPubKeys,
+  verifyAndExtractHandshakeResponseKeys,
+  deriveDuplexTopics,
+  verifyDerivedDuplexTopics,
+  computeTagFromInitiator,
+  pickOutboundTopic,
 } from "@verbeth/sdk";
+
 import { dbService } from "../services/DbService.js";
 import {
   Contact,
@@ -23,7 +26,6 @@ import {
   MessageType,
   ContactStatus,
   generateTempMessageId,
-  generateConversationTopic,
 } from "../types.js";
 
 interface UseMessageProcessorProps {
@@ -32,6 +34,22 @@ interface UseMessageProcessorProps {
   identityKeyPair: IdentityKeyPair | null;
   onLog: (message: string) => void;
 }
+
+/**
+ * useMessageProcessor
+ *
+ * - Maintains a FIFO of pending outgoing messages per topic in-memory.
+ *   - Enqueue on send (and on DB restore), dequeue on on-chain confirmation.
+ *   - This guarantees correct matching when multiple messages are sent before the first confirms.
+ *
+ * - On confirmation:
+ *   1) Prefer the in-memory FIFO (topic -> queue.shift()).
+ *   2) If missing (refresh / multi-tab / race), fallback to DB.findPendingMessage(...).
+ *   3) If still missing, synthesize a confirmed outgoing from the log (id = txHash-logIndex).
+ *
+ * - Dedup logic lives in DbService (skip dedup for pending; dedup confirmed by sender:topic:nonce).
+ * - NB: listener should query only inbound topics; confirmations are filtered by sender=me.
+ */
 
 export const useMessageProcessor = ({
   readProvider,
@@ -44,6 +62,9 @@ export const useMessageProcessor = ({
     PendingHandshake[]
   >([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
+
+  // Track pending outgoing per topic in-memory (FIFO queues)
+  const pendingMessagesRef = useRef<Map<string, Message[]>>(new Map());
 
   const hexToUint8Array = (hex: string): Uint8Array => {
     const cleanHex = hex.replace("0x", "");
@@ -65,15 +86,6 @@ export const useMessageProcessor = ({
     return `${txHash}-${idx}`;
   };
 
-  const generateDedupKey = (
-    sender: string,
-    topic: string,
-    nonce: number
-  ): string => {
-    return `${sender}:${topic}:${nonce}`;
-  };
-
-  // Load data from database
   const loadFromDatabase = useCallback(async () => {
     if (!address) return;
 
@@ -88,19 +100,40 @@ export const useMessageProcessor = ({
       setMessages(dbMessages);
       setPendingHandshakes(dbPendingHandshakes);
 
+      // Restore pending outgoing messages into the in-memory Map
+      pendingMessagesRef.current.clear();
+      dbMessages
+        .filter(
+          (msg) =>
+            msg.status === "pending" &&
+            msg.direction === "outgoing" &&
+            msg.type === "text" &&
+            msg.topic
+        )
+        .forEach((msg) => {
+          const q = pendingMessagesRef.current.get(msg.topic) ?? [];
+          q.push(msg);
+          pendingMessagesRef.current.set(msg.topic, q);
+          onLog(
+            `Restored pending message for topic ${msg.topic.slice(
+              0,
+              10
+            )}...: "${msg.decrypted?.slice(0, 30)}..."`
+          );
+        });
+
       onLog(
         `Loaded from DB for ${address.slice(0, 8)}...: ${
           dbContacts.length
-        } contacts, ${dbMessages.length} messages, ${
-          dbPendingHandshakes.length
-        } pending handshakes`
+        } contacts, ${dbMessages.length} messages (${
+          pendingMessagesRef.current.size
+        } pending), ${dbPendingHandshakes.length} pending handshakes`
       );
     } catch (error) {
       onLog(`✗ Failed to load from database: ${error}`);
     }
   }, [address, onLog]);
 
-  // Process handshake log
   const processHandshakeLog = useCallback(
     async (event: ProcessedEvent): Promise<void> => {
       if (!address || !readProvider) return;
@@ -147,7 +180,6 @@ export const useMessageProcessor = ({
           hasValidIdentityProof = false;
         }
 
-        // Verify identity if we have a valid identity proof
         let isVerified = false;
         if (hasValidIdentityProof) {
           try {
@@ -189,13 +221,9 @@ export const useMessageProcessor = ({
           return [...prev, pendingHandshake];
         });
 
-        const conversationTopic = generateConversationTopic(
-          address,
-          cleanSenderAddress
-        );
         const handshakeMessage: Message = {
           id: generateTempMessageId(),
-          topic: conversationTopic,
+          topic: "",
           sender: cleanSenderAddress,
           recipient: address,
           ciphertext: "",
@@ -228,7 +256,6 @@ export const useMessageProcessor = ({
     [address, readProvider, onLog]
   );
 
-  // Process handshake response log - load contacts from DB
   const processHandshakeResponseLog = useCallback(
     async (event: ProcessedEvent): Promise<void> => {
       if (!address || !readProvider) return;
@@ -236,7 +263,11 @@ export const useMessageProcessor = ({
       try {
         const log = event.rawLog;
         const abiCoder = new AbiCoder();
-        const [ciphertextBytes] = abiCoder.decode(["bytes"], log.data);
+        const [responderEphemeralRBytes, ciphertextBytes] = abiCoder.decode(
+          ["bytes32", "bytes"],
+          log.data
+        );
+
         const ciphertextJson = new TextDecoder().decode(
           hexToUint8Array(ciphertextBytes)
         );
@@ -244,13 +275,12 @@ export const useMessageProcessor = ({
         const responder = "0x" + log.topics[2].slice(-40);
         const inResponseTo = log.topics[1];
 
-        // Load fresh contacts from database instead of using stale parameter
         const currentContacts = await dbService.getAllContacts(address);
+
         onLog(
           `🔍 Debug: Loaded ${currentContacts.length} contacts from DB for handshake response`
         );
 
-        // Find the contact this response is for
         const contact = currentContacts.find(
           (c) =>
             c.address.toLowerCase() === responder.toLowerCase() &&
@@ -267,60 +297,83 @@ export const useMessageProcessor = ({
           return;
         }
 
-        const decryptedResponse = decryptHandshakeResponse(
-          ciphertextJson,
-          contact.ephemeralKey
+        const responseEvent = {
+          inResponseTo,
+          responder,
+          responderEphemeralR: responderEphemeralRBytes,
+          ciphertext: ciphertextJson,
+        };
+
+        const result = await verifyAndExtractHandshakeResponseKeys(
+          responseEvent,
+          contact.ephemeralKey, // initiator's ephemeral secret key
+          readProvider
         );
 
-        if (!decryptedResponse) {
+        if (!result.isValid || !result.keys) {
           onLog(
-            `✗ Failed to decrypt handshake response from ${responder.slice(
+            `❌ Failed to verify handshake response from ${responder.slice(
               0,
               8
-            )}...`
+            )}... - invalid signature or tag mismatch`
           );
           return;
         }
 
-        const extractedKeys =
-          extractKeysFromHandshakeResponse(decryptedResponse);
-        if (!extractedKeys) {
-          onLog(`✗ Failed to extract keys from handshake response`);
+        const { identityPubKey, signingPubKey, ephemeralPubKey, note } =
+          result.keys;
+
+        if (!identityKeyPair) {
+          onLog(`❌ Cannot verify duplex topics: identityKeyPair is null`);
           return;
         }
 
-        // Verify response identity
-        let isVerified = false;
-        try {
-          const responseLog = {
-            inResponseTo,
-            responder,
-            ciphertext: ciphertextJson,
-          };
+        const saltHex = computeTagFromInitiator(
+          contact.ephemeralKey, // Alice's ephemeral secret (stored when she sent handshake)
+          hexToUint8Array(responderEphemeralRBytes) // Bob's public R from the response event
+        );
+        const salt = Uint8Array.from(Buffer.from(saltHex.slice(2), "hex"));
 
-          isVerified = await verifyHandshakeResponseIdentity(
-            responseLog,
-            extractedKeys.identityPubKey,
-            contact.ephemeralKey,
-            readProvider
+        const duplexTopics = deriveDuplexTopics(
+          identityKeyPair.secretKey, // Alice's identity secret key
+          identityPubKey, // Bob's identity public key (from response)
+          salt
+        );
+        const isValidTopics = verifyDerivedDuplexTopics({
+          myIdentitySecretKey: identityKeyPair.secretKey,
+          theirIdentityPubKey: identityPubKey,
+          topicInfo: {
+            out: duplexTopics.topicOut,
+            in: duplexTopics.topicIn,
+            chk: duplexTopics.checksum,
+          },
+          salt,
+        });
+        if (!isValidTopics) {
+          onLog(
+            `❌ Invalid duplex topics checksum for ${responder.slice(0, 8)}...`
           );
-        } catch (error) {
-          onLog(`Failed to verify handshake response identity: ${error}`);
+          return;
         }
 
-        // Update contact to established
+        onLog(
+          `✅ Handshake response verified from ${responder.slice(0, 8)}...`
+        );
+
         const updatedContact: Contact = {
           ...contact,
           status: "established" as ContactStatus,
-          identityPubKey: extractedKeys.identityPubKey,
-          signingPubKey: extractedKeys.signingPubKey,
-          lastMessage: decryptedResponse.note || decryptedResponse.note,
+          identityPubKey,
+          signingPubKey,
+          ephemeralKey: undefined,
+          topicOutbound: pickOutboundTopic(true, duplexTopics), // Alice is initiator
+          topicInbound: pickOutboundTopic(false, duplexTopics), // Bob is responder
+          lastMessage: note || "Handshake accepted",
           lastTimestamp: Date.now(),
         };
 
         await dbService.saveContact(updatedContact);
 
-        // Update state
         setContacts((prev) =>
           prev.map((c) =>
             c.address.toLowerCase() === responder.toLowerCase()
@@ -330,15 +383,14 @@ export const useMessageProcessor = ({
         );
 
         onLog(
-          `🤝 Handshake completed with ${responder.slice(0, 8)}... ${
-            isVerified ? "Verified ✅" : "Unverified! ⚠️"
-          }: "${decryptedResponse.note}"`
+          `🤝 Handshake completed with ${responder.slice(0, 8)}... : "${
+            note || "No message"
+          }"`
         );
-        // Add handshake response message to chat
-        const conversationTopic = generateConversationTopic(address, responder);
+
         const responseMessage: Message = {
           id: generateTempMessageId(),
-          topic: conversationTopic,
+          topic: updatedContact.topicInbound || "",
           sender: responder,
           recipient: address,
           ciphertext: "",
@@ -346,28 +398,26 @@ export const useMessageProcessor = ({
           blockTimestamp: Date.now(),
           blockNumber: 0,
           direction: "incoming" as const,
-          decrypted: `Request accepted: "${
-            decryptedResponse.note || "No message"
-          }"`,
+          decrypted: `Request accepted: "${note || "No message"}"`,
           read: true,
           nonce: 0,
           dedupKey: `handshake-response-${inResponseTo}`,
           type: "system" as const,
           ownerAddress: address,
           status: "confirmed" as const,
-          verified: isVerified,
+          verified: true,
         };
 
         await dbService.saveMessage(responseMessage);
         setMessages((prev) => [...prev, responseMessage]);
       } catch (error) {
         onLog(`✗ Failed to process handshake response log: ${error}`);
+        console.error("Full error:", error);
       }
     },
-    [address, readProvider, onLog]
+    [address, readProvider, onLog, identityKeyPair]
   );
 
-  // Process message log - load contacts from DB and update lastMessage
   const processMessageLog = useCallback(
     async (event: ProcessedEvent): Promise<void> => {
       if (!address || !identityKeyPair) return;
@@ -381,13 +431,18 @@ export const useMessageProcessor = ({
         );
         const [ciphertextBytes, timestamp, nonce] = decoded;
         const topic = log.topics[2];
-
         const sender = "0x" + log.topics[1].slice(-40);
+        const key = `${address.toLowerCase()}:${generateMessageId(log.transactionHash, log)}`;
 
         const ciphertextJson = new TextDecoder().decode(
           hexToUint8Array(ciphertextBytes)
         );
         const isOurMessage = sender.toLowerCase() === address.toLowerCase();
+
+        if (!isOurMessage) {
+          const already = await dbService.getByDedupKey(key);
+          if (already) return;
+        }
 
         onLog(
           `🔍 Processing message log: sender=${sender.slice(
@@ -399,8 +454,8 @@ export const useMessageProcessor = ({
           )}..., nonce=${Number(nonce)}`
         );
 
+        // OUTGOING MESSAGE CONFIRMATION
         if (isOurMessage) {
-          // This is our own message appearing on-chain, update the outgoing message status
           onLog(
             `🔄 Confirming our outgoing message: topic=${topic.slice(
               0,
@@ -408,80 +463,121 @@ export const useMessageProcessor = ({
             )}..., nonce=${Number(nonce)}`
           );
 
-          let existingOutgoingMessage = await dbService.findPendingMessage(
-            address, // sender
-            topic, // topic (usa quello decodificato dal log)
-            Number(nonce), // nonce
-            address // owner (che per outgoing == sender)
-          );
+          const q = pendingMessagesRef.current.get(topic) ?? [];
+          const pendingMessage = q.shift(); // confirm the oldest
+          pendingMessagesRef.current.set(topic, q);
 
-          // ✅ FALLBACK
-          if (!existingOutgoingMessage) {
-            const potentialDedupKey = generateDedupKey(
-              address,
-              topic,
-              Number(nonce)
-            );
-            existingOutgoingMessage = await dbService.findMessageByDedupKey(
-              potentialDedupKey
+          if (pendingMessage) {
+            onLog(
+              `Matched pending by topic. Content preview:: "${pendingMessage.decrypted?.slice(
+                0,
+                100
+              )}..."`
             );
 
-            if (existingOutgoingMessage) {
-              onLog(`Found message by dedupKey: ${potentialDedupKey}`);
-            }
-          }
-
-          if (existingOutgoingMessage) {
-            // ✅ Update the outgoing message with on-chain confirmation
             const newId = generateMessageId(log.transactionHash, log);
-
-            const updatedMessage: Message = {
-              ...existingOutgoingMessage,
+            const confirmedMessage: Message = {
+              ...pendingMessage,
               id: newId,
               blockNumber: log.blockNumber,
               blockTimestamp: Date.now(),
               ciphertext: ciphertextJson,
-              topic: topic, // Use the actual on-chain topic
-              nonce: Number(nonce), // Use the actual on-chain nonce
-              dedupKey: generateDedupKey(address, topic, Number(nonce)),
+              nonce: Number(nonce),
+              dedupKey: key,
               status: "confirmed",
             };
 
-            // Replace old message with confirmed one
-            await dbService.updateMessage(
-              existingOutgoingMessage.id,
-              updatedMessage
-            );
+            if (q.length === 0) {
+              pendingMessagesRef.current.delete(topic);
+            }
 
-            // Update state
+            await dbService.updateMessage(pendingMessage.id, confirmedMessage);
+            await dbService.upsertDedup({
+              key,
+              messageId: newId,
+              txHash: log.transactionHash,
+              blockNumber: log.blockNumber,
+            });
+
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === existingOutgoingMessage.id ? updatedMessage : m
+                m.id === pendingMessage.id ? confirmedMessage : m
               )
             );
 
             onLog(
-              `Outgoing message confirmed on-chain: "${existingOutgoingMessage.decrypted?.slice(
+              `✅ Outgoing message confirmed: "${pendingMessage.decrypted?.slice(
                 0,
                 30
-              )}..." (${existingOutgoingMessage.id} → ${newId})`
+              )}..." (${pendingMessage.id} → ${newId})`
             );
           } else {
-            onLog(
-              `Couldn't find matching outgoing message for confirmation (topic: ${topic.slice(
-                0,
-                10
-              )}..., nonce: ${Number(
-                nonce
-              )}) - this might be a message from another session`
+            const dbFallback = await dbService.findPendingMessage(
+              address,
+              topic,
+              Number(nonce),
+              address
             );
+
+            // for "lastMessage" updates
+            const allContacts = await dbService.getAllContacts(address);
+            const byTopic = allContacts.find((c) => c.topicOutbound === topic);
+
+            const newId = generateMessageId(log.transactionHash, log);
+            const confirmed: Message = {
+              id: newId,
+              topic,
+              sender: address,
+              recipient: byTopic?.address,
+              ciphertext: ciphertextJson,
+              timestamp: Number(timestamp) * 1000,
+              blockTimestamp: Date.now(),
+              blockNumber: log.blockNumber,
+              direction: "outgoing",
+              read: true,
+              decrypted: dbFallback?.decrypted,
+              type: "text",
+              nonce: Number(nonce),
+              dedupKey: key,
+              ownerAddress: address,
+              status: "confirmed",
+            };
+
+            if (dbFallback) {
+              // Replace the pending row in-place (preserves the bubble)
+              await dbService.updateMessage(dbFallback.id, confirmed);
+              await dbService.upsertDedup({
+                key,
+                messageId: newId,
+                txHash: log.transactionHash,
+                blockNumber: log.blockNumber,
+              });
+              setMessages((prev) =>
+                prev.map((m) => (m.id === dbFallback.id ? confirmed : m))
+              );
+              onLog(
+                `✅ Outgoing message confirmed (fallback): "${
+                  confirmed.decrypted?.slice(0, 30) ?? ""
+                }" (${dbFallback.id} → ${newId})`
+              );
+            } else {
+              await dbService.saveMessage(confirmed);
+              await dbService.upsertDedup({
+                key,
+                messageId: newId,
+                txHash: log.transactionHash,
+                blockNumber: log.blockNumber,
+              });
+              setMessages((prev) => [...prev, confirmed]);
+              onLog(`✅ Outgoing message confirmed (synthesized): ${newId}`);
+            }
           }
 
-          return; // Don't process as incoming message since it's our own
+          return;
         }
 
+        // INCOMING MESSAGE
         const currentContacts = await dbService.getAllContacts(address);
-
         const contact = currentContacts.find(
           (c) =>
             c.address.toLowerCase() === sender.toLowerCase() &&
@@ -491,6 +587,19 @@ export const useMessageProcessor = ({
         if (!contact || !contact.identityPubKey || !contact.signingPubKey) {
           onLog(
             `❓ Received message from unknown contact: ${sender.slice(0, 8)}...`
+          );
+          return;
+        }
+
+        if (contact.topicInbound && topic !== contact.topicInbound) {
+          onLog(
+            `❌ Message topic mismatch from ${sender.slice(
+              0,
+              8
+            )}... - expected ${contact.topicInbound.slice(
+              0,
+              10
+            )}..., got ${topic.slice(0, 10)}...`
           );
           return;
         }
@@ -506,38 +615,40 @@ export const useMessageProcessor = ({
           return;
         }
 
-        // Create message object
         const message: Message = {
           id: generateMessageId(log.transactionHash, log),
           topic: topic,
           sender: sender,
           recipient: address,
           ciphertext: ciphertextJson,
-          timestamp: Number(timestamp) * 1000, // Convert to milliseconds
-          blockTimestamp: Date.now(), // Will be updated with actual block timestamp if needed
+          timestamp: Number(timestamp) * 1000,
+          blockTimestamp: Date.now(),
           blockNumber: log.blockNumber,
           direction: "incoming" as MessageDirection,
           decrypted: decryptedMessage,
           read: false,
           nonce: Number(nonce),
-          dedupKey: generateDedupKey(sender, topic, Number(nonce)),
+          dedupKey: key,
           type: "text" as MessageType,
           ownerAddress: address,
           status: "confirmed",
         };
 
-        // Save to database (will handle deduplication)
         const saved = await dbService.saveMessage(message);
 
         if (saved) {
-          // Update state
+          await dbService.upsertDedup({
+            key,
+            messageId: message.id,
+            txHash: log.transactionHash,
+            blockNumber: log.blockNumber,
+          });
           setMessages((prev) => {
             const existing = prev.find((m) => m.id === message.id);
             if (existing) return prev;
             return [...prev, message];
           });
 
-          // ✅ FIXED: Update contact's lastMessage and lastTimestamp when receiving a message
           const updatedContact: Contact = {
             ...contact,
             lastMessage: decryptedMessage,
@@ -546,7 +657,6 @@ export const useMessageProcessor = ({
 
           await dbService.saveContact(updatedContact);
 
-          // Update contacts state
           setContacts((prev) =>
             prev.map((c) =>
               c.address.toLowerCase() === sender.toLowerCase()
@@ -564,7 +674,6 @@ export const useMessageProcessor = ({
     [address, identityKeyPair, onLog]
   );
 
-  // ✅ FIXED: Main event processing function - NOW STABLE!
   const processEvents = useCallback(
     async (events: ProcessedEvent[]) => {
       for (const event of events) {
@@ -573,30 +682,46 @@ export const useMessageProcessor = ({
             await processHandshakeLog(event);
             break;
           case "handshake_response":
-            await processHandshakeResponseLog(event); // ✅ Removed currentContacts parameter
+            await processHandshakeResponseLog(event);
             break;
           case "message":
-            await processMessageLog(event); // ✅ Removed currentContacts parameter
+            await processMessageLog(event);
             break;
         }
       }
     },
     [processHandshakeLog, processHandshakeResponseLog, processMessageLog]
   );
-  // ✅ Now it only depends on the processing functions, not on contacts state!
 
-  // Helper functions for UI
   const addMessage = useCallback(
     async (message: Message) => {
       if (!address) return;
 
       const messageWithOwner = { ...message, ownerAddress: address };
+      // Track pending outgoing in the in-memory Map
+      if (
+        messageWithOwner.status === "pending" &&
+        messageWithOwner.direction === "outgoing" &&
+        messageWithOwner.type === "text" &&
+        messageWithOwner.topic
+      ) {
+        const q = pendingMessagesRef.current.get(messageWithOwner.topic) ?? [];
+        q.push(messageWithOwner);
+        pendingMessagesRef.current.set(messageWithOwner.topic, q);
+        onLog(
+          `Registered pending message for topic ${messageWithOwner.topic.slice(
+            0,
+            10
+          )}...`
+        );
+      }
+
       const saved = await dbService.saveMessage(messageWithOwner);
       if (saved) {
         setMessages((prev) => [...prev, messageWithOwner]);
       }
     },
-    [address]
+    [address, onLog]
   );
 
   const removePendingHandshake = useCallback(async (id: string) => {
@@ -610,15 +735,16 @@ export const useMessageProcessor = ({
       const contactWithOwner = { ...contact, ownerAddress: address };
       await dbService.saveContact(contactWithOwner);
 
-      // Always reload all contacts from the DB after update to ensure state is correct
       const allContacts = await dbService.getAllContacts(address);
       setContacts(allContacts);
     },
     [address]
   );
 
+  // cleanup and reload when address changes
   useEffect(() => {
     if (address) {
+      pendingMessagesRef.current.clear();
       setMessages([]);
       setContacts([]);
       setPendingHandshakes([]);

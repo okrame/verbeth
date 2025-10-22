@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Contract, Signer } from "ethers";
 import nacl from "tweetnacl";
-import { 
+import {
   ExecutorFactory,
   EOAExecutor,
   UserOpExecutor,
   DirectEntryPointExecutor,
   sendEncryptedMessage,
   initiateHandshake,
-  respondToHandshake
+  respondToHandshake,
 } from "../src/index.js";
 import type { LogChainV1 } from "@verbeth/contracts/typechain-types";
 import { IdentityKeyPair, IdentityProof } from "../src/types.js";
@@ -45,7 +45,7 @@ const mockEntryPoint = {
   handleOps: vi.fn().mockResolvedValue({
     wait: vi.fn().mockResolvedValue({ status: 1 }),
   }),
-  connect: vi.fn().mockReturnThis(), 
+  connect: vi.fn().mockReturnThis(),
 } as unknown as Contract;
 
 const mockSigner = {
@@ -75,7 +75,7 @@ describe("ExecutorFactory", () => {
   it("creates UserOp executor with correct parameters", () => {
     const executor = ExecutorFactory.createUserOp(
       TEST_SMART_ACCOUNT_ADDRESS,
-      TEST_ENTRYPOINT_ADDRESS, 
+      TEST_ENTRYPOINT_ADDRESS,
       TEST_LOGCHAIN_ADDRESS,
       mockBundler,
       mockSmartAccount
@@ -87,7 +87,7 @@ describe("ExecutorFactory", () => {
     const executor = ExecutorFactory.createDirectEntryPoint(
       TEST_SMART_ACCOUNT_ADDRESS,
       mockEntryPoint,
-      TEST_LOGCHAIN_ADDRESS, 
+      TEST_LOGCHAIN_ADDRESS,
       mockSmartAccount,
       mockSigner
     );
@@ -102,7 +102,7 @@ describe("sendEncryptedMessage with Executors", () => {
 
   it("works with EOA executor", async () => {
     const executor = ExecutorFactory.createEOA(fakeContract);
-    
+
     await sendEncryptedMessage({
       executor,
       topic: "0x" + "ab".repeat(32),
@@ -112,14 +112,14 @@ describe("sendEncryptedMessage with Executors", () => {
       senderSignKeyPair: testSenderSignKey,
       timestamp: 42,
     });
-    
+
     expect(mockSendMessage).toHaveBeenCalledTimes(1);
-    
+
     const callArgs = mockSendMessage.mock.calls[0];
     expect(callArgs).toHaveLength(4); // ciphertext, topic, timestamp, nonce
-    expect(typeof callArgs[1]).toBe('string'); // topic
-    expect(typeof callArgs[2]).toBe('number'); // timestamp
-    expect(typeof callArgs[3]).toBe('bigint'); // nonce
+    expect(typeof callArgs[1]).toBe("string"); // topic
+    expect(typeof callArgs[2]).toBe("number"); // timestamp
+    expect(typeof callArgs[3]).toBe("bigint"); // nonce
   });
 
   it("works with UserOp executor", async () => {
@@ -130,7 +130,7 @@ describe("sendEncryptedMessage with Executors", () => {
       mockBundler,
       mockSmartAccount
     );
-    
+
     await sendEncryptedMessage({
       executor,
       topic: "0x" + "cd".repeat(32),
@@ -140,7 +140,7 @@ describe("sendEncryptedMessage with Executors", () => {
       senderSignKeyPair: testSenderSignKey,
       timestamp: 43,
     });
-    
+
     expect(mockSmartAccount.getNonce).toHaveBeenCalled();
     expect(mockSmartAccount.signUserOperation).toHaveBeenCalled();
     expect(mockBundler.sendUserOperation).toHaveBeenCalled();
@@ -151,11 +151,11 @@ describe("sendEncryptedMessage with Executors", () => {
     const executor = ExecutorFactory.createDirectEntryPoint(
       TEST_SMART_ACCOUNT_ADDRESS,
       mockEntryPoint,
-      TEST_LOGCHAIN_ADDRESS, 
+      TEST_LOGCHAIN_ADDRESS,
       mockSmartAccount,
       mockSigner
     );
-    
+
     await sendEncryptedMessage({
       executor,
       topic: "0x" + "ef".repeat(32),
@@ -165,7 +165,7 @@ describe("sendEncryptedMessage with Executors", () => {
       senderSignKeyPair: testSenderSignKey,
       timestamp: 44,
     });
-    
+
     expect(mockSmartAccount.getNonce).toHaveBeenCalled();
     expect(mockSmartAccount.signUserOperation).toHaveBeenCalled();
     expect(mockEntryPoint.handleOps).toHaveBeenCalled();
@@ -174,7 +174,7 @@ describe("sendEncryptedMessage with Executors", () => {
 
   it("generates different nonces for different calls with same executor", async () => {
     const executor = ExecutorFactory.createEOA(fakeContract);
-    
+
     // First message
     await sendEncryptedMessage({
       executor,
@@ -198,7 +198,7 @@ describe("sendEncryptedMessage with Executors", () => {
     });
 
     expect(mockSendMessage).toHaveBeenCalledTimes(2);
-    
+
     const firstNonce = mockSendMessage.mock.calls[0][3];
     const secondNonce = mockSendMessage.mock.calls[1][3];
     expect(secondNonce).toBe(firstNonce + 1n);
@@ -212,7 +212,7 @@ describe("initiateHandshake with Executors", () => {
 
   it("works with EOA executor", async () => {
     const executor = ExecutorFactory.createEOA(fakeContract);
-    
+
     await initiateHandshake({
       executor,
       recipientAddress: "0xBob",
@@ -222,14 +222,14 @@ describe("initiateHandshake with Executors", () => {
       identityProof: testIdentityProof,
       signer: mockSigner,
     });
-    
+
     expect(mockInitiateHandshake).toHaveBeenCalledTimes(1);
-    
+
     const callArgs = mockInitiateHandshake.mock.calls[0];
     expect(callArgs).toHaveLength(4); // recipientHash, pubKeys, ephemeralPubKey, plaintextPayload
-    expect(typeof callArgs[0]).toBe('string'); // recipientHash
-    expect(typeof callArgs[1]).toBe('string'); // pubKeys (hexlified)
-    expect(typeof callArgs[2]).toBe('string'); // ephemeralPubKey (hexlified)
+    expect(typeof callArgs[0]).toBe("string"); // recipientHash
+    expect(typeof callArgs[1]).toBe("string"); // pubKeys (hexlified)
+    expect(typeof callArgs[2]).toBe("string"); // ephemeralPubKey (hexlified)
   });
 
   it("works with UserOp executor", async () => {
@@ -240,7 +240,7 @@ describe("initiateHandshake with Executors", () => {
       mockBundler,
       mockSmartAccount
     );
-    
+
     await initiateHandshake({
       executor,
       recipientAddress: "0xBob",
@@ -250,7 +250,7 @@ describe("initiateHandshake with Executors", () => {
       identityProof: testIdentityProof,
       signer: mockSigner,
     });
-    
+
     expect(mockSmartAccount.getNonce).toHaveBeenCalled();
     expect(mockSmartAccount.signUserOperation).toHaveBeenCalled();
     expect(mockBundler.sendUserOperation).toHaveBeenCalled();
@@ -260,11 +260,11 @@ describe("initiateHandshake with Executors", () => {
     const executor = ExecutorFactory.createDirectEntryPoint(
       TEST_SMART_ACCOUNT_ADDRESS,
       mockEntryPoint,
-      TEST_LOGCHAIN_ADDRESS, 
+      TEST_LOGCHAIN_ADDRESS,
       mockSmartAccount,
       mockSigner
     );
-    
+
     await initiateHandshake({
       executor,
       recipientAddress: "0xBob",
@@ -274,7 +274,7 @@ describe("initiateHandshake with Executors", () => {
       identityProof: testIdentityProof,
       signer: mockSigner,
     });
-    
+
     expect(mockSmartAccount.getNonce).toHaveBeenCalled();
     expect(mockSmartAccount.signUserOperation).toHaveBeenCalled();
     expect(mockEntryPoint.handleOps).toHaveBeenCalled();
@@ -288,22 +288,27 @@ describe("respondToHandshake with Executors", () => {
 
   it("works with EOA executor", async () => {
     const executor = ExecutorFactory.createEOA(fakeContract);
-    
+
     await respondToHandshake({
       executor,
-      inResponseTo: "0x" + "12".repeat(32),
       initiatorPubKey: testRecipientKey.publicKey,
       responderIdentityKeyPair: testIdentityKeyPair,
       note: "Response from EOA",
       identityProof: testIdentityProof,
       signer: mockSigner,
     });
-    
+
     expect(mockRespondToHandshake).toHaveBeenCalledTimes(1);
-    
+
     const callArgs = mockRespondToHandshake.mock.calls[0];
-    expect(callArgs).toHaveLength(2); // inResponseTo, ciphertext
-    expect(typeof callArgs[0]).toBe('string'); // inResponseTo
+    expect(callArgs).toHaveLength(3); // inResponseTo, responderEphemeralR, ciphertext
+    expect(typeof callArgs[0]).toBe("string"); // inResponseTo (bytes32 hex)
+    expect(typeof callArgs[1]).toBe("string"); // responderEphemeralR (R, 32B hex)
+    const c = callArgs[2];
+    const isHexString = (v: unknown) =>
+      typeof v === "string" && /^0x[0-9a-fA-F]*$/.test(v);
+    const isUint8Array = (v: unknown) => v instanceof Uint8Array;
+    expect(isHexString(c) || isUint8Array(c)).toBe(true); // ciphertext (hex or Uint8Array)
   });
 
   it("works with UserOp executor", async () => {
@@ -314,17 +319,16 @@ describe("respondToHandshake with Executors", () => {
       mockBundler,
       mockSmartAccount
     );
-    
+
     await respondToHandshake({
       executor,
-      inResponseTo: "0x" + "34".repeat(32),
       initiatorPubKey: testRecipientKey.publicKey,
       responderIdentityKeyPair: testIdentityKeyPair,
       note: "Response from UserOp",
       identityProof: testIdentityProof,
       signer: mockSigner,
     });
-    
+
     expect(mockSmartAccount.getNonce).toHaveBeenCalled();
     expect(mockSmartAccount.signUserOperation).toHaveBeenCalled();
     expect(mockBundler.sendUserOperation).toHaveBeenCalled();
@@ -334,21 +338,20 @@ describe("respondToHandshake with Executors", () => {
     const executor = ExecutorFactory.createDirectEntryPoint(
       TEST_SMART_ACCOUNT_ADDRESS,
       mockEntryPoint,
-      TEST_LOGCHAIN_ADDRESS, 
+      TEST_LOGCHAIN_ADDRESS,
       mockSmartAccount,
       mockSigner
     );
-    
+
     await respondToHandshake({
       executor,
-      inResponseTo: "0x" + "56".repeat(32),
       initiatorPubKey: testRecipientKey.publicKey,
       responderIdentityKeyPair: testIdentityKeyPair,
       note: "Response from DirectEntryPoint",
       identityProof: testIdentityProof,
       signer: mockSigner,
     });
-    
+
     expect(mockSmartAccount.getNonce).toHaveBeenCalled();
     expect(mockSmartAccount.signUserOperation).toHaveBeenCalled();
     expect(mockEntryPoint.handleOps).toHaveBeenCalled();
@@ -356,10 +359,9 @@ describe("respondToHandshake with Executors", () => {
 
   it("generates ephemeral key pair when not provided", async () => {
     const executor = ExecutorFactory.createEOA(fakeContract);
-    
+
     await respondToHandshake({
       executor,
-      inResponseTo: "0x" + "78".repeat(32),
       initiatorPubKey: testRecipientKey.publicKey,
       responderIdentityKeyPair: testIdentityKeyPair,
       // No responderEphemeralKeyPair provided
@@ -367,7 +369,7 @@ describe("respondToHandshake with Executors", () => {
       identityProof: testIdentityProof,
       signer: mockSigner,
     });
-    
+
     expect(mockRespondToHandshake).toHaveBeenCalledTimes(1);
   });
 });

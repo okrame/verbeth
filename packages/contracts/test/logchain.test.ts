@@ -70,14 +70,27 @@ describe("LogChain", () => {
 
   it("should emit a HandshakeResponse event", async () => {
     const [bob] = await ethers.getSigners();
+
     const inResponseTo = ethers.keccak256(
       ethers.toUtf8Bytes("handshakeFromAlice")
     );
+    const responderEphemeralR = ethers.hexlify(ethers.randomBytes(32)); // 32 bytes pubkey
     const responseCiphertext = ethers.hexlify(ethers.randomBytes(64));
 
-    await expect(logChain.respondToHandshake(inResponseTo, responseCiphertext))
+    await expect(
+      logChain.respondToHandshake(
+        inResponseTo,
+        responderEphemeralR,
+        responseCiphertext
+      )
+    )
       // @ts-ignore
       .to.emit(logChain, "HandshakeResponse")
-      .withArgs(inResponseTo, await bob.getAddress(), responseCiphertext);
+      .withArgs(
+        inResponseTo,
+        await bob.getAddress(),
+        responderEphemeralR,
+        responseCiphertext
+      );
   });
 });

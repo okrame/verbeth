@@ -1,6 +1,9 @@
 // packages/sdk/src/crypto.ts
 
 import nacl from 'tweetnacl';
+import { keccak256, toUtf8Bytes, dataSlice } from 'ethers';
+import { sha256 } from '@noble/hashes/sha2';
+import { hkdf } from '@noble/hashes/hkdf';
 import { 
   encodePayload, 
   decodePayload, 
@@ -120,7 +123,7 @@ export function decryptHandshakeResponse(
 }
 
 /**
- * Convenience function to decrypt handshake response and extract individual keys
+ * helper to decrypt handshake response and extract individual keys
  */
 export function decryptAndExtractHandshakeKeys(
   payloadJson: string,
@@ -145,4 +148,92 @@ export function decryptAndExtractHandshakeKeys(
     note: decrypted.note,
     identityProof: decrypted.identityProof
   };
+}
+
+
+/**
+ * HKDF(sha256) on shared secret, info="verbeth:hsr", then Keccak-256 -> bytes32 (0x...)
+ */
+function finalizeHsrTag(shared: Uint8Array): `0x${string}` {
+  const okm = hkdf(sha256, shared, new Uint8Array(0), toUtf8Bytes("verbeth:hsr"), 32);
+  return keccak256(okm) as `0x${string}`;
+}
+
+/**
+ * Responder: tag = H( KDF( ECDH(r, viewPubA), "verbeth:hsr"))
+ */
+export function computeTagFromResponder(
+  rSecretKey: Uint8Array,
+  viewPubA: Uint8Array
+): `0x${string}` {
+  const shared = nacl.scalarMult(rSecretKey, viewPubA);
+  return finalizeHsrTag(shared);
+}
+
+/**
+ * Initiator: tag = H( KDF( ECDH(viewPrivA, R), "verbeth:hsr"))
+ */
+export function computeTagFromInitiator(
+  viewPrivA: Uint8Array,
+  R: Uint8Array
+): `0x${string}` {
+  const shared = nacl.scalarMult(viewPrivA, R);
+  return finalizeHsrTag(shared);
+}
+
+
+/**
+ * Derives a bytes32 topic from the shared secret via HKDF(SHA256) + Keccak-256.
+ * - info: domain separation (e.g., "verbeth:topic-out:v1")
+ * - salt: recommended to use a tag as salt (stable and shareable)
+ */
+function deriveTopic(
+  shared: Uint8Array,
+  info: string,
+  salt?: Uint8Array
+): `0x${string}` {
+  const okm = hkdf(sha256, shared, salt ?? new Uint8Array(0), new TextEncoder().encode(info), 32);
+  return keccak256(okm) as `0x${string}`;
+}
+
+
+export function deriveLongTermShared(
+  myIdentitySecretKey: Uint8Array,
+  theirIdentityPublicKey: Uint8Array
+): Uint8Array {
+  return nacl.scalarMult(myIdentitySecretKey, theirIdentityPublicKey);
+}
+
+/**
+ * Directional duplex topics (Initiator-Responder, Responder-Initiator).
+ * Recommended salt: tag (bytes)
+ */
+export function deriveDuplexTopics(
+  myIdentitySecretKey: Uint8Array,
+  theirIdentityPublicKey: Uint8Array,
+  salt?: Uint8Array
+): { topicOut: `0x${string}`; topicIn: `0x${string}`; checksum: `0x${string}` } {
+  const shared = deriveLongTermShared(myIdentitySecretKey, theirIdentityPublicKey);
+  const topicOut = deriveTopic(shared, "verbeth:topic-out:v1", salt);
+  const topicIn  = deriveTopic(shared, "verbeth:topic-in:v1",  salt);
+  const chkFull = keccak256(Buffer.concat([
+    toUtf8Bytes("verbeth:topic-chk:v1"),
+    Buffer.from(topicOut.slice(2), 'hex'),
+    Buffer.from(topicIn.slice(2),  'hex'),
+  ]));
+  const checksum = dataSlice(chkFull as `0x${string}`, 8) as `0x${string}`;
+  return { topicOut, topicIn, checksum };
+}
+
+export function verifyDuplexTopicsChecksum(
+  topicOut: `0x${string}`,
+  topicIn: `0x${string}`,
+  checksum: `0x${string}`
+): boolean {
+  const chkFull = keccak256(Buffer.concat([
+    toUtf8Bytes("verbeth:topic-chk:v1"),
+    Buffer.from(topicOut.slice(2), 'hex'),
+    Buffer.from(topicIn.slice(2),  'hex'),
+  ]));
+  return dataSlice(chkFull as `0x${string}`, 8) === checksum;
 }

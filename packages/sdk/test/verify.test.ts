@@ -1,19 +1,14 @@
 import { describe, it, expect } from "vitest";
-import {
-  Wallet,
-  HDNodeWallet,
-  keccak256,
-  toUtf8Bytes,
-  hexlify,
-} from "ethers";
+import { Wallet, HDNodeWallet, keccak256, toUtf8Bytes, hexlify } from "ethers";
 import nacl from "tweetnacl";
 
 import {
   verifyIdentityProof,
   verifyHandshakeIdentity,
   verifyHandshakeResponseIdentity,
+  verifyDerivedDuplexTopics,
 } from "../src/verify.js";
-import { encryptStructuredPayload } from "../src/crypto.js";
+import { encryptStructuredPayload, deriveDuplexTopics } from "../src/crypto.js";
 import {
   HandshakeResponseContent,
   encodeUnifiedPubKeys,
@@ -41,6 +36,14 @@ const mockProvider: any = {
     throw new Error("Unsupported method: " + method);
   },
 };
+
+function toBytes(hex: `0x${string}`): Uint8Array {
+  return Uint8Array.from(Buffer.from(hex.slice(2), "hex"));
+}
+function randomTagHex(): `0x${string}` {
+  const b = nacl.randomBytes(32);
+  return ("0x" + Buffer.from(b).toString("hex")) as `0x${string}`;
+}
 
 describe("Verify Identity & Handshake (Unified)", () => {
   describe("Identity Proof Verification", () => {
@@ -188,6 +191,7 @@ describe("Verify Identity & Handshake (Unified)", () => {
       const responseEvent: HandshakeResponseLog = {
         inResponseTo: keccak256(toUtf8Bytes("test-handshake")),
         responder: responderWallet.address,
+        responderEphemeralR: hexlify(responderEphemeral.publicKey),
         ciphertext: payload,
       };
 
@@ -229,6 +233,7 @@ describe("Verify Identity & Handshake (Unified)", () => {
       const responseEvent: HandshakeResponseLog = {
         inResponseTo: keccak256(toUtf8Bytes("test-handshake")),
         responder: responderWallet.address,
+        responderEphemeralR: hexlify(responderEphemeral.publicKey),
         ciphertext: payload,
       };
 
@@ -267,5 +272,56 @@ describe("Verify Identity & Handshake (Unified)", () => {
       const parsed = parseHandshakeKeys(event);
       expect(parsed).toBeNull();
     });
+  });
+
+  it("verifyDerivedDuplexTopics accepts tag hex and validates checksum from TopicInfo", () => {
+    const alice = nacl.box.keyPair();
+    const bob = nacl.box.keyPair();
+
+    const tag = randomTagHex();
+    const salt = toBytes(tag);
+
+    // Bob would embed TopicInfo in HSR 
+    const { topicOut, topicIn, checksum } = deriveDuplexTopics(
+      bob.secretKey,
+      alice.publicKey,
+      salt
+    );
+    const topicInfo = { out: topicOut, in: topicIn, chk: checksum };
+
+    // Alice verifies after decrypting HSR 
+    const { topics, ok } = verifyDerivedDuplexTopics({
+      myIdentitySecretKey: alice.secretKey,
+      theirIdentityPubKey: bob.publicKey,
+      tag,
+      topicInfo,
+    });
+
+    expect(ok).toBe(true);
+    expect(topics.topicOut).toBe(topicOut);
+    expect(topics.topicIn).toBe(topicIn);
+  });
+
+  it("verifyDerivedDuplexTopics works with raw salt (no tag) and throws with neither", () => {
+    const alice = nacl.box.keyPair();
+    const bob = nacl.box.keyPair();
+
+    const salt = toBytes(randomTagHex());
+
+    const { topics } = verifyDerivedDuplexTopics({
+      myIdentitySecretKey: alice.secretKey,
+      theirIdentityPubKey: bob.publicKey,
+      salt,
+    });
+
+    expect(topics.topicOut.startsWith("0x")).toBe(true);
+    expect(topics.topicIn.startsWith("0x")).toBe(true);
+
+    expect(() =>
+      verifyDerivedDuplexTopics({
+        myIdentitySecretKey: alice.secretKey,
+        theirIdentityPubKey: bob.publicKey,
+      } as any)
+    ).toThrow();
   });
 });

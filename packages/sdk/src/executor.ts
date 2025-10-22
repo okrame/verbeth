@@ -67,6 +67,7 @@ export interface IExecutor {
 
   respondToHandshake(
     inResponseTo: string,
+    responderEphemeralR: string,
     ciphertext: Uint8Array
   ): Promise<any>;
 }
@@ -100,9 +101,10 @@ export class EOAExecutor implements IExecutor {
 
   async respondToHandshake(
     inResponseTo: string,
+    responderEphemeralR: string,
     ciphertext: Uint8Array
   ): Promise<any> {
-    return this.contract.respondToHandshake(inResponseTo, ciphertext);
+    return this.contract.respondToHandshake(inResponseTo, responderEphemeralR, ciphertext);
   }
 }
 
@@ -121,7 +123,7 @@ export class BaseSmartAccountExecutor implements IExecutor {
     this.logChainInterface = new Interface([
       "function sendMessage(bytes calldata ciphertext, bytes32 topic, uint256 timestamp, uint256 nonce)",
       "function initiateHandshake(bytes32 recipientHash, bytes pubKeys, bytes ephemeralPubKey, bytes plaintextPayload)",
-      "function respondToHandshake(bytes32 inResponseTo, bytes ciphertext)",
+      "function respondToHandshake(bytes32 inResponseTo, bytes32 responderEphemeralR, bytes ciphertext)",
     ]);
 
     // Convert chainId to hex
@@ -177,11 +179,12 @@ export class BaseSmartAccountExecutor implements IExecutor {
 
   async respondToHandshake(
     inResponseTo: string,
+    responderEphemeralR: string,
     ciphertext: Uint8Array
   ): Promise<any> {
     const callData = this.logChainInterface.encodeFunctionData(
       "respondToHandshake",
-      [inResponseTo, ciphertext]
+      [inResponseTo, responderEphemeralR, ciphertext]
     );
 
     return this.executeCalls([
@@ -259,7 +262,7 @@ export class UserOpExecutor implements IExecutor {
     this.logChainInterface = new Interface([
       "function sendMessage(bytes calldata ciphertext, bytes32 topic, uint256 timestamp, uint256 nonce)",
       "function initiateHandshake(bytes32 recipientHash, bytes pubKeys, bytes ephemeralPubKey, bytes plaintextPayload)",
-      "function respondToHandshake(bytes32 inResponseTo, bytes ciphertext)",
+      "function respondToHandshake(bytes32 inResponseTo, bytes32 responderEphemeralR, bytes ciphertext)",
     ]);
 
     // Smart account interface for executing calls to other contracts
@@ -316,11 +319,12 @@ export class UserOpExecutor implements IExecutor {
 
   async respondToHandshake(
     inResponseTo: string,
+    responderEphemeralR: string,
     ciphertext: Uint8Array
   ): Promise<any> {
     const logChainCallData = this.logChainInterface.encodeFunctionData(
       "respondToHandshake",
-      [inResponseTo, ciphertext]
+      [inResponseTo, responderEphemeralR, ciphertext]
     );
 
     const smartAccountCallData = this.smartAccountInterface.encodeFunctionData(
@@ -384,7 +388,7 @@ export class DirectEntryPointExecutor implements IExecutor {
     this.logChainInterface = new Interface([
       "function sendMessage(bytes calldata ciphertext, bytes32 topic, uint256 timestamp, uint256 nonce)",
       "function initiateHandshake(bytes32 recipientHash, bytes pubKeys, bytes ephemeralPubKey, bytes plaintextPayload)",
-      "function respondToHandshake(bytes32 inResponseTo, bytes ciphertext)",
+      "function respondToHandshake(bytes32 inResponseTo, bytes32 responderEphemeralR, bytes ciphertext)",
     ]);
 
     // Smart account interface for executing calls to other contracts
@@ -444,11 +448,12 @@ export class DirectEntryPointExecutor implements IExecutor {
 
   async respondToHandshake(
     inResponseTo: string,
+    responderEphemeralR: string,
     ciphertext: Uint8Array
   ): Promise<any> {
     const logChainCallData = this.logChainInterface.encodeFunctionData(
       "respondToHandshake",
-      [inResponseTo, ciphertext]
+      [inResponseTo, responderEphemeralR, ciphertext]
     );
 
     const smartAccountCallData = this.smartAccountInterface.encodeFunctionData(
@@ -525,7 +530,7 @@ export class ExecutorFactory {
   static createBaseSmartAccount(
     baseAccountProvider: any,
     logChainAddress: string,
-    chainId = 8453, // Base mainnet by default
+    chainId = 8453,
     paymasterServiceUrl?: string,
     subAccountAddress?: string
   ): IExecutor {

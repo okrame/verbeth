@@ -1,5 +1,5 @@
 // packages/sdk/src/payload.ts
-import { IdentityProof } from './types.js'; 
+import { IdentityProof, TopicInfoWire } from './types.js'; 
 
 
 export interface EncryptedPayload {
@@ -162,7 +162,8 @@ export interface HandshakeResponseContent {
   unifiedPubKeys: Uint8Array;      // 65 bytes: version + X25519 + Ed25519
   ephemeralPubKey: Uint8Array;
   note?: string;
-  identityProof: IdentityProof;  
+  identityProof: IdentityProof;
+  topicInfo?: TopicInfoWire; 
 }
 
 export function encodeHandshakePayload(payload: HandshakePayload): Uint8Array {
@@ -188,26 +189,35 @@ export function encodeHandshakeResponseContent(content: HandshakeResponseContent
     unifiedPubKeys: Buffer.from(content.unifiedPubKeys).toString('base64'),
     ephemeralPubKey: Buffer.from(content.ephemeralPubKey).toString('base64'),
     note: content.note,
-    identityProof: content.identityProof  
-  }));
-}
+    identityProof: content.identityProof,  
+    topicInfo: content.topicInfo ? {
+        out: content.topicInfo.out,
+        in: content.topicInfo.in,
+        chk: content.topicInfo.chk
+      } : undefined
+    }));
+  }
 
 export function decodeHandshakeResponseContent(encoded: Uint8Array): HandshakeResponseContent {
   const json = new TextDecoder().decode(encoded);
-  const parsed = JSON.parse(json);
+  const obj = JSON.parse(json);
   
-  if (!parsed.identityProof) {
+  if (!obj.identityProof) {
     throw new Error("Invalid handshake response: missing identityProof");
   }
   
   return {
-    unifiedPubKeys: Uint8Array.from(Buffer.from(parsed.unifiedPubKeys, 'base64')),
-    ephemeralPubKey: Uint8Array.from(Buffer.from(parsed.ephemeralPubKey, 'base64')),
-    note: parsed.note,
-    identityProof: parsed.identityProof
+    unifiedPubKeys: Uint8Array.from(Buffer.from(obj.unifiedPubKeys, 'base64')),
+    ephemeralPubKey: Uint8Array.from(Buffer.from(obj.ephemeralPubKey, 'base64')),
+    note: obj.note,
+    identityProof: obj.identityProof,
+    topicInfo: obj.topicInfo ? {
+      out: obj.topicInfo.out,
+      in: obj.topicInfo.in,
+      chk: obj.topicInfo.chk
+    } : undefined
   };
 }
-
 
 /**
  * Creates HandshakePayload from separate identity keys
@@ -233,7 +243,8 @@ export function createHandshakeResponseContent(
   signingPubKey: Uint8Array,
   ephemeralPubKey: Uint8Array,
   note?: string,
-  identityProof?: IdentityProof 
+  identityProof?: IdentityProof,
+  topicInfo?: TopicInfoWire 
 ): HandshakeResponseContent {
   if (!identityProof) {
     throw new Error("Identity proof is now mandatory for handshake responses");
@@ -243,7 +254,8 @@ export function createHandshakeResponseContent(
     unifiedPubKeys: encodeUnifiedPubKeys(identityPubKey, signingPubKey),
     ephemeralPubKey,
     note,
-    identityProof
+    identityProof,
+    topicInfo
   };
 }
 

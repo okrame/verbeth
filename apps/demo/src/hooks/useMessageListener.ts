@@ -183,7 +183,7 @@ export const useMessageListener = ({
     return results;
   };
 
-  // Scan specific block range - load contacts from DB when needed
+  // scan specific block range - load contacts from db when needed
   const scanBlockRange = async (
     fromBlock: number,
     toBlock: number
@@ -239,7 +239,7 @@ export const useMessageListener = ({
           `🔍 Found ${responseLogs.length} total handshake responses in blocks ${fromBlock}-${toBlock}`
         );
 
-        // Match by responder address 
+        // Match by responder address
         for (const log of responseLogs) {
           const responderAddress = "0x" + log.topics[2].slice(-40);
 
@@ -267,38 +267,63 @@ export const useMessageListener = ({
         (c) => c.status === "established"
       );
       if (establishedContacts.length > 0) {
-        const senderTopics = establishedContacts.map(
-          (c) =>
-            "0x" + c.address.replace("0x", "").toLowerCase().padStart(64, "0")
-        );
+        // 1) INBOUND ONLY: listen exclusively to topics where we receive messages
+        const inboundTopics = establishedContacts
+          .map((c) => c.topicInbound)
+          .filter(Boolean);
 
-        if (address) {
-          const myTopic =
-            "0x" + address.replace("0x", "").toLowerCase().padStart(64, "0");
-          if (!senderTopics.includes(myTopic)) senderTopics.push(myTopic);
+        if (inboundTopics.length > 0) {
+          const messageFilterIn = {
+            address: LOGCHAIN_SINGLETON_ADDR,
+            topics: [EVENT_SIGNATURES.MessageSent, null, inboundTopics],
+          };
+          const inboundLogs = await safeGetLogs(
+            messageFilterIn,
+            fromBlock,
+            toBlock
+          );
+
+          for (const log of inboundLogs) {
+            const logKey = `${log.transactionHash}-${log.logIndex}`;
+            if (!processedLogs.current.has(logKey)) {
+              processedLogs.current.add(logKey);
+              allEvents.push({
+                logKey,
+                eventType: "message",
+                rawLog: log,
+                blockNumber: log.blockNumber,
+                timestamp: Date.now(),
+              });
+            }
+          }
         }
 
-        const messageFilter = {
-          address: LOGCHAIN_SINGLETON_ADDR,
-          topics: [EVENT_SIGNATURES.MessageSent, senderTopics],
-        };
-        const messageLogs = await safeGetLogs(
-          messageFilter,
-          fromBlock,
-          toBlock
-        );
+        // 2) OUTBOUND CONFIRMATION: we do not need topic filter, we match logs where sender = our address
+        if (address) {
+          const senderTopic =
+            "0x000000000000000000000000" + address.slice(2).toLowerCase();
+          const messageFilterOutConfirm = {
+            address: LOGCHAIN_SINGLETON_ADDR,
+            topics: [EVENT_SIGNATURES.MessageSent, senderTopic],
+          };
+          const outLogs = await safeGetLogs(
+            messageFilterOutConfirm,
+            fromBlock,
+            toBlock
+          );
 
-        for (const log of messageLogs) {
-          const logKey = `${log.transactionHash}-${log.logIndex}`;
-          if (!processedLogs.current.has(logKey)) {
-            processedLogs.current.add(logKey);
-            allEvents.push({
-              logKey,
-              eventType: "message",
-              rawLog: log,
-              blockNumber: log.blockNumber,
-              timestamp: Date.now(),
-            });
+          for (const log of outLogs) {
+            const logKey = `${log.transactionHash}-${log.logIndex}`;
+            if (!processedLogs.current.has(logKey)) {
+              processedLogs.current.add(logKey);
+              allEvents.push({
+                logKey,
+                eventType: "message",
+                rawLog: log,
+                blockNumber: log.blockNumber,
+                timestamp: Date.now(),
+              });
+            }
           }
         }
       }
@@ -317,8 +342,8 @@ export const useMessageListener = ({
     if (initialScanComplete) {
       onLog(`Initial scan already completed for ${address.slice(0, 8)}...`);
 
-      const savedLastBlock = await dbService.getLastKnownBlock();
-      const savedOldestBlock = await dbService.getOldestScannedBlock();
+      const savedLastBlock = await dbService.getLastKnownBlock(address);
+      const savedOldestBlock = await dbService.getOldestScannedBlock(address);
 
       if (savedLastBlock) setLastKnownBlock(savedLastBlock);
       if (savedOldestBlock) setOldestScannedBlock(savedOldestBlock);
@@ -343,7 +368,7 @@ export const useMessageListener = ({
 
       onEventsProcessed(events);
 
-      // Store chunk info
+      // store chunk info
       scanChunks.current = [
         {
           fromBlock: startBlock,
@@ -358,12 +383,12 @@ export const useMessageListener = ({
       setOldestScannedBlock(startBlock);
       setCanLoadMore(startBlock > CONTRACT_CREATION_BLOCK);
 
-      await dbService.setLastKnownBlock(currentBlock);
-      await dbService.setOldestScannedBlock(startBlock);
+      await dbService.setLastKnownBlock(address, currentBlock);
+      await dbService.setOldestScannedBlock(address, startBlock);
       await dbService.setInitialScanComplete(address, true);
 
       onLog(
-        `✅ Initial scan complete: ${events.length} events found in blocks ${startBlock}-${currentBlock}`
+        `Initial scan complete: ${events.length} events found in blocks ${startBlock}-${currentBlock}`
       );
     } catch (error) {
       onLog(`✗ Initial scan failed: ${error}`);
@@ -400,7 +425,6 @@ export const useMessageListener = ({
         CONTRACT_CREATION_BLOCK
       );
 
-      // check if blocks are available
       let maxIndexedBlock = endBlock;
       for (let b = endBlock; b >= startBlock; b--) {
         const blk = await readProvider.getBlock(b);
@@ -443,10 +467,10 @@ export const useMessageListener = ({
 
       setOldestScannedBlock(safeStartBlock);
       setCanLoadMore(safeStartBlock > CONTRACT_CREATION_BLOCK);
-      await dbService.setOldestScannedBlock(safeStartBlock);
+      await dbService.setOldestScannedBlock(address, safeStartBlock);
 
       onLog(
-        `✅ Loaded ${events.length} more events from blocks ${safeStartBlock}-${safeEndBlock}`
+        `Loaded ${events.length} more events from blocks ${safeStartBlock}-${safeEndBlock}`
       );
     } catch (error) {
       onLog(`✗ Failed to load more history: ${error}`);
@@ -463,7 +487,7 @@ export const useMessageListener = ({
     onEventsProcessed,
   ]);
 
-  // Real-time scanning for new blocks
+  // real time scanning for new blocks
   useEffect(() => {
     if (!readProvider || !address || !lastKnownBlock) return;
 
@@ -484,7 +508,7 @@ export const useMessageListener = ({
           }
 
           setLastKnownBlock(maxSafeBlock);
-          await dbService.setLastKnownBlock(maxSafeBlock);
+          await dbService.setLastKnownBlock(address, maxSafeBlock);
         }
       } catch (error) {
         onLog(`⚠️ Real-time scan error: ${error}`);
@@ -494,7 +518,7 @@ export const useMessageListener = ({
     return () => clearInterval(interval);
   }, [readProvider, address, lastKnownBlock, onLog, onEventsProcessed]);
 
-  // Clear state when address changes
+  // clear state when address changes
   useEffect(() => {
     if (address) {
       setIsInitialLoading(false);
@@ -508,7 +532,7 @@ export const useMessageListener = ({
     }
   }, [address]);
 
-  // Initialize
+
   useEffect(() => {
     if (
       readProvider &&

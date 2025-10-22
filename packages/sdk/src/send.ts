@@ -4,19 +4,24 @@ import {
   keccak256,
   toUtf8Bytes,
   hexlify,
-  Signer
+  Signer,
+  getBytes
 } from "ethers";
+import nacl from 'tweetnacl';
 import { getNextNonce } from './utils/nonce.js';
-import { encryptMessage, encryptStructuredPayload } from './crypto.js';
+import { encryptMessage, encryptStructuredPayload, deriveDuplexTopics } from './crypto.js';
 import { 
   HandshakeContent, 
   serializeHandshakeContent,
   encodeUnifiedPubKeys,
-  createHandshakeResponseContent
+  createHandshakeResponseContent,
+  decodeUnifiedPubKeys,
 } from './payload.js';
-import { IdentityKeyPair, IdentityProof } from './types.js';  
+import { IdentityKeyPair, IdentityProof, TopicInfoWire } from './types.js';  
 import { IExecutor } from './executor.js';
-import nacl from 'tweetnacl';
+import { computeTagFromResponder } from './crypto.js'
+
+
 
 /**
  * Sends an encrypted message assuming recipient's keys were already obtained via handshake.
@@ -115,44 +120,75 @@ export async function initiateHandshake({
  */
 export async function respondToHandshake({
   executor,
-  inResponseTo,
-  initiatorPubKey,
+  initiatorPubKey, // X25519 key from initiator (ephemeral)
   responderIdentityKeyPair,
   responderEphemeralKeyPair,
   note,
   identityProof,
-  signer
+  signer,
+  initiatorIdentityPubKey,
 }: {
   executor: IExecutor;
-  inResponseTo: string;
   initiatorPubKey: Uint8Array;
   responderIdentityKeyPair: IdentityKeyPair;
   responderEphemeralKeyPair?: nacl.BoxKeyPair;
   note?: string;
   identityProof: IdentityProof;
   signer: Signer;
+  initiatorIdentityPubKey?: Uint8Array;
 }) {
   if (!executor) {
     throw new Error("Executor must be provided");
   }
 
   const ephemeralKeyPair = responderEphemeralKeyPair || nacl.box.keyPair();
+
+  // Generate a separate ephemeral key (R,r) just for the tag
+  const tagKeyPair = nacl.box.keyPair();                
+  const inResponseTo = computeTagFromResponder(
+    tagKeyPair.secretKey,
+    initiatorPubKey
+  );
+  const salt: Uint8Array = getBytes(inResponseTo); // for topics HKDF
+
+  let topicInfo: TopicInfoWire | undefined = undefined;
+  if (initiatorIdentityPubKey) {
+    const { topicOut, topicIn, checksum } = deriveDuplexTopics(
+      responderIdentityKeyPair.secretKey,
+      initiatorIdentityPubKey,
+      salt
+    );
+    topicInfo = { out: topicOut, in: topicIn, chk: checksum };
+  }
+
   
   const responseContent = createHandshakeResponseContent(
     responderIdentityKeyPair.publicKey,        // X25519
     responderIdentityKeyPair.signingPublicKey, // Ed25519
     ephemeralKeyPair.publicKey,
     note,
-    identityProof
+    identityProof,
+    topicInfo
   );
   
   // Encrypt the response for the initiator
   const payload = encryptStructuredPayload(
     responseContent,
-    initiatorPubKey,              // Encrypt to initiator's X25519 key
+    initiatorPubKey,              // Encrypt to initiator's X25519 (ephemeral) key
     ephemeralKeyPair.secretKey,
     ephemeralKeyPair.publicKey
   );
+
+  // Execute the transaction
+  const tx = await executor.respondToHandshake(
+    inResponseTo, 
+    hexlify(tagKeyPair.publicKey), 
+    toUtf8Bytes(payload)
+  );
   
-  return executor.respondToHandshake(inResponseTo, toUtf8Bytes(payload));
+  return {
+    tx,
+    salt,
+    tag: inResponseTo
+  };
 }

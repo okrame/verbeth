@@ -19,7 +19,24 @@ export interface HandshakeLog {
 export interface HandshakeResponseLog {
   inResponseTo: string;
   responder: string;
+  responderEphemeralR: string;
   ciphertext: string; // Contains unified pubKeys + identityProof encrypted
+}
+
+// Duplex topics calcolati per una conversazione a partire da un handshake
+export interface DuplexTopics {
+  /** Initiator → Responder */
+  topicOut: `0x${string}`;
+  /** Responder → Initiator */
+  topicIn: `0x${string}`;
+}
+
+/** Formato compatto per invio via HSR cifrata */
+export interface TopicInfoWire {
+  out: `0x${string}`;
+  in: `0x${string}`;
+  /** checksum corto per conferma (8 byte, hex) */
+  chk: `0x${string}`;
 }
 
 // Identity key pair structure (from identity.ts)
@@ -34,13 +51,14 @@ export interface IdentityKeyPair {
 
 // Identity proof structure
 export interface IdentityProof {
-  message: string; 
+  message: string;
   signature: string;
   messageRawHex?: `0x${string}`;
 }
 
-export type PackedUserOperation =
-  typeof DEFAULT_AA_VERSION extends "v0.6" ? UserOpV06 : UserOpV07;
+export type PackedUserOperation = typeof DEFAULT_AA_VERSION extends "v0.6"
+  ? UserOpV06
+  : UserOpV07;
 
 export interface BaseUserOp {
   sender: string;

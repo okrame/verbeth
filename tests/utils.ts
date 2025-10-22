@@ -38,14 +38,16 @@ export function createMockSmartAccountClient(
     address: smartAccount.getAddress(),
 
     async getNonce(): Promise<bigint> {
-      try {
-        const nonce = await smartAccount["getNonce"]();
-        return nonce;
-      } catch (error) {
-        console.warn("Failed to get nonce from SmartAccount, using 0:", error);
-        return 0n;
-      }
-    },
+  try {
+    // Always fetch fresh nonce from the blockchain
+    const nonce = await smartAccount["getNonce"]();
+    console.log(`Smart account nonce: ${nonce}`);
+    return nonce;
+  } catch (error) {
+    console.warn("Failed to get nonce from SmartAccount, using 0:", error);
+    return 0n;
+  }
+},
 
     async signUserOperation(userOp: any): Promise<any> {
       if (!owner.provider) {

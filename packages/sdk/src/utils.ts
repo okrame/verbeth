@@ -14,6 +14,7 @@ import {
   defineChain,
   type PublicClient,
 } from "viem";
+import { DuplexTopics } from "./types.js";
 
 
 export function parseBindingMessage(message: string): {
@@ -172,5 +173,10 @@ export async function isSmartContract1271(
     console.error("Error checking if address is smart contract:", err);
     return false;
   }
+}
+
+// picks the correct outbound topic from a DuplexTopics structure
+export function pickOutboundTopic(isInitiator: boolean, t: DuplexTopics): `0x${string}` {
+  return isInitiator ? t.topicOut : t.topicIn;
 }
 

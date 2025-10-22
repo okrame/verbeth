@@ -6,11 +6,15 @@ export class AnvilSetup {
   public provider: JsonRpcProvider;
 
   constructor(private port: number = 8545) {
-    this.provider = new JsonRpcProvider(`http://localhost:${port}`);
+    this.provider = new JsonRpcProvider(
+      `http://127.0.0.1:${this.port}`,
+      { chainId: 8453, name: "base-fork" },
+      { staticNetwork: true }
+    );
   }
 
   async start(forkUrl: string, forkBlock?: number): Promise<void> {
-    console.log("Starting Anvil (mainnet-fork)…");
+    console.log(`Starting Anvil on port ${this.port} (mainnet-fork)…`);
 
     const params = [
       "--port",
@@ -25,8 +29,13 @@ export class AnvilSetup {
       "1000",
       "--gas-limit",
       "30000000",
+      "--timeout",
+      "60000", 
+      "--retries",
+      "5", 
     ];
 
+    // Only add fork block if explicitly specified
     if (forkBlock) {
       params.push("--fork-block-number", forkBlock.toString());
     }
@@ -40,18 +49,18 @@ export class AnvilSetup {
 
     await new Promise<void>((resolve, reject) => {
       const t = setTimeout(
-        () => reject(new Error("Anvil start timeout")),
-        20_000
+        () => reject(new Error(`Anvil start timeout on port ${this.port}`)),
+        60_000
       );
 
       const ping = async () => {
         try {
           await this.provider.getBlockNumber();
           clearTimeout(t);
-          console.log("Anvil ready (mainnet fork)!");
+          console.log(`Anvil ready on port ${this.port} (mainnet fork)!`);
           resolve();
         } catch {
-          setTimeout(ping, 300);
+          setTimeout(ping, 500);
         }
       };
       ping();
@@ -60,9 +69,31 @@ export class AnvilSetup {
 
   async stop(): Promise<void> {
     if (this.process) {
-      console.log("Stopping Anvil…");
-      this.process.kill();
+      console.log(`Stopping Anvil on port ${this.port}…`);
+      this.process.kill("SIGTERM");
+
+      await new Promise<void>((resolve) => {
+        if (!this.process) {
+          resolve();
+          return;
+        }
+
+        this.process.on("exit", () => {
+          console.log(`Anvil on port ${this.port} exited`);
+          resolve();
+        });
+
+        setTimeout(() => {
+          console.log(`Anvil stop timeout on port ${this.port}`);
+          if (this.process) {
+            this.process.kill("SIGKILL");
+          }
+          resolve();
+        }, 3000);
+      });
+
       this.process = null;
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
 }

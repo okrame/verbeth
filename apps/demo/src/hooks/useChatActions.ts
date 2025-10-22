@@ -7,13 +7,10 @@ import {
   IExecutor,
   IdentityKeyPair,
   IdentityProof,
-  getNextNonce,
+  deriveDuplexTopics,
+  pickOutboundTopic
 } from "@verbeth/sdk";
-import {
-  Contact,
-  generateConversationTopic,
-  generateTempMessageId,
-} from "../types.js";
+import { Contact, generateTempMessageId, EVENT_SIGNATURES } from "../types.js";
 import { VoidSigner } from "ethers";
 
 interface UseChatActionsProps {
@@ -96,7 +93,6 @@ export const useChatActions = ({
           ownerAddress: currentAddress,
           status: "handshake_sent",
           ephemeralKey: ephemeralKeyPair.secretKey,
-          topic: tx.hash,
           lastMessage: message,
           lastTimestamp: Date.now(),
         };
@@ -106,7 +102,7 @@ export const useChatActions = ({
 
         const handshakeMessage = {
           id: generateTempMessageId(),
-          topic: generateConversationTopic(currentAddress, recipientAddress),
+          topic: "", // we don't know it yet
           sender: currentAddress,
           recipient: recipientAddress,
           ciphertext: "",
@@ -178,15 +174,21 @@ export const useChatActions = ({
       }
 
       try {
-        const tx = await respondToHandshake({
-          executor,
-          inResponseTo: handshake.id,
-          initiatorPubKey: handshake.ephemeralPubKey,
-          responderIdentityKeyPair: identityKeyPair,
-          note: responseMessage,
-          identityProof,
-          signer: currentSigner,
-        });
+        const { tx, salt } = await respondToHandshake({
+        executor,
+        initiatorPubKey: handshake.ephemeralPubKey,
+        responderIdentityKeyPair: identityKeyPair,
+        note: responseMessage,
+        identityProof,
+        signer: currentSigner,
+      });
+
+
+      const duplexTopics = deriveDuplexTopics(
+        identityKeyPair.secretKey,
+        handshake.identityPubKey,
+        salt
+      );
 
         const newContact: Contact = {
           address: handshake.sender,
@@ -194,6 +196,8 @@ export const useChatActions = ({
           status: "established",
           identityPubKey: handshake.identityPubKey,
           signingPubKey: handshake.signingPubKey,
+          topicOutbound: pickOutboundTopic(false, duplexTopics), // Bob is responder
+          topicInbound: pickOutboundTopic(true, duplexTopics),   // Alice is initiator
           lastMessage: responseMessage,
           lastTimestamp: Date.now(),
         };
@@ -202,13 +206,9 @@ export const useChatActions = ({
         await removePendingHandshake(handshake.id);
         setSelectedContact(newContact);
 
-        const conversationTopic = generateConversationTopic(
-          currentAddress,
-          handshake.sender
-        );
         const acceptanceMessage = {
           id: generateTempMessageId(),
-          topic: conversationTopic,
+          topic: duplexTopics.topicOut,
           sender: currentAddress,
           recipient: handshake.sender,
           ciphertext: "",
@@ -273,17 +273,18 @@ export const useChatActions = ({
 
       setLoading(true);
       try {
-        const topic = generateConversationTopic(
-          currentAddress,
-          contact.address
-        );
+        if (!contact.topicOutbound) {
+          addLog("✗ Contact doesn't have outbound topic established");
+          return;
+        }
+        const topic = contact.topicOutbound;
         const timestamp = Math.floor(Date.now() / 1000);
         const identityAsSigningKey = {
           publicKey: identityKeyPair.signingPublicKey,
           secretKey: identityKeyPair.signingSecretKey,
         };
 
-        const expectedNonce = Number(getNextNonce(currentAddress, topic)) + 1;
+
 
         const pendingMessage = {
           id: generateTempMessageId(),
@@ -297,14 +298,12 @@ export const useChatActions = ({
           direction: "outgoing" as const,
           decrypted: messageText,
           read: true,
-          nonce: expectedNonce,
-          dedupKey: `${currentAddress}:${topic}:${expectedNonce}`,
+          nonce: 0,
+          dedupKey: `pending-${generateTempMessageId()}`,
           type: "text" as const,
           ownerAddress: currentAddress,
           status: "pending" as const,
-        };
-
-        await addMessage(pendingMessage);
+        };        
 
         await sendEncryptedMessage({
           executor,
@@ -315,6 +314,8 @@ export const useChatActions = ({
           senderSignKeyPair: identityAsSigningKey,
           timestamp,
         });
+
+        await addMessage(pendingMessage);
 
         const updatedContact: Contact = {
           ...contact,

@@ -1,4 +1,3 @@
-import { MessageDeduplicator } from "@verbeth/sdk";
 import { VerbEthDatabase } from "./schema.js";
 import type {
   StoredIdentity,
@@ -9,11 +8,9 @@ import type {
 
 export class DbService {
   private readonly db: VerbEthDatabase;
-  private readonly deduplicator: MessageDeduplicator;
 
   constructor() {
     this.db = new VerbEthDatabase();
-    this.deduplicator = new MessageDeduplicator(10_000);
   }
 
   /* ----------------------------- ADDRESS HELPERS --------------------------- */
@@ -153,18 +150,24 @@ export class DbService {
     return this.db.contacts.delete(normalizedAddress);
   }
 
+  async upsertDedup(entry: {
+    key: string; // `${ownerAddress}:${txHash}-${logIndex}`
+    messageId: string; 
+    txHash: string;
+    blockNumber: number;
+  }) {
+    const prev = await this.db.dedup.get(entry.key);
+    if (!prev || entry.blockNumber >= prev.blockNumber) {
+      await this.db.dedup.put(entry); // prefer newest block
+    }
+  }
+
+  async getByDedupKey(key: string) {
+    return this.db.dedup.get(key);
+  }
+
   /* ------------------------------ MESSAGES --------------------------------- */
   async saveMessage(message: Message): Promise<boolean> {
-    if (
-      this.deduplicator.isDuplicate(
-        message.sender,
-        message.topic,
-        BigInt(message.nonce)
-      )
-    ) {
-      console.debug(`Message ${message.dedupKey} already processed`);
-      return false;
-    }
 
     if (await this.db.messages.get(message.id)) {
       console.debug(`Message ${message.id} already in DB`);
@@ -233,10 +236,7 @@ export class DbService {
       }
 
       const result = await this.db.messages.update(messageId, updates);
-      console.log(
-        `Updated message ${messageId.slice(0, 8)}... with:`,
-        updates
-      );
+      console.log(`Updated message ${messageId.slice(0, 8)}... with:`, updates);
       return result > 0;
     } catch (error) {
       console.error(
@@ -247,54 +247,51 @@ export class DbService {
     }
   }
 
-async findPendingMessage(
-  sender: string,
-  topic: string,
-  nonce: number,
-  owner: string
-): Promise<Message | undefined> {
-  const normalizedSender = this.normalizeAddress(sender);
-  const normalizedOwner = this.normalizeAddress(owner);
-  
+  async findPendingMessage(
+    sender: string,
+    topic: string,
+    nonce: number,
+    owner: string
+  ): Promise<Message | undefined> {
+    const normalizedSender = this.normalizeAddress(sender);
+    const normalizedOwner = this.normalizeAddress(owner);
 
-  // Try exact match first using compound index
-  const exactMatch = await this.db.messages
-    .where('[ownerAddress+sender+topic+nonce+status]')
-    .equals([normalizedOwner, normalizedSender, topic, nonce, "pending"])
-    .first();
-    
-  if (exactMatch) {
-    console.log(`Found exact match!`, {
-      messageId: exactMatch.id,
-      messageTopic: exactMatch.topic.slice(0, 20) + "...",
-      messageNonce: exactMatch.nonce
-    });
-    return exactMatch;
-  } 
-  
-  // FALLBACK: Find by content and recent timestamp
-  const recentPendingMessages = await this.db.messages
-    .where('[ownerAddress+sender+status]')
-    .equals([normalizedOwner, normalizedSender, "pending"])
-    .reverse()
-    .limit(3)
-    .toArray();
-    
-  if (recentPendingMessages.length > 0) {
-    console.log(`Using fallback matching: found ${recentPendingMessages.length} recent pending messages`);
-    return recentPendingMessages[0]; // Most recent
+    // Try exact match first using compound index
+    const exactMatch = await this.db.messages
+      .where("[ownerAddress+sender+topic+nonce+status]")
+      .equals([normalizedOwner, normalizedSender, topic, nonce, "pending"])
+      .first();
+
+    if (exactMatch) {
+      console.log(`Found exact match!`, {
+        messageId: exactMatch.id,
+        messageTopic: exactMatch.topic.slice(0, 20) + "...",
+        messageNonce: exactMatch.nonce,
+      });
+      return exactMatch;
+    }
+
+    // FALLBACK: Find by content and recent timestamp
+    const recentPendingMessages = await this.db.messages
+      .where("[ownerAddress+sender+status]")
+      .equals([normalizedOwner, normalizedSender, "pending"])
+      .reverse()
+      .limit(3)
+      .toArray();
+
+    if (recentPendingMessages.length > 0) {
+      console.log(
+        `Using fallback matching: found ${recentPendingMessages.length} recent pending messages`
+      );
+      return recentPendingMessages[0]; // Most recent
+    }
+
+    return undefined;
   }
-  
-  return undefined;
-}
 
   async findMessageByDedupKey(dedupKey: string): Promise<Message | undefined> {
-    return this.db.messages
-      .where('dedupKey')
-      .equals(dedupKey)
-      .first();
+    return this.db.messages.where("dedupKey").equals(dedupKey).first();
   }
-
 
   async updateContactLastMessage(
     address: string,
@@ -319,26 +316,21 @@ async findPendingMessage(
     return this.db.messages.get(id);
   }
 
-  async getMessagesByContact(contact: string, ownerAddress: string, limit = 50) {
+  async getMessagesByContact(
+    contact: string,
+    ownerAddress: string,
+    limit = 50
+  ) {
     const normalizedContact = this.normalizeAddress(contact);
     const normalizedOwner = this.normalizeAddress(ownerAddress);
-    
-    return this.db.messages
-      .where('ownerAddress')
-      .equals(normalizedOwner)
-      .filter(m => 
-        m.sender === normalizedContact || 
-        m.recipient === normalizedContact
-      )
-      .reverse()
-      .limit(limit)
-      .toArray();
-  }
 
-  getMessagesByTopic(topic: string, limit = 50) {
     return this.db.messages
-      .where("topic")
-      .equals(topic)
+      .where("ownerAddress")
+      .equals(normalizedOwner)
+      .filter(
+        (m) =>
+          m.sender === normalizedContact || m.recipient === normalizedContact
+      )
       .reverse()
       .limit(limit)
       .toArray();
@@ -346,9 +338,7 @@ async findPendingMessage(
 
   async getAllMessages(ownerAddress: string, limit = 100) {
     const normalizedOwner = this.normalizeAddress(ownerAddress);
-    console.log(
-      `Loading messages for owner ${normalizedOwner.slice(0, 8)}...`
-    );
+    console.log(`Loading messages for owner ${normalizedOwner.slice(0, 8)}...`);
     const messages = await this.db.messages
       .where("ownerAddress")
       .equals(normalizedOwner)
@@ -420,18 +410,22 @@ async findPendingMessage(
   }
 
   /* --------------------------------- SYNC --------------------------------- */
-  getLastKnownBlock() {
-    return this.getSetting("lastKnownBlock");
-  }
-  setLastKnownBlock(n: number) {
-    return this.setSetting("lastKnownBlock", n);
-  }
-  getOldestScannedBlock() {
-    return this.getSetting("oldestScannedBlock");
-  }
-  setOldestScannedBlock(n: number) {
-    return this.setSetting("oldestScannedBlock", n);
-  }
+  getLastKnownBlock(addr: string) {
+  const normalizedAddr = this.normalizeAddress(addr);
+  return this.getSetting(`lastKnownBlock_${normalizedAddr}`);
+}
+  setLastKnownBlock(addr: string, n: number) {
+  const normalizedAddr = this.normalizeAddress(addr);
+  return this.setSetting(`lastKnownBlock_${normalizedAddr}`, n);
+}
+  getOldestScannedBlock(addr: string) {
+  const normalizedAddr = this.normalizeAddress(addr);
+  return this.getSetting(`oldestScannedBlock_${normalizedAddr}`);
+}
+  setOldestScannedBlock(addr: string, n: number) {
+  const normalizedAddr = this.normalizeAddress(addr);
+  return this.setSetting(`oldestScannedBlock_${normalizedAddr}`, n);
+}
   getInitialScanComplete(addr: string) {
     const normalizedAddr = this.normalizeAddress(addr);
     return this.getSetting(`initialScanComplete_${normalizedAddr}`);
@@ -461,8 +455,7 @@ async findPendingMessage(
         await this.db.settings.clear();
       }
     );
-    this.deduplicator.clear();
-    console.log("✅ All database data cleared");
+    console.log("All database data cleared");
   }
 
   async clearUserData(addr: string) {
@@ -501,10 +494,12 @@ async findPendingMessage(
         for (const s of staleSettings) {
           await this.db.settings.delete(s.name);
         }
+        await this.db.settings.delete(`lastKnownBlock_${normalizedAddr}`);
+        await this.db.settings.delete(`oldestScannedBlock_${normalizedAddr}`);
       }
     );
-    this.deduplicator.clear();
-    console.log(`✅ User data cleared for ${normalizedAddr.slice(0, 8)}...`);
+    //this.deduplicator.clear();
+    console.log(`User data cleared for ${normalizedAddr.slice(0, 8)}...`);
   }
 
   /* ---------------------------- BACKUP / IMPORT --------------------------- */
@@ -520,7 +515,7 @@ async findPendingMessage(
     } as const;
 
     console.log(
-      `✅ Exported ${payload.identity.length} identities, ${payload.contacts.length} contacts, ${payload.messages.length} messages`
+      `Exported ${payload.identity.length} identities, ${payload.contacts.length} contacts, ${payload.messages.length} messages`
     );
     return JSON.stringify(payload);
   }
@@ -554,7 +549,7 @@ async findPendingMessage(
   async switchAccount(newAddress: string) {
     const normalizedAddress = this.normalizeAddress(newAddress);
 
-    this.deduplicator.clear();
+    //this.deduplicator.clear();
 
     const allIdentities = await this.db.identity.toArray();
     console.log(`Database state: ${allIdentities.length} total identities`);

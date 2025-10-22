@@ -15,6 +15,12 @@ importers:
         specifier: workspace:^0.1.0
         version: link:packages/sdk
     devDependencies:
+      '@noble/hashes':
+        specifier: ^1.8.0
+        version: 1.8.0
+      '@noble/secp256k1':
+        specifier: ^2.2.3
+        version: 2.3.0
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.9

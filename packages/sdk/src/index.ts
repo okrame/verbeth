@@ -3,7 +3,6 @@ export * from './payload.js';
 export * from './send.js';
 export * from './verify.js';
 export * from './types.js';
-export * from './deduplication.js';
 export * from './utils.js';
 export * from './identity.js';
 export * from './executor.js';

@@ -47,13 +47,15 @@ contract LogChainV1 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     /**
      * @dev Emitted when responding to a handshake
-     * @param inResponseTo Reference to the original handshake (typically keccak256 of handshake data)
+     * @param inResponseTo Response tag derived from ECDH(viewPubA, R) and HKDF.
      * @param responder The address responding to the handshake
+     * @param responderEphemeralR Ephemeral public key R used to generate the response tag.
      * @param ciphertext Encrypted response containing responder's public keys
      */
     event HandshakeResponse(
         bytes32 indexed inResponseTo,
         address indexed responder,
+        bytes32 responderEphemeralR, 
         bytes ciphertext
     );
 
@@ -121,14 +123,14 @@ contract LogChainV1 is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     /**
      * @dev Responds to a handshake with encrypted public keys
-     * @param inResponseTo Reference to the original handshake event
+     * @param inResponseTo Reference tag for the handshake initiator
+     * @param responderEphemeralR Ephemeral public key R used to generate the response tag.
      * @param ciphertext Encrypted payload containing responder's identity and ephemeral keys
      * 
      * @notice The ciphertext should be encrypted to the initiator's ephemeral public key
-     * @notice For smart accounts, the encrypted payload should include identity proof
      */
-    function respondToHandshake(bytes32 inResponseTo, bytes calldata ciphertext) external {
-        emit HandshakeResponse(inResponseTo, msg.sender, ciphertext);
+    function respondToHandshake(bytes32 inResponseTo, bytes32 responderEphemeralR, bytes calldata ciphertext) external {
+        emit HandshakeResponse(inResponseTo, msg.sender, responderEphemeralR, ciphertext);
     }
 
     /**
