@@ -1,7 +1,7 @@
 # Replay Protection in VerbEth
 
 VerbEth uses Ethereum event logs as the only transport layer for encrypted messages.  
-Replay protection is **not enforced on-chain** — and it **doesn’t need to be** (hence saving on gas).
+Replay protection is not enforced on-chain and it doesn’t need to be (hence saving on gas).
 
 ## Why?
 
@@ -49,9 +49,8 @@ But:
 
 ## Should You Verify a Message Wasn't Replayed?
 
-Only if you want to.
+Only if you want to. The SDK may optionally track `(sender, topic, nonce)` triplets to filter duplicates:
 
-The SDK may optionally track `(sender, topic, nonce)` triplets to filter duplicates:
 ```ts
 const seen = new Set<string>();
 function isReplay(log) {

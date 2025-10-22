@@ -165,7 +165,7 @@ ERC1967Proxy `0x62720f39d5Ec6501508bDe4D152c1E13Fd2F6707`
 - Fully on-chain: no servers, no relays
 - Compatible with EOAs and smart contract accounts
 
-The SDK now verifies handshakes and handshake responses using [viem.verifyMessage](https://viem.sh/docs/actions/public/verifyMessage).  
+The SDK verifies handshakes logs using [viem.verifyMessage](https://viem.sh/docs/actions/public/verifyMessage).  
 It supports both EOAs and Smart Contract Accounts — whether they’re already deployed or still counterfactual/pre-deployed — by leveraging:
 
 - ERC-1271: for verifying signatures from smart contract wallets that are deployed.

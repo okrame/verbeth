@@ -54,11 +54,11 @@ export function InitialForm({
           ) : (
             <div className="w-full text-center">
               <h2 className="text-2xl font-semibold">
-                {isAnyConnected ? "Welcome, " : ""}Start Your First Chat
+                {isAnyConnected ? "Hey, " : ""}Have Your First Say
               </h2>
               <div className="mt-2">
                 <span className="text-sm text-gray-400">
-                  Unstoppable. Private by design.
+                  Uncensorable. Private by design.
                 </span>
               </div>
             </div>

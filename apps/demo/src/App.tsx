@@ -216,7 +216,7 @@ export default function App() {
     const currentlyConnected = isConnected || isBaseConnected;
     const currentAddress = address || baseAddress;
 
-    if (!currentlyConnected || !currentAddress) {
+    if (!currentlyConnected || !currentAddress || !identityKeyPair) {
       setHandshakeToasts([]);
       return;
     }
@@ -231,7 +231,7 @@ export default function App() {
         onReject: () => removePendingHandshake(h.id),
       }))
     );
-  }, [pendingHandshakes, isConnected, isBaseConnected, address, baseAddress]);
+  }, [pendingHandshakes, isConnected, isBaseConnected, address, baseAddress, identityKeyPair]);
 
   const removeToast = (id: string) => {
     setHandshakeToasts((prev) => prev.filter((n) => n.id !== id));
@@ -347,7 +347,7 @@ export default function App() {
   const initializeBaseSDK = useCallback(async () => {
     if (!baseSDK) {
       const sdk = createBaseAccountSDK({
-        appName: 'Verbeth Chat',
+        appName: 'Unstoppable Chat',
         //appLogoUrl: 'https://base.org/logo.png',
         appChainIds: [chainId],
       });
@@ -463,10 +463,10 @@ export default function App() {
           {/* LEFT: title */}
           <div className="flex flex-col items-start">
             <h1 className="text-2xl sm:text-4xl font-extrabold leading-tight">
-              Verbeth Chat
+              Unstoppable Chat
             </h1>
             <div className="text-xs text-gray-400 pl-0.5 mt-1">
-              powered by Base
+              powered by Verbeth
             </div>
           </div>
           {/* RIGHT: auth buttons */}
@@ -609,7 +609,7 @@ export default function App() {
               /* Main Chat Layout */
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Left Panel - Contacts */}
-                <div className="border border-gray-800 rounded-lg p-4">
+                <div className="border border-gray-800 bg-gray-800/30 rounded-lg p-4">
                   <div className="flex justify-between items-center mb-4">
                     <h2 className="text-lg font-semibold">Contacts</h2>
                     <button
@@ -657,7 +657,7 @@ export default function App() {
                 </div>
 
                 {/* Right Panel - Conversation */}
-                <div className="lg:col-span-2 border border-gray-800 rounded-lg p-4 flex flex-col h-96">
+                <div className="lg:col-span-2 border border-gray-800 bg-gray-800/40 rounded-lg p-4 flex flex-col h-96">
                   <h2 className="text-lg font-semibold mb-4">
                     {selectedContact ? `Chat with ${selectedContact.address.slice(0, 8)}...` : 'Select a contact'}
                   </h2>
@@ -832,7 +832,8 @@ export default function App() {
           </div>
           {/* Activity Log + Debug Info */}
           {ready && (
-            <div className="fixed bottom-0 left-0 w-screen flex flex-col gap-1 sm:gap-2 px-1 sm:px-2 md:px-4 pb-2 sm:pb-4 z-30 pointer-events-none">
+              <div className="mt-20 w-full flex flex-col gap-1 sm:gap-2 px-1 sm:px-2 md:px-4 pb-2 sm:pb-4 pointer-events-none">
+
               <div className="max-w-6xl w-full pointer-events-auto">
                 <div
                   className="flex justify-between items-center p-2 sm:p-4 cursor-pointer hover:bg-gray-900/50 transition-colors"
