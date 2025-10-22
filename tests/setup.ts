@@ -30,7 +30,7 @@ export class AnvilSetup {
       "--gas-limit",
       "30000000",
       "--timeout",
-      "60000", 
+      "120000", 
       "--retries",
       "5", 
     ];

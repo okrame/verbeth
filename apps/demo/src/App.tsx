@@ -458,7 +458,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <div className="w-full bg-black">
+      <div className="w-full bg-black relative">
         <div className="flex justify-between items-start px-2 sm:px-4 py-2 sm:py-4">
           {/* LEFT: title */}
           <div className="flex flex-col items-start">
@@ -606,90 +606,172 @@ export default function App() {
                 hasExistingIdentity={!needsIdentityCreation}
               />
             ) : (
-              /* Main Chat Layout */
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Left Panel - Contacts */}
-                <div className="border border-gray-800 bg-gray-800/30 rounded-lg p-4">
-                  <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-lg font-semibold">Contacts</h2>
-                    <button
-                      onClick={() => setShowHandshakeForm(true)}
-                      className="text-sm px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded"
-                    >
-                      + New
-                    </button>
-                  </div>
-                  <div className="space-y-2">
-                    {contacts.map((contact) => (
-                      <div
-                        key={contact.address}
-                        onClick={() => setSelectedContact(contact)}
-                        className={`p-3 rounded cursor-pointer transition-colors ${selectedContact?.address === contact.address
-                          ? 'bg-blue-900'
-                          : 'bg-gray-900 hover:bg-gray-800'
-                          }`}
+              <div className="relative">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-[800px] pb-52">
+
+
+                  {/* Left Panel - Contacts */}
+                  <div className="border border-gray-800 bg-gray-800/30 rounded-lg p-4">
+                    <div className="flex justify-between items-center mb-4">
+                      <h2 className="text-lg font-semibold">Contacts</h2>
+                      <button
+                        onClick={() => setShowHandshakeForm(true)}
+                        className="text-sm px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded"
                       >
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">
-                            {contact.address.slice(0, 8)}...
-                          </span>
-                          <span className={`text-xs px-2 py-1 rounded ${contact.status === 'established'
-                            ? 'bg-green-800 text-green-200'
-                            : contact.status === 'handshake_sent'
-                              ? 'bg-yellow-800 text-yellow-200'
-                              : 'bg-gray-700 text-gray-300'
-                            }`}>
-                            {contact.status === 'established'
-                              ? 'connected'
+                        + New
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {contacts.map((contact) => (
+                        <div
+                          key={contact.address}
+                          onClick={() => setSelectedContact(contact)}
+                          className={`p-3 rounded cursor-pointer transition-colors ${selectedContact?.address === contact.address
+                            ? 'bg-blue-900'
+                            : 'bg-gray-900 hover:bg-gray-800'
+                            }`}
+                        >
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm font-medium">
+                              {contact.address.slice(0, 8)}...
+                            </span>
+                            <span className={`text-xs px-2 py-1 rounded ${contact.status === 'established'
+                              ? 'bg-green-800 text-green-200'
                               : contact.status === 'handshake_sent'
-                                ? 'request sent'
-                                : contact.status.replace('_', ' ')}
-                          </span>
+                                ? 'bg-yellow-800 text-yellow-200'
+                                : 'bg-gray-700 text-gray-300'
+                              }`}>
+                              {contact.status === 'established'
+                                ? 'connected'
+                                : contact.status === 'handshake_sent'
+                                  ? 'request sent'
+                                  : contact.status.replace('_', ' ')}
+                            </span>
+                          </div>
+                          {contact.lastMessage && (
+                            <p className="text-xs text-gray-400 mt-1">
+                              "{contact.lastMessage.slice(0, 30)}..."
+                            </p>
+                          )}
                         </div>
-                        {contact.lastMessage && (
-                          <p className="text-xs text-gray-400 mt-1">
-                            "{contact.lastMessage.slice(0, 30)}..."
-                          </p>
-                        )}
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
 
-                {/* Right Panel - Conversation */}
-                <div className="lg:col-span-2 border border-gray-800 bg-gray-800/40 rounded-lg p-4 flex flex-col h-96">
-                  <h2 className="text-lg font-semibold mb-4">
-                    {selectedContact ? `Chat with ${selectedContact.address.slice(0, 8)}...` : 'Select a contact'}
-                  </h2>
+                  {/* Right Panel - Conversation */}
+                  <div className="lg:col-span-2 border border-gray-800 bg-gray-800/40 rounded-lg p-4 flex flex-col h-full">
+                    <h2 className="text-lg font-semibold mb-4">
+                      {selectedContact ? `Chat with ${selectedContact.address.slice(0, 8)}...` : 'Select a contact'}
+                    </h2>
 
-                  {selectedContact ? (
-                    <>
-                      {/* Load More History Button */}
-                      {canLoadMore && (
-                        <div className="text-center mb-2">
-                          <button
-                            onClick={loadMoreHistory}
-                            disabled={isLoadingMore}
-                            className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded"
-                          >
-                            {isLoadingMore ? (
-                              <div className="flex items-center gap-2">
-                                <div className="animate-spin w-3 h-3 border border-gray-400 border-t-transparent rounded-full"></div>
-                                <span>Loading...</span>
-                                {syncProgress && <span>({syncProgress.current}/{syncProgress.total})</span>}
+                    {selectedContact ? (
+                      <>
+                        {/* Load More History Button */}
+                        {canLoadMore && (
+                          <div className="text-center mb-2">
+                            <button
+                              onClick={loadMoreHistory}
+                              disabled={isLoadingMore}
+                              className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded"
+                            >
+                              {isLoadingMore ? (
+                                <div className="flex items-center gap-2">
+                                  <div className="animate-spin w-3 h-3 border border-gray-400 border-t-transparent rounded-full"></div>
+                                  <span>Loading...</span>
+                                  {syncProgress && <span>({syncProgress.current}/{syncProgress.total})</span>}
+                                </div>
+                              ) : (
+                                "Load More History"
+                              )}
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Messages */}
+                        <div className="flex-1 overflow-y-auto space-y-2 mb-4">
+                          {messages
+                            .filter(m => {
+                              // without address o selectedContact, do not show messagges
+                              const currentAddress = address || baseAddress;
+                              if (!currentAddress || !selectedContact?.address) return false;
+                              return (
+                                m.sender.toLowerCase() === selectedContact.address.toLowerCase() ||
+                                (m.direction === 'outgoing' && m.recipient?.toLowerCase() === selectedContact.address.toLowerCase()) ||
+                                (selectedContact.topicOutbound && m.topic === selectedContact.topicOutbound) ||
+                                (selectedContact.topicInbound && m.topic === selectedContact.topicInbound)
+                              );
+                            })
+                            .sort((a, b) => a.timestamp - b.timestamp)
+                            .map((msg) => (
+                              <div
+                                key={msg.id}
+                                className={`p-2 rounded max-w-xs ${msg.direction === 'outgoing'
+                                  ? 'bg-blue-600 ml-auto'
+                                  : msg.direction === 'incoming'
+                                    ? 'bg-gray-700'
+                                    : 'bg-gray-700 mx-auto text-center text-xs'
+                                  }`}
+                              >
+                                <p className="text-sm flex items-center gap-1 overflow-visible">
+                                  {msg.type === "system" && (
+                                    msg.verified ? (
+                                      <span className="relative group inline-flex items-center">
+                                        <Fingerprint size={14} className="text-green-400 shrink-0" />
+                                        <span
+                                          role="tooltip"
+                                          className="pointer-events-none absolute -top-2 left-20 -translate-x-1/2
+                     px-2 py-1 text-xs rounded bg-gray-900 text-blue-100
+                     border border-gray-700 opacity-0 group-hover:opacity-100
+                     transition-opacity whitespace-nowrap z-50"
+                                        >
+                                          Identity proof verified
+                                        </span>
+                                      </span>
+                                    ) : (
+                                      msg.direction === "incoming" && (
+                                        <span className="relative group inline-flex items-center">
+                                          <X size={14} className="text-red-500 shrink-0" />
+                                          <span
+                                            role="tooltip"
+                                            className="pointer-events-none absolute -top-7 left-20 -translate-x-1/2
+                       px-2 py-1 text-xs rounded bg-gray-900 text-red-100
+                       border border-gray-700 opacity-0 group-hover:opacity-100
+                       transition-opacity whitespace-nowrap z-50"
+                                          >
+                                            Identity proof not verified
+                                          </span>
+                                        </span>
+                                      )
+                                    )
+                                  )}
+
+                                  {msg.type === "system" && msg.decrypted ? (
+                                    <>
+                                      <span className="font-bold">{msg.decrypted.split(":")[0]}:</span>
+                                      {msg.decrypted.split(":").slice(1).join(":")}
+                                    </>
+                                  ) : (
+                                    msg.decrypted || msg.ciphertext
+                                  )}
+                                </p>
+
+
+
+                                <div className="flex justify-between items-center mt-1">
+                                  <span className="text-xs text-gray-300">
+                                    {new Date(msg.timestamp).toLocaleTimeString()}
+                                  </span>
+                                  {msg.direction === 'outgoing' && (
+                                    <span className="text-xs" title={`Status: ${msg.status}`}>
+                                      {msg.status === 'confirmed' ? '✓✓' :
+                                        msg.status === 'failed' ? '✗' :
+                                          msg.status === 'pending' ? '✓' : '?'}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                            ) : (
-                              "Load More History"
-                            )}
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Messages */}
-                      <div className="flex-1 overflow-y-auto space-y-2 mb-4">
-                        {messages
-                          .filter(m => {
-                            // without address o selectedContact, do not show messagges
+                            ))}
+                          {messages.filter(m => {
                             const currentAddress = address || baseAddress;
                             if (!currentAddress || !selectedContact?.address) return false;
                             return (
@@ -698,214 +780,135 @@ export default function App() {
                               (selectedContact.topicOutbound && m.topic === selectedContact.topicOutbound) ||
                               (selectedContact.topicInbound && m.topic === selectedContact.topicInbound)
                             );
-                          })
-                          .sort((a, b) => a.timestamp - b.timestamp)
-                          .map((msg) => (
-                            <div
-                              key={msg.id}
-                              className={`p-2 rounded max-w-xs ${msg.direction === 'outgoing'
-                                ? 'bg-blue-600 ml-auto'
-                                : msg.direction === 'incoming'
-                                  ? 'bg-gray-700'
-                                  : 'bg-gray-700 mx-auto text-center text-xs'
-                                }`}
-                            >
-                              <p className="text-sm flex items-center gap-1 overflow-visible">
-                                {msg.type === "system" && (
-                                  msg.verified ? (
-                                    <span className="relative group inline-flex items-center">
-                                      <Fingerprint size={14} className="text-green-400 shrink-0" />
-                                      <span
-                                        role="tooltip"
-                                        className="pointer-events-none absolute -top-2 left-20 -translate-x-1/2
-                     px-2 py-1 text-xs rounded bg-gray-900 text-blue-100
-                     border border-gray-700 opacity-0 group-hover:opacity-100
-                     transition-opacity whitespace-nowrap z-50"
-                                      >
-                                        Identity proof verified
-                                      </span>
-                                    </span>
-                                  ) : (
-                                    msg.direction === "incoming" && (
-                                      <span className="relative group inline-flex items-center">
-                                        <X size={14} className="text-red-500 shrink-0" />
-                                        <span
-                                          role="tooltip"
-                                          className="pointer-events-none absolute -top-7 left-20 -translate-x-1/2
-                       px-2 py-1 text-xs rounded bg-gray-900 text-red-100
-                       border border-gray-700 opacity-0 group-hover:opacity-100
-                       transition-opacity whitespace-nowrap z-50"
-                                        >
-                                          Identity proof not verified
-                                        </span>
-                                      </span>
-                                    )
-                                  )
-                                )}
-
-                                {msg.type === "system" && msg.decrypted ? (
-                                  <>
-                                    <span className="font-bold">{msg.decrypted.split(":")[0]}:</span>
-                                    {msg.decrypted.split(":").slice(1).join(":")}
-                                  </>
-                                ) : (
-                                  msg.decrypted || msg.ciphertext
-                                )}
+                          }).length === 0 && (
+                              <p className="text-gray-400 text-sm text-center py-8">
+                                No messages yet. {selectedContact.status === 'established' ? 'Start the conversation!' : 'Waiting for handshake completion.'}
                               </p>
+                            )}
+                        </div>
 
+                        {/* Message Input */}
+                        {selectedContact.status === 'established' && selectedContact.identityPubKey && (
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              placeholder="Type a message..."
+                              className="flex-1 px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+                                  sendMessageToContact(selectedContact, e.currentTarget.value.trim());
+                                  e.currentTarget.value = '';
+                                }
+                              }}
+                            />
+                            <button
+                              onClick={() => {
+                                const input = document.querySelector('input[placeholder="Type a message..."]') as HTMLInputElement;
+                                if (input?.value.trim()) {
+                                  sendMessageToContact(selectedContact, input.value.trim());
+                                  input.value = '';
+                                }
+                              }}
+                              disabled={loading}
+                              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded"
+                            >
+                              Send
+                            </button>
+                          </div>
+                        )}
 
-
-                              <div className="flex justify-between items-center mt-1">
-                                <span className="text-xs text-gray-300">
-                                  {new Date(msg.timestamp).toLocaleTimeString()}
-                                </span>
-                                {msg.direction === 'outgoing' && (
-                                  <span className="text-xs" title={`Status: ${msg.status}`}>
-                                    {msg.status === 'confirmed' ? '✓✓' :
-                                      msg.status === 'failed' ? '✗' :
-                                        msg.status === 'pending' ? '✓' : '?'}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        {messages.filter(m => {
-                          const currentAddress = address || baseAddress;
-                          if (!currentAddress || !selectedContact?.address) return false;
-                          return (
-                            m.sender.toLowerCase() === selectedContact.address.toLowerCase() ||
-                            (m.direction === 'outgoing' && m.recipient?.toLowerCase() === selectedContact.address.toLowerCase()) ||
-                            (selectedContact.topicOutbound && m.topic === selectedContact.topicOutbound) ||
-                            (selectedContact.topicInbound && m.topic === selectedContact.topicInbound)
-                          );
-                        }).length === 0 && (
-                            <p className="text-gray-400 text-sm text-center py-8">
-                              No messages yet. {selectedContact.status === 'established' ? 'Start the conversation!' : 'Waiting for handshake completion.'}
-                            </p>
+                        {selectedContact.status !== 'established' && (
+                          <div className="text-center py-4 text-gray-400 text-sm">
+                            Handshake in progress... waiting for response
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="flex-1 flex items-center justify-center text-gray-400">
+                        Select a contact to start messaging
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {/* Activity Log + Debug Info */}
+                {ready && (
+                  <div className="absolute bottom-[10px] left-0 right-0 w-full flex flex-col gap-1 sm:gap-2 px-1 sm:px-2 md:px-4 pointer-events-none z-50">
+                    <div className="max-w-6xl w-full pointer-events-auto">
+                      <div
+                        className="flex justify-between items-center p-2 sm:p-4 cursor-pointer hover:bg-gray-900/50 transition-colors"
+                        onClick={() => setIsActivityLogOpen(!isActivityLogOpen)}
+                      >
+                        <div className="flex items-center gap-2 sm:gap-4">
+                          <div className="flex items-center gap-1 sm:gap-2">
+                            <h2 className="text-sm sm:text-lg font-semibold">Activity Log</h2>
+                            <span className="text-gray-400 text-sm">
+                              {isActivityLogOpen ? '▼' : '▶'}
+                            </span>
+                          </div>
+                          {canLoadMore && ready && isActivityLogOpen && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                loadMoreHistory();
+                              }}
+                              disabled={isLoadingMore}
+                              className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded flex items-center gap-2"
+                            >
+                              {isLoadingMore ? (
+                                <>
+                                  <div className="animate-spin w-3 h-3 border border-gray-400 border-t-transparent rounded-full"></div>
+                                  <span>Loading blocks...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span>📂</span>
+                                  <span>Load More History</span>
+                                </>
+                              )}
+                            </button>
                           )}
+                        </div>
+                        {(isInitialLoading || isLoadingMore) && isActivityLogOpen && (
+                          <div className="flex items-center gap-2 text-sm text-blue-400">
+                            <div className="animate-spin w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full"></div>
+                            <span>{isInitialLoading ? 'Initial sync...' : 'Loading more...'}</span>
+                            {syncProgress && (
+                              <span>({syncProgress.current}/{syncProgress.total})</span>
+                            )}
+                          </div>
+                        )}
                       </div>
 
-                      {/* Message Input */}
-                      {selectedContact.status === 'established' && selectedContact.identityPubKey && (
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            placeholder="Type a message..."
-                            className="flex-1 px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white"
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && e.currentTarget.value.trim()) {
-                                sendMessageToContact(selectedContact, e.currentTarget.value.trim());
-                                e.currentTarget.value = '';
-                              }
-                            }}
-                          />
-                          <button
-                            onClick={() => {
-                              const input = document.querySelector('input[placeholder="Type a message..."]') as HTMLInputElement;
-                              if (input?.value.trim()) {
-                                sendMessageToContact(selectedContact, input.value.trim());
-                                input.value = '';
-                              }
-                            }}
-                            disabled={loading}
-                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded"
-                          >
-                            Send
-                          </button>
-                        </div>
-                      )}
+                      <div
+                        className={`overflow-hidden transition-all duration-300 ease-in-out ${isActivityLogOpen ? 'max-h-40 opacity-100' : 'max-h-0 opacity-0'}`}
 
-                      {selectedContact.status !== 'established' && (
-                        <div className="text-center py-4 text-gray-400 text-sm">
-                          Handshake in progress... waiting for response
+                      >
+                        <div className="p-4 pt-0">
+                          <textarea
+                            ref={logRef}
+                            readOnly
+                            value={activityLogs}
+                            className="w-full h-32 bg-gray-900 border border-gray-700 rounded p-2 text-sm font-mono text-gray-300 resize-none"
+                            placeholder="Activity will appear here..."
+                          />
                         </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="flex-1 flex items-center justify-center text-gray-400">
-                      Select a contact to start messaging
+                      </div>
                     </div>
-                  )}
-                </div>
+
+                    {!isActivityLogOpen && (
+                      <div className="w-full bg-black/80 backdrop-blur-sm p-2 sm:p-3 text-xs text-gray-500 space-y-1 h-fit">
+                        <p>Contract: {LOGCHAIN_SINGLETON_ADDR}</p>
+                        <p>Network: Base</p>
+                        <p>Contract creation block: {CONTRACT_CREATION_BLOCK}</p>
+                        <p>Status: {ready ? '🟢 Ready' : '🔴 Not Ready'} {(isInitialLoading || isLoadingMore) ? '⏳ Loading' : ''}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
-          {/* Activity Log + Debug Info */}
-          {ready && (
-              <div className="mt-20 w-full flex flex-col gap-1 sm:gap-2 px-1 sm:px-2 md:px-4 pb-2 sm:pb-4 pointer-events-none">
 
-              <div className="max-w-6xl w-full pointer-events-auto">
-                <div
-                  className="flex justify-between items-center p-2 sm:p-4 cursor-pointer hover:bg-gray-900/50 transition-colors"
-                  onClick={() => setIsActivityLogOpen(!isActivityLogOpen)}
-                >
-                  <div className="flex items-center gap-2 sm:gap-4">
-                    <div className="flex items-center gap-1 sm:gap-2">
-                      <h2 className="text-sm sm:text-lg font-semibold">Activity Log</h2>
-                      <span className="text-gray-400 text-sm">
-                        {isActivityLogOpen ? '▼' : '▶'}
-                      </span>
-                    </div>
-                    {canLoadMore && ready && isActivityLogOpen && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          loadMoreHistory();
-                        }}
-                        disabled={isLoadingMore}
-                        className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded flex items-center gap-2"
-                      >
-                        {isLoadingMore ? (
-                          <>
-                            <div className="animate-spin w-3 h-3 border border-gray-400 border-t-transparent rounded-full"></div>
-                            <span>Loading blocks...</span>
-                          </>
-                        ) : (
-                          <>
-                            <span>📂</span>
-                            <span>Load More History</span>
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-                  {(isInitialLoading || isLoadingMore) && isActivityLogOpen && (
-                    <div className="flex items-center gap-2 text-sm text-blue-400">
-                      <div className="animate-spin w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full"></div>
-                      <span>{isInitialLoading ? 'Initial sync...' : 'Loading more...'}</span>
-                      {syncProgress && (
-                        <span>({syncProgress.current}/{syncProgress.total})</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                <div
-                  className={`overflow-hidden transition-all duration-300 ease-in-out ${isActivityLogOpen ? 'max-h-40 opacity-100' : 'max-h-0 opacity-0'}`}
-
-                >
-                  <div className="p-4 pt-0">
-                    <textarea
-                      ref={logRef}
-                      readOnly
-                      value={activityLogs}
-                      className="w-full h-32 bg-gray-900 border border-gray-700 rounded p-2 text-sm font-mono text-gray-300 resize-none"
-                      placeholder="Activity will appear here..."
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {!isActivityLogOpen && (
-                <div className="w-full bg-black/80 backdrop-blur-sm p-2 sm:p-3 text-xs text-gray-500 space-y-1 h-fit">
-                  <p>Contract: {LOGCHAIN_SINGLETON_ADDR}</p>
-                  <p>Network: Base</p>
-                  <p>Contract creation block: {CONTRACT_CREATION_BLOCK}</p>
-                  <p>Status: {ready ? '🟢 Ready' : '🔴 Not Ready'} {(isInitialLoading || isLoadingMore) ? '⏳ Loading' : ''}</p>
-                </div>
-              )}
-            </div>
-          )}
 
         </div>
       </div>
