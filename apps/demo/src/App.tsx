@@ -14,6 +14,7 @@ import {
   deriveIdentityKeyPairWithProof,
   IdentityKeyPair,
   IdentityProof,
+  VerbethClient,
 } from '@verbeth/sdk';
 import { useMessageListener } from './hooks/useMessageListener.js';
 import { useMessageProcessor } from './hooks/useMessageProcessor.js';
@@ -62,6 +63,8 @@ export default function App() {
   const [baseProvider, setBaseProvider] = useState<any>(null);
   const [baseAddress, setBaseAddress] = useState<string | null>(null);
   const [isBaseConnected, setIsBaseConnected] = useState(false);
+  const [verbethClient, setVerbethClient] = useState<VerbethClient | null>(null);
+
 
   const logRef = useRef<HTMLTextAreaElement>(null);
 
@@ -194,13 +197,7 @@ export default function App() {
     acceptHandshake,
     sendMessageToContact
   } = useChatActions({
-    address,
-    baseAddress,
-    baseProvider,
-    signer,
-    executor,
-    identityKeyPair,
-    identityProof,
+    verbethClient,
     addLog,
     updateContact: async (contact: Contact) => { await updateContact(contact); },
     addMessage: async (message: any) => { await addMessage(message); },
@@ -210,6 +207,24 @@ export default function App() {
     setMessage,
     setRecipientAddress,
   });
+
+  useEffect(() => {
+    const currentAddress = address || baseAddress;
+
+    if (executor && identityKeyPair && identityProof && signer && currentAddress) {
+      const client = new VerbethClient({
+        executor,
+        identityKeyPair,
+        identityProof,
+        signer,
+        address: currentAddress,
+      });
+      setVerbethClient(client);
+      addLog(`VerbethClient initialized for ${currentAddress.slice(0, 8)}...`);
+    } else {
+      setVerbethClient(null);
+    }
+  }, [executor, identityKeyPair, identityProof, signer, address, baseAddress, addLog]);
 
   // sync handshakeToasts
   useEffect(() => {
@@ -342,6 +357,7 @@ export default function App() {
     setContract(null);
     setExecutor(null);
     setNeedsIdentityCreation(false);
+    setVerbethClient(null);
   };
 
   const initializeBaseSDK = useCallback(async () => {
@@ -458,6 +474,27 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-black text-white">
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(17, 24, 39, 0.5);
+          border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: rgba(75, 85, 99, 0.8);
+          border-radius: 4px;
+          transition: background 0.2s ease;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: rgba(107, 114, 128, 1);
+        }
+        .custom-scrollbar {
+          scrollbar-width: thin;
+          scrollbar-color: rgba(75, 85, 99, 0.8) rgba(17, 24, 39, 0.5);
+        }
+      `}</style>
       <div className="w-full bg-black relative">
         <div className="flex justify-between items-start px-2 sm:px-4 py-2 sm:py-4">
           {/* LEFT: title */}
@@ -607,7 +644,7 @@ export default function App() {
               />
             ) : (
               <div className="relative">
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-[800px] pb-52">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-[650px] pb-52">
 
 
                   {/* Left Panel - Contacts */}
@@ -659,7 +696,7 @@ export default function App() {
                   </div>
 
                   {/* Right Panel - Conversation */}
-                  <div className="lg:col-span-2 border border-gray-800 bg-gray-800/40 rounded-lg p-4 flex flex-col h-full">
+                  <div className="lg:col-span-2 border border-gray-800 bg-gray-800/40 rounded-lg p-4 flex flex-col h-[650px]">
                     <h2 className="text-lg font-semibold mb-4">
                       {selectedContact ? `Chat with ${selectedContact.address.slice(0, 8)}...` : 'Select a contact'}
                     </h2>
@@ -688,7 +725,7 @@ export default function App() {
                         )}
 
                         {/* Messages */}
-                        <div className="flex-1 overflow-y-auto space-y-2 mb-4">
+                        <div className="flex-1 min-h-0 overflow-y-auto space-y-2 mb-4 pr-2 custom-scrollbar">
                           {messages
                             .filter(m => {
                               // without address o selectedContact, do not show messagges

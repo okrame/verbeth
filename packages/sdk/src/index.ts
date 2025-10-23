@@ -45,3 +45,11 @@ export {
   DirectEntryPointExecutor,  
   ExecutorFactory
 } from './executor.js';
+
+// high-level client API 
+export { VerbethClient } from './client/index.js';
+export type { 
+  VerbethClientConfig,
+  HandshakeResult,
+  HandshakeResponseResult 
+} from './client/index.js';
