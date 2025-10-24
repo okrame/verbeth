@@ -154,7 +154,7 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       await responderSmartAccount.getAddress()
     );
     await new Promise((resolve) => setTimeout(resolve, 300));
-  }, 80000);
+  }, 180000);
 
   afterAll(async () => {
     await anvil.stop();

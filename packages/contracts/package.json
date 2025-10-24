@@ -1,7 +1,7 @@
 {
   "name": "@verbeth/contracts",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "main": "contracts/LogChainV1.sol",
   "devDependencies": {
     "@account-abstraction/contracts": "^0.8.0",

@@ -58,6 +58,7 @@ export class AnvilSetup {
           await this.provider.getBlockNumber();
           clearTimeout(t);
           console.log(`Anvil ready on port ${this.port} (mainnet fork)!`);
+          console.log(`Provider connected successfully`);
           resolve();
         } catch {
           setTimeout(ping, 500);
