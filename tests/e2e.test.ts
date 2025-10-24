@@ -180,7 +180,7 @@ describe("End-to-End Handshake and Messaging Tests", () => {
       eoaAccount1.address
     );
 
-  }, 80000);
+  }, 180000);
 
   afterAll(async () => {
     await anvil.stop();

@@ -1,7 +1,7 @@
 {
   "name": "@verbeth/sdk",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.1.4",
+  "private": false,
   "main": "dist/src/index.js",
   "module": "dist/esm/src/index.js",
   "exports": {
@@ -10,16 +10,20 @@
   },
   "type": "module",
   "types": "dist/src/index.d.ts",
+  "files": [
+    "dist/src",
+    "dist/esm/src"
+  ],
   "dependencies": {
     "@noble/curves": "^1.8.1",
     "@noble/hashes": "^1.8.0",
     "@noble/secp256k1": "^2.2.3",
-    "@verbeth/contracts": "workspace:^0.1.0",
     "ethers": "^6.7.0",
     "tweetnacl": "^1.0.3",
     "viem": "^2.37.5"
   },
   "devDependencies": {
+    "@verbeth/contracts": "workspace:^0.1.0",
     "ts-node": "^10.9.2",
     "typechain": "^8.3.2",
     "typescript": "^5.4.0",

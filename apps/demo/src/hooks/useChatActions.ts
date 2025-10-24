@@ -1,26 +1,12 @@
 import { useCallback } from "react";
-import nacl from "tweetnacl";
 import {
-  sendEncryptedMessage,
-  initiateHandshake,
-  respondToHandshake,
-  IExecutor,
-  IdentityKeyPair,
-  IdentityProof,
-  deriveDuplexTopics,
-  pickOutboundTopic
+  pickOutboundTopic,
+  VerbethClient
 } from "@verbeth/sdk";
-import { Contact, generateTempMessageId, EVENT_SIGNATURES } from "../types.js";
-import { VoidSigner } from "ethers";
+import { Contact, generateTempMessageId } from "../types.js";
 
 interface UseChatActionsProps {
-  address: `0x${string}` | undefined;
-  baseAddress: string | null;
-  baseProvider: any;
-  signer: any;
-  executor: IExecutor | null;
-  identityKeyPair: IdentityKeyPair | null;
-  identityProof: IdentityProof | null;
+  verbethClient: VerbethClient | null; 
   addLog: (message: string) => void;
   updateContact: (contact: Contact) => Promise<void>;
   addMessage: (message: any) => Promise<void>;
@@ -32,13 +18,7 @@ interface UseChatActionsProps {
 }
 
 export const useChatActions = ({
-  address,
-  baseAddress,
-  baseProvider,
-  signer,
-  executor,
-  identityKeyPair,
-  identityProof,
+  verbethClient,
   addLog,
   updateContact,
   addMessage,
@@ -48,51 +28,31 @@ export const useChatActions = ({
   setMessage,
   setRecipientAddress,
 }: UseChatActionsProps) => {
-  const getCurrentSigner = useCallback(() => {
-    if (signer) return signer;
-    if (baseProvider && baseAddress) {
-      return new VoidSigner(baseAddress, baseProvider);
-    }
-    return null;
-  }, [signer, baseProvider, baseAddress]);
 
   const sendHandshake = useCallback(
     async (recipientAddress: string, message: string) => {
-      const currentAddress = address || baseAddress;
-      const currentSigner = getCurrentSigner();
+      if (!verbethClient) {
+        addLog("✗ Client not initialized");
+        return;
+      }
 
-      if (
-        !executor ||
-        !currentAddress ||
-        !recipientAddress ||
-        !message ||
-        !identityKeyPair ||
-        !identityProof ||
-        !currentSigner
-      ) {
-        addLog("✗ Missing required data for handshake");
+      if (!recipientAddress || !message) {
+        addLog("✗ Missing recipient address or message");
         return;
       }
 
       setLoading(true);
       try {
-        const ephemeralKeyPair = nacl.box.keyPair();
-
-        const tx = await initiateHandshake({
-          executor,
+        const { tx, ephemeralKeyPair } = await verbethClient.sendHandshake(
           recipientAddress,
-          identityKeyPair,
-          ephemeralPubKey: ephemeralKeyPair.publicKey,
-          plaintextPayload: message,
-          identityProof,
-          signer: currentSigner,
-        });
+          message
+        );
 
         const newContact: Contact = {
           address: recipientAddress,
-          ownerAddress: currentAddress,
+          ownerAddress: verbethClient.userAddress,
           status: "handshake_sent",
-          ephemeralKey: ephemeralKeyPair.secretKey,
+          ephemeralKey: ephemeralKeyPair.secretKey, 
           lastMessage: message,
           lastTimestamp: Date.now(),
         };
@@ -102,8 +62,8 @@ export const useChatActions = ({
 
         const handshakeMessage = {
           id: generateTempMessageId(),
-          topic: "", // we don't know it yet
-          sender: currentAddress,
+          topic: "",
+          sender: verbethClient.userAddress,
           recipient: recipientAddress,
           ciphertext: "",
           timestamp: Date.now(),
@@ -115,17 +75,14 @@ export const useChatActions = ({
           nonce: 0,
           dedupKey: `handshake-${tx.hash}`,
           type: "system" as const,
-          ownerAddress: currentAddress,
+          ownerAddress: verbethClient.userAddress,
           status: "pending" as const,
         };
 
         await addMessage(handshakeMessage);
 
         addLog(
-          `Handshake sent to ${recipientAddress.slice(
-            0,
-            8
-          )}...: "${message}" (tx: ${tx.hash})`
+          `Handshake sent to ${recipientAddress.slice(0, 8)}...: "${message}" (tx: ${tx.hash})`
         );
         setMessage("");
         setRecipientAddress("");
@@ -141,12 +98,7 @@ export const useChatActions = ({
       }
     },
     [
-      address,
-      baseAddress,
-      executor,
-      identityKeyPair,
-      identityProof,
-      getCurrentSigner,
+      verbethClient, 
       addLog,
       updateContact,
       addMessage,
@@ -159,45 +111,27 @@ export const useChatActions = ({
 
   const acceptHandshake = useCallback(
     async (handshake: any, responseMessage: string) => {
-      const currentAddress = address || baseAddress;
-      const currentSigner = getCurrentSigner();
-
-      if (
-        !executor ||
-        !currentAddress ||
-        !identityKeyPair ||
-        !identityProof ||
-        !currentSigner
-      ) {
-        addLog("✗ Missing required data for handshake response");
+      if (!verbethClient) {
+        addLog("✗ Client not initialized");
         return;
       }
 
       try {
-        const { tx, salt } = await respondToHandshake({
-        executor,
-        initiatorPubKey: handshake.ephemeralPubKey,
-        responderIdentityKeyPair: identityKeyPair,
-        note: responseMessage,
-        identityProof,
-        signer: currentSigner,
-      });
+        const { tx, duplexTopics } = await verbethClient.acceptHandshake(
+          handshake.ephemeralPubKey,
+          handshake.identityPubKey,
+          responseMessage
+        );
 
-
-      const duplexTopics = deriveDuplexTopics(
-        identityKeyPair.secretKey,
-        handshake.identityPubKey,
-        salt
-      );
-
+        // Client auto-derived topics, just use them!
         const newContact: Contact = {
           address: handshake.sender,
-          ownerAddress: currentAddress,
+          ownerAddress: verbethClient.userAddress,
           status: "established",
           identityPubKey: handshake.identityPubKey,
           signingPubKey: handshake.signingPubKey,
-          topicOutbound: pickOutboundTopic(false, duplexTopics), // Bob is responder
-          topicInbound: pickOutboundTopic(true, duplexTopics),   // Alice is initiator
+          topicOutbound: pickOutboundTopic(false, duplexTopics), // Responder
+          topicInbound: pickOutboundTopic(true, duplexTopics),   // Responder
           lastMessage: responseMessage,
           lastTimestamp: Date.now(),
         };
@@ -209,7 +143,7 @@ export const useChatActions = ({
         const acceptanceMessage = {
           id: generateTempMessageId(),
           topic: duplexTopics.topicOut,
-          sender: currentAddress,
+          sender: verbethClient.userAddress,
           recipient: handshake.sender,
           ciphertext: "",
           timestamp: Date.now(),
@@ -221,7 +155,7 @@ export const useChatActions = ({
           nonce: 0,
           dedupKey: `handshake-accepted-${handshake.id}`,
           type: "system" as const,
-          ownerAddress: currentAddress,
+          ownerAddress: verbethClient.userAddress,
           status: "pending" as const,
         };
 
@@ -243,12 +177,7 @@ export const useChatActions = ({
       }
     },
     [
-      address,
-      baseAddress,
-      executor,
-      identityKeyPair,
-      identityProof,
-      getCurrentSigner,
+      verbethClient, 
       addLog,
       updateContact,
       removePendingHandshake,
@@ -259,15 +188,13 @@ export const useChatActions = ({
 
   const sendMessageToContact = useCallback(
     async (contact: Contact, messageText: string) => {
-      const currentAddress = address || baseAddress;
+      if (!verbethClient) {
+        addLog("✗ Client not initialized");
+        return;
+      }
 
-      if (
-        !executor ||
-        !currentAddress ||
-        !contact.identityPubKey ||
-        !identityKeyPair
-      ) {
-        addLog("✗ Contact not established or missing data");
+      if (!contact.identityPubKey) {
+        addLog("✗ Contact not established or missing identity key");
         return;
       }
 
@@ -277,22 +204,21 @@ export const useChatActions = ({
           addLog("✗ Contact doesn't have outbound topic established");
           return;
         }
-        const topic = contact.topicOutbound;
-        const timestamp = Math.floor(Date.now() / 1000);
-        const identityAsSigningKey = {
-          publicKey: identityKeyPair.signingPublicKey,
-          secretKey: identityKeyPair.signingSecretKey,
-        };
 
+        await verbethClient.sendMessage(
+          contact.topicOutbound,
+          contact.identityPubKey,
+          messageText
+        );
 
-
+        // Create pending message for UI
         const pendingMessage = {
           id: generateTempMessageId(),
-          topic,
-          sender: currentAddress,
+          topic: contact.topicOutbound,
+          sender: verbethClient.userAddress,
           recipient: contact.address,
           ciphertext: "",
-          timestamp: timestamp * 1000,
+          timestamp: Date.now(),
           blockTimestamp: Date.now(),
           blockNumber: 0,
           direction: "outgoing" as const,
@@ -301,19 +227,9 @@ export const useChatActions = ({
           nonce: 0,
           dedupKey: `pending-${generateTempMessageId()}`,
           type: "text" as const,
-          ownerAddress: currentAddress,
+          ownerAddress: verbethClient.userAddress,
           status: "pending" as const,
-        };        
-
-        await sendEncryptedMessage({
-          executor,
-          topic,
-          message: messageText,
-          recipientPubKey: contact.identityPubKey,
-          senderAddress: currentAddress,
-          senderSignKeyPair: identityAsSigningKey,
-          timestamp,
-        });
+        };
 
         await addMessage(pendingMessage);
 
@@ -339,10 +255,7 @@ export const useChatActions = ({
       }
     },
     [
-      address,
-      baseAddress,
-      executor,
-      identityKeyPair,
+      verbethClient, 
       addLog,
       addMessage,
       updateContact,

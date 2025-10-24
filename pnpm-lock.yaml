@@ -188,9 +188,6 @@ importers:
       '@noble/secp256k1':
         specifier: ^2.2.3
         version: 2.3.0
-      '@verbeth/contracts':
-        specifier: workspace:^0.1.0
-        version: link:../contracts
       ethers:
         specifier: ^6.7.0
         version: 6.15.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
@@ -201,6 +198,9 @@ importers:
         specifier: ^2.37.5
         version: 2.37.5(bufferutil@4.0.9)(typescript@5.8.3)(utf-8-validate@5.0.10)(zod@3.22.4)
     devDependencies:
+      '@verbeth/contracts':
+        specifier: workspace:^0.1.0
+        version: link:../contracts
       ts-node:
         specifier: ^10.9.2
         version: 10.9.2(@types/node@22.7.5)(typescript@5.8.3)
