@@ -1,5 +1,5 @@
 {
-  "name": "verbeth-sdk",
+  "name": "@verbeth/sdk",
   "version": "0.1.4",
   "private": false,
   "main": "dist/src/index.js",
