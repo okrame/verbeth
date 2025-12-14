@@ -23,19 +23,19 @@ export interface HandshakeResponseLog {
   ciphertext: string; // Contains unified pubKeys + identityProof encrypted
 }
 
-// Duplex topics calcolati per una conversazione a partire da un handshake
+// Duplex topics structure
 export interface DuplexTopics {
-  /** Initiator → Responder */
+  /** Initiator to Responder */
   topicOut: `0x${string}`;
-  /** Responder → Initiator */
+  /** Responder to Initiator */
   topicIn: `0x${string}`;
 }
 
-/** Formato compatto per invio via HSR cifrata */
+// for HSR
 export interface TopicInfoWire {
   out: `0x${string}`;
   in: `0x${string}`;
-  /** checksum corto per conferma (8 byte, hex) */
+  // short checksum 
   chk: `0x${string}`;
 }
 

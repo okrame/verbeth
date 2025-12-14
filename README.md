@@ -150,7 +150,7 @@ A transaction receipt does not expose the immediate caller of this contract — 
 
 Under ERC-4337 this becomes even trickier: the outer transaction targets the EntryPoint and tx.from is the bundler, not the smart account. Without including sender in the event, reliably linking a log to the originating account would require correlating EntryPoint internals or traces.
 
-### Deployed Addresses
+### Deployed Addresses (base mainnet)
 
 LogChainV1 (singleton) `0x41a3eaC0d858028E9228d1E2092e6178fc81c4f0`
 
