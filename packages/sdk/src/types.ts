@@ -39,7 +39,7 @@ export interface TopicInfoWire {
   chk: `0x${string}`;
 }
 
-// Identity key pair structure (from identity.ts)
+// Identity key pair structure
 export interface IdentityKeyPair {
   // X25519 keys per encryption/decryption
   publicKey: Uint8Array;
@@ -47,6 +47,15 @@ export interface IdentityKeyPair {
   // Ed25519 keys per signing/verification
   signingPublicKey: Uint8Array;
   signingSecretKey: Uint8Array;
+}
+
+/**
+ * Context used to domain separate identity derivation and proof verification.
+ * rpId should be the dapp origin host (eg example.com) or a stable app id.
+ */
+export interface IdentityContext {
+  chainId?: number;
+  rpId?: string;
 }
 
 // Identity proof structure

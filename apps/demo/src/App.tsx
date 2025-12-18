@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import { CopyIcon, Fingerprint, X } from "lucide-react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { Fingerprint } from "lucide-react";
 import { ConnectButton } from '@rainbow-me/rainbowkit';
+import Safe from '@safe-global/protocol-kit'
+import SafeApiKit from '@safe-global/api-kit'
 import { useAccount, useWalletClient } from 'wagmi';
 import { useRpcClients } from './rpc.js';
-import { BrowserProvider } from "ethers";
+import { BrowserProvider, Wallet } from "ethers";
 import {
   LogChainV1__factory,
   type LogChainV1,
@@ -15,6 +17,7 @@ import {
   IdentityKeyPair,
   IdentityProof,
   VerbethClient,
+  SafeSessionSigner
 } from '@verbeth/sdk';
 import { useMessageListener } from './hooks/useMessageListener.js';
 import { useMessageProcessor } from './hooks/useMessageProcessor.js';
@@ -24,13 +27,13 @@ import {
   CONTRACT_CREATION_BLOCK,
   Contact,
   StoredIdentity,
+  SAFE_MODULE_ADDRESS,
+  SAFE_TX_SERVICE_URL
 } from './types.js';
 import { InitialForm } from './components/InitialForm.js';
 import { SideToastNotifications } from './components/SideToastNotification.js';
 import { IdentityCreation } from './components/IdentityCreation.js';
 import { CelebrationToast } from "./components/CelebrationToast.js";
-import { createBaseAccountSDK } from '@base-org/account';
-import { SignInWithBaseButton } from '@base-org/account-ui/react';
 import { useChatActions } from './hooks/useChatActions.js';
 
 
@@ -59,16 +62,14 @@ export default function App() {
   const [isActivityLogOpen, setIsActivityLogOpen] = useState(false);
   const [activityLogs, setActivityLogs] = useState<string>("");
 
-  const [baseSDK, setBaseSDK] = useState<ReturnType<typeof createBaseAccountSDK> | null>(null);
-  const [baseProvider, setBaseProvider] = useState<any>(null);
-  const [baseAddress, setBaseAddress] = useState<string | null>(null);
-  const [isBaseConnected, setIsBaseConnected] = useState(false);
   const [verbethClient, setVerbethClient] = useState<VerbethClient | null>(null);
-
 
   const logRef = useRef<HTMLTextAreaElement>(null);
 
+  // Identity context (domain and chain binding)
   const chainId = Number(import.meta.env.VITE_CHAIN_ID);
+  const rpId = globalThis.location?.host ?? "";
+  const identityContext = useMemo(() => ({ chainId, rpId }), [chainId, rpId]);
 
   const addLog = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -93,9 +94,9 @@ export default function App() {
     if (signer && address) {
       setLoading(true);
       try {
-        addLog("Deriving new identity key (EOA)...");
+        addLog("Deriving new identity key (2 signatures)...");
 
-        const result = await deriveIdentityKeyPairWithProof(signer, address);
+        const result = await deriveIdentityKeyPairWithProof(signer, address, identityContext);
 
         setIdentityKeyPair(result.keyPair);
         setIdentityProof(result.identityProof);
@@ -124,45 +125,8 @@ export default function App() {
       return;
     }
 
-    // Base SDK
-    if (baseProvider && baseAddress) {
-      setLoading(true);
-      try {
-        addLog("Deriving new identity key (Base Smart Account)...");
-
-        const result = await deriveIdentityKeyPairWithProof(signer, baseAddress);
-
-        console.log("!!!!Debug🔑 [createIdentity] identityProof:", result.identityProof);
-
-        setIdentityKeyPair(result.keyPair);
-        setIdentityProof(result.identityProof);
-
-        const identityToStore: StoredIdentity = {
-          address: baseAddress,
-          keyPair: result.keyPair,
-          derivedAt: Date.now(),
-          proof: result.identityProof
-        };
-
-        await dbService.saveIdentity(identityToStore);
-        addLog(`New identity key derived and saved for Base Smart Account`);
-        setNeedsIdentityCreation(false);
-        setShowToast(true);
-
-      } catch (signError: any) {
-        if (signError.code === 4001) {
-          addLog("User rejected signing request.");
-        } else {
-          addLog(`✗ Failed to derive identity: ${signError.message}`);
-        }
-      } finally {
-        setLoading(false);
-      }
-      return;
-    }
-
     addLog("✗ Missing signer/provider or address for identity creation");
-  }, [signer, address, baseProvider, baseAddress, addLog]);
+  }, [signer, address, identityContext, addLog]);
 
   const {
     messages,
@@ -174,7 +138,8 @@ export default function App() {
     processEvents
   } = useMessageProcessor({
     readProvider,
-    address: address ?? baseAddress ?? undefined,
+    identityContext,
+    address: address ?? undefined,
     identityKeyPair,
     onLog: addLog
   });
@@ -187,7 +152,7 @@ export default function App() {
     loadMoreHistory,
   } = useMessageListener({
     readProvider,
-    address: address ?? baseAddress ?? undefined,
+    address: address ?? undefined,
     onLog: addLog,
     onEventsProcessed: processEvents
   });
@@ -209,7 +174,7 @@ export default function App() {
   });
 
   useEffect(() => {
-    const currentAddress = address || baseAddress;
+    const currentAddress = address;
 
     if (executor && identityKeyPair && identityProof && signer && currentAddress) {
       const client = new VerbethClient({
@@ -224,12 +189,12 @@ export default function App() {
     } else {
       setVerbethClient(null);
     }
-  }, [executor, identityKeyPair, identityProof, signer, address, baseAddress, addLog]);
+  }, [executor, identityKeyPair, identityProof, signer, address, addLog]);
 
   // sync handshakeToasts
   useEffect(() => {
-    const currentlyConnected = isConnected || isBaseConnected;
-    const currentAddress = address || baseAddress;
+    const currentlyConnected = isConnected;
+    const currentAddress = address;
 
     if (!currentlyConnected || !currentAddress || !identityKeyPair) {
       setHandshakeToasts([]);
@@ -246,18 +211,15 @@ export default function App() {
         onReject: () => removePendingHandshake(h.id),
       }))
     );
-  }, [pendingHandshakes, isConnected, isBaseConnected, address, baseAddress, identityKeyPair]);
+  }, [pendingHandshakes, isConnected, address, identityKeyPair]);
 
   const removeToast = (id: string) => {
     setHandshakeToasts((prev) => prev.filter((n) => n.id !== id));
   };
 
   useEffect(() => {
-    setReady(
-      (readProvider !== null && isConnected && walletClient !== undefined) ||
-      (baseProvider !== null && isBaseConnected)
-    );
-  }, [readProvider, isConnected, walletClient, baseProvider, isBaseConnected]);
+    setReady(readProvider !== null && isConnected && walletClient !== undefined);
+  }, [readProvider, isConnected, walletClient]);
 
   useEffect(() => {
     handleInitialization();
@@ -265,34 +227,35 @@ export default function App() {
 
   // hide handshake form when we have contacts AND user is connected
   useEffect(() => {
-    const currentlyConnected = isConnected || isBaseConnected;
+    const currentlyConnected = isConnected;
     setShowHandshakeForm(!ready || !currentlyConnected || contacts.length === 0 || needsIdentityCreation);
-  }, [ready, isConnected, isBaseConnected, contacts.length, needsIdentityCreation]);
+  }, [ready, isConnected, contacts.length, needsIdentityCreation]);
 
   const handleInitialization = useCallback(async () => {
     try {
-      if (ready && readProvider && walletClient && address && !baseAddress) {
+      if (ready && readProvider && walletClient && address) {
         await initializeWagmiAccount();
         return;
       }
 
-      if (isBaseConnected && baseProvider && baseAddress && !address) {
-        await initializeBaseAccount();
-        return;
-      }
-
-      if (!address && !baseAddress) {
+      if (!address) {
         resetState();
       }
     } catch (error) {
       console.error("Failed to initialize:", error);
       addLog(`✗ Failed to initialize: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-  }, [ready, readProvider, walletClient, address, baseAddress, isBaseConnected, baseProvider]);
+  }, [ready, readProvider, walletClient, address]);
 
   const initializeWagmiAccount = async () => {
     const ethersProvider = new BrowserProvider(walletClient!.transport);
     const ethersSigner = await ethersProvider.getSigner();
+
+    const net = await ethersProvider.getNetwork();
+    if (Number(net.chainId) !== chainId) {
+      addLog(`Wrong network: connected to chain ${Number(net.chainId)}, expected ${chainId}. Please switch network in your wallet.`);
+      return;
+    }
 
     const contractInstance = LogChainV1__factory.connect(LOGCHAIN_SINGLETON_ADDR, ethersSigner as any);
     const executorInstance = ExecutorFactory.createEOA(contractInstance);
@@ -304,28 +267,6 @@ export default function App() {
     if (address !== currentAccount) {
       console.log(`EOA connected: ${address!.slice(0, 8)}...`);
       await switchToAccount(address!);
-    }
-  };
-
-  const initializeBaseAccount = async () => {
-    const paymasterUrl = import.meta.env.VITE_PAYMASTER_AND_BUNDLER_ENDPOINT;
-
-    const executorInstance = ExecutorFactory.createBaseSmartAccount(
-      baseProvider,
-      LOGCHAIN_SINGLETON_ADDR,
-      chainId,
-      paymasterUrl
-    );
-
-    const browserProvider = new BrowserProvider(baseProvider);
-    const realSigner = await browserProvider.getSigner(baseAddress!);
-
-    setSigner(realSigner);
-    setExecutor(executorInstance);
-
-    if (baseAddress !== currentAccount) {
-      console.log(`Base Smart Account connected: ${baseAddress!.slice(0, 8)}...`);
-      await switchToAccount(baseAddress!);
     }
   };
 
@@ -360,117 +301,6 @@ export default function App() {
     setVerbethClient(null);
   };
 
-  const initializeBaseSDK = useCallback(async () => {
-    if (!baseSDK) {
-      const sdk = createBaseAccountSDK({
-        appName: 'Unstoppable Chat',
-        //appLogoUrl: 'https://base.org/logo.png',
-        appChainIds: [chainId],
-      });
-
-      const provider = sdk.getProvider();
-      setBaseSDK(sdk);
-      setBaseProvider(provider);
-
-      // Listen for account changes
-      provider.on('accountsChanged', (accounts: string[]) => {
-        if (accounts.length > 0) {
-          const newAddress = accounts[0];
-
-          if (baseAddress && newAddress !== baseAddress) {
-            addLog(`Base Account changed from ${baseAddress.slice(0, 8)}... to ${newAddress.slice(0, 8)}...`);
-            resetState();
-          }
-
-          setBaseAddress(newAddress);
-          setIsBaseConnected(true);
-        } else {
-          addLog("Base Account disconnected");
-          setBaseAddress(null);
-          setIsBaseConnected(false);
-          resetState();
-        }
-      });
-
-      provider.on('disconnect', () => {
-        addLog("Base Account provider disconnected");
-        setBaseAddress(null);
-        setIsBaseConnected(false);
-        resetState();
-      });
-    }
-  }, [baseSDK, baseAddress, addLog]);
-
-  const connectBaseAccount = async () => {
-    if (!baseProvider) {
-      initializeBaseSDK();
-      return;
-    }
-    try {
-      const accounts = await baseProvider.request({
-        method: "eth_requestAccounts",
-        params: [],
-      }) as string[];
-
-      if (accounts.length > 0) {
-        setBaseAddress(accounts[0]);
-        setIsBaseConnected(true);
-      }
-    } catch (error) {
-      console.error('Base account connection failed:', error);
-    }
-  };
-
-  const disconnectBaseAccount = () => {
-    if (baseProvider) {
-      baseProvider.disconnect?.().catch((error: any) => {
-        console.log(`Disconnect error: ${error.message}`);
-      });
-    }
-    setBaseAddress(null);
-    setIsBaseConnected(false);
-    resetState();
-    addLog("Base Account disconnected - state reset");
-    //localStorage.removeItem("base-acc-sdk.store");
-  };
-
-  useEffect(() => {
-    initializeBaseSDK();
-  }, [initializeBaseSDK]);
-
-
-  // const handleVerifyMessage = useCallback(async () => {
-  //   if (!viemClient || !identityProof) {
-  //     addLog("⚠ Missing viem client or identity proof for verification");
-  //     return;
-  //   }
-  //   const currentAddress = address || baseAddress;
-  //   if (!currentAddress) {
-  //     addLog("⚠ No connected address for verification");
-  //     return;
-  //   }
-
-  //   setLoading(true);
-  //   try {
-  //     addLog("🔍 Verifying stored identity proof...");
-  //     const { message, signature } = identityProof;
-
-  //     const ok = await viemClient.verifyMessage({
-  //       address: currentAddress as `0x${string}`,
-  //       message,
-  //       signature: signature as `0x${string}`,
-  //     });
-
-  //     setVerificationResult(ok ? "valid" : "invalid");
-  //     addLog(`✅ Identity proof verification: ${ok ? "VALID" : "INVALID"}`);
-  //   } catch (e: any) {
-  //     console.error(e);
-  //     setVerificationResult("invalid");
-  //     addLog(`⚠ Verification failed: ${e?.message ?? e}`);
-  //   } finally {
-  //     setLoading(false);
-  //   }
-  // }, [viemClient, identityProof, address, baseAddress, addLog]);
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -506,53 +336,17 @@ export default function App() {
               powered by Verbeth
             </div>
           </div>
-          {/* RIGHT: auth buttons */}
+          {/* RIGHT: auth buttons - EOA only */}
           <div className="flex items-start gap-px sm:gap-px">
-            {!isConnected && !isBaseConnected ? (
+            {!isConnected ? (
               <div className="flex flex-col items-end -space-y-1 sm:space-y-0 sm:gap-px">
-                <div className="scale-75 sm:scale-100 origin-top-right">
-                  <SignInWithBaseButton
-                    align="center"
-                    variant="solid"
-                    colorScheme="system"
-                    onClick={connectBaseAccount}
-                  />
-                </div>
-                <div className="text-xs text-gray-400 text-left w-fit self-start -ml-6 my-0 hidden sm:block">
-                  Or
-                </div>
-
                 <div className="border border-gray-400 rounded-lg p-0.5 w-full flex justify-center scale-75 sm:scale-100 origin-top-right">
                   <ConnectButton />
                 </div>
               </div>
-            ) : isConnected ? (
+            ) : (
               <div className="border border-gray-600 rounded-lg p-0.5 w-full flex justify-center scale-75 sm:scale-100 origin-top-right">
                 <ConnectButton />
-              </div>
-            ) : (
-              <div className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-2 border border-gray-600 rounded-lg text-sm sm:text-base">
-                <span className="text-sm flex items-center gap-1">
-                  {baseAddress?.slice(0, 8)}...{baseAddress?.slice(-6)}
-                  <span title="Copia indirizzo">
-                    <CopyIcon
-                      size={16}
-                      className="
-      ml-1 text-gray-400 hover:text-white cursor-pointer transition 
-      active:scale-90 hover:scale-110
-    "
-                      onClick={async () => {
-                        if (baseAddress) { await navigator.clipboard.writeText(baseAddress); }
-                      }}
-                    />
-                  </span>
-                </span>
-                <button
-                  onClick={disconnectBaseAccount}
-                  className="text-xs text-gray-400 hover:text-white"
-                >
-                  Sign out
-                </button>
               </div>
             )}
           </div>
@@ -572,88 +366,35 @@ export default function App() {
 
             <CelebrationToast show={showToast} onClose={() => setShowToast(false)} />
 
-            {/* Identity Proof Verification Section
-            {ready && (isConnected || isBaseConnected) && !needsIdentityCreation && identityProof && (
-              <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 mb-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold">Identity Proof Verification</h3>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleVerifyMessage}
-                      disabled={loading}
-                      className="px-3 py-2 text-sm bg-green-700 hover:bg-green-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded"
-                    >
-                      {loading ? "Verifying..." : "Verify Stored Proof"}
-                    </button>
-
-                    {verificationResult && (
-                      <span className={`text-sm px-3 py-1 rounded ${verificationResult === "valid"
-                        ? "bg-green-800 text-green-200"
-                        : "bg-red-800 text-red-200"
-                        }`}>
-                        {verificationResult.toUpperCase()}
-                      </span>
-                    )}
-                  </div>
-                </div> */}
-
-            {/* Display stored proof data */}
-            {/* <div className="space-y-3 text-sm">
-                  <div className="bg-gray-800 rounded p-3">
-                    <p className="text-gray-400 mb-1">Connected Address:</p>
-                    <p className="font-mono text-blue-400 break-all">
-                      {address || baseAddress || "Not connected"}
-                    </p>
-                  </div>
-
-                  <div className="bg-gray-800 rounded p-3">
-                    <p className="text-gray-400 mb-1">Stored Proof Message:</p>
-                    <p className="font-mono text-green-400 break-all">{identityProof.message}</p>
-                  </div>
-
-                  <div className="bg-gray-800 rounded p-3">
-                    <p className="text-gray-400 mb-1">Stored Proof Signature:</p>
-                    <p className="font-mono text-yellow-400 break-all text-xs">
-                      {identityProof.signature}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )} */}
-
             {needsIdentityCreation ? (
               <IdentityCreation
                 loading={loading}
                 onCreateIdentity={createIdentity}
-                address={address || baseAddress || "Not connected"}
+                address={address || "Not connected"}
               />
             ) : showHandshakeForm ? (
               <InitialForm
                 isConnected={isConnected}
-                isBaseConnected={isBaseConnected}
                 loading={loading}
                 recipientAddress={recipientAddress}
                 setRecipientAddress={setRecipientAddress}
                 message={message}
                 setMessage={setMessage}
                 onSendHandshake={() => sendHandshake(recipientAddress, message)}
-                contactsLength={isConnected || isBaseConnected ? contacts.length : 0}
-                onBackToChats={isConnected || isBaseConnected && contacts.length > 0 ? () => setShowHandshakeForm(false) : undefined}
-                onConnectBase={connectBaseAccount}
+                contactsLength={isConnected ? contacts.length : 0}
+                onBackToChats={() => setShowHandshakeForm(false)}
                 hasExistingIdentity={!needsIdentityCreation}
               />
             ) : (
               <div className="relative">
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-[650px] pb-52">
-
-
                   {/* Left Panel - Contacts */}
                   <div className="border border-gray-800 bg-gray-800/30 rounded-lg p-4">
                     <div className="flex justify-between items-center mb-4">
                       <h2 className="text-lg font-semibold">Contacts</h2>
                       <button
                         onClick={() => setShowHandshakeForm(true)}
-                        className="text-sm px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded"
+                        className="text-sm text-blue-400 hover:text-blue-300"
                       >
                         + New
                       </button>
@@ -664,30 +405,24 @@ export default function App() {
                           key={contact.address}
                           onClick={() => setSelectedContact(contact)}
                           className={`p-3 rounded cursor-pointer transition-colors ${selectedContact?.address === contact.address
-                            ? 'bg-blue-900'
-                            : 'bg-gray-900 hover:bg-gray-800'
+                            ? 'bg-gray-700'
+                            : 'bg-gray-800 hover:bg-gray-750'
                             }`}
                         >
-                          <div className="flex justify-between items-center">
-                            <span className="text-sm font-medium">
-                              {contact.address.slice(0, 8)}...
+                          <div className="flex justify-between items-start">
+                            <span className="font-mono text-sm">
+                              {contact.address.slice(0, 8)}...{contact.address.slice(-6)}
                             </span>
                             <span className={`text-xs px-2 py-1 rounded ${contact.status === 'established'
-                              ? 'bg-green-800 text-green-200'
-                              : contact.status === 'handshake_sent'
-                                ? 'bg-yellow-800 text-yellow-200'
-                                : 'bg-gray-700 text-gray-300'
+                              ? 'bg-green-900 text-green-300'
+                              : 'bg-yellow-900 text-yellow-300'
                               }`}>
-                              {contact.status === 'established'
-                                ? 'connected'
-                                : contact.status === 'handshake_sent'
-                                  ? 'request sent'
-                                  : contact.status.replace('_', ' ')}
+                              {contact.status === 'established' ? '✓' : '...'}
                             </span>
                           </div>
                           {contact.lastMessage && (
-                            <p className="text-xs text-gray-400 mt-1">
-                              "{contact.lastMessage.slice(0, 30)}..."
+                            <p className="text-xs text-gray-400 mt-1 truncate">
+                              {contact.lastMessage}
                             </p>
                           )}
                         </div>
@@ -712,13 +447,13 @@ export default function App() {
                               className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded"
                             >
                               {isLoadingMore ? (
-                                <div className="flex items-center gap-2">
-                                  <div className="animate-spin w-3 h-3 border border-gray-400 border-t-transparent rounded-full"></div>
+                                <span className="flex items-center gap-2">
+                                  <span className="animate-spin w-3 h-3 border border-gray-400 border-t-transparent rounded-full"></span>
                                   <span>Loading...</span>
                                   {syncProgress && <span>({syncProgress.current}/{syncProgress.total})</span>}
-                                </div>
+                                </span>
                               ) : (
-                                "Load More History"
+                                "📂 Load More History"
                               )}
                             </button>
                           </div>
@@ -728,8 +463,7 @@ export default function App() {
                         <div className="flex-1 min-h-0 overflow-y-auto space-y-2 mb-4 pr-2 custom-scrollbar">
                           {messages
                             .filter(m => {
-                              // without address o selectedContact, do not show messagges
-                              const currentAddress = address || baseAddress;
+                              const currentAddress = address;
                               if (!currentAddress || !selectedContact?.address) return false;
                               return (
                                 m.sender.toLowerCase() === selectedContact.address.toLowerCase() ||
@@ -742,43 +476,27 @@ export default function App() {
                             .map((msg) => (
                               <div
                                 key={msg.id}
-                                className={`p-2 rounded max-w-xs ${msg.direction === 'outgoing'
-                                  ? 'bg-blue-600 ml-auto'
-                                  : msg.direction === 'incoming'
-                                    ? 'bg-gray-700'
-                                    : 'bg-gray-700 mx-auto text-center text-xs'
-                                  }`}
+                                className={`max-w-[80%] p-3 rounded-lg ${msg.direction === 'outgoing'
+                                  ? 'ml-auto bg-blue-600'
+                                  : 'bg-gray-700'
+                                  } ${msg.type === 'system' ? 'bg-gray-800 text-gray-400 italic' : ''}`}
                               >
-                                <p className="text-sm flex items-center gap-1 overflow-visible">
-                                  {msg.type === "system" && (
+                                <p className="text-sm flex items-center gap-1">
+                                  {msg.type === "system" && msg.verified !== undefined && (
                                     msg.verified ? (
-                                      <span className="relative group inline-flex items-center">
-                                        <Fingerprint size={14} className="text-green-400 shrink-0" />
-                                        <span
-                                          role="tooltip"
-                                          className="pointer-events-none absolute -top-2 left-20 -translate-x-1/2
-                     px-2 py-1 text-xs rounded bg-gray-900 text-blue-100
-                     border border-gray-700 opacity-0 group-hover:opacity-100
-                     transition-opacity whitespace-nowrap z-50"
-                                        >
+                                      <span className="relative group cursor-help">
+                                        <Fingerprint size={14} className="text-green-400 inline-block mr-1" />
+                                        <span className="absolute bottom-full left-0 mb-1 px-2 py-1 text-xs rounded bg-gray-900 text-green-100 border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
                                           Identity proof verified
                                         </span>
                                       </span>
                                     ) : (
-                                      msg.direction === "incoming" && (
-                                        <span className="relative group inline-flex items-center">
-                                          <X size={14} className="text-red-500 shrink-0" />
-                                          <span
-                                            role="tooltip"
-                                            className="pointer-events-none absolute -top-7 left-20 -translate-x-1/2
-                       px-2 py-1 text-xs rounded bg-gray-900 text-red-100
-                       border border-gray-700 opacity-0 group-hover:opacity-100
-                       transition-opacity whitespace-nowrap z-50"
-                                          >
-                                            Identity proof not verified
-                                          </span>
+                                      <span className="relative group cursor-help">
+                                        <Fingerprint size={14} className="text-red-400 inline-block mr-1" />
+                                        <span className="absolute bottom-full left-0 mb-1 px-2 py-1 text-xs rounded bg-gray-900 text-red-100 border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
+                                          Identity proof not verified
                                         </span>
-                                      )
+                                      </span>
                                     )
                                   )}
 
@@ -791,8 +509,6 @@ export default function App() {
                                     msg.decrypted || msg.ciphertext
                                   )}
                                 </p>
-
-
 
                                 <div className="flex justify-between items-center mt-1">
                                   <span className="text-xs text-gray-300">
@@ -809,7 +525,7 @@ export default function App() {
                               </div>
                             ))}
                           {messages.filter(m => {
-                            const currentAddress = address || baseAddress;
+                            const currentAddress = address;
                             if (!currentAddress || !selectedContact?.address) return false;
                             return (
                               m.sender.toLowerCase() === selectedContact.address.toLowerCase() ||
@@ -867,6 +583,7 @@ export default function App() {
                     )}
                   </div>
                 </div>
+
                 {/* Activity Log + Debug Info */}
                 {ready && (
                   <div className="absolute bottom-[10px] left-0 right-0 w-full flex flex-col gap-1 sm:gap-2 px-1 sm:px-2 md:px-4 pointer-events-none z-50">
@@ -918,7 +635,6 @@ export default function App() {
 
                       <div
                         className={`overflow-hidden transition-all duration-300 ease-in-out ${isActivityLogOpen ? 'max-h-40 opacity-100' : 'max-h-0 opacity-0'}`}
-
                       >
                         <div className="p-4 pt-0">
                           <textarea
@@ -935,7 +651,7 @@ export default function App() {
                     {!isActivityLogOpen && (
                       <div className="w-full bg-black/80 backdrop-blur-sm p-2 sm:p-3 text-xs text-gray-500 space-y-1 h-fit">
                         <p>Contract: {LOGCHAIN_SINGLETON_ADDR}</p>
-                        <p>Network: Base</p>
+                        <p>Network: Base (Chain ID: {chainId})</p>
                         <p>Contract creation block: {CONTRACT_CREATION_BLOCK}</p>
                         <p>Status: {ready ? '🟢 Ready' : '🔴 Not Ready'} {(isInitialLoading || isLoadingMore) ? '⏳ Loading' : ''}</p>
                       </div>
@@ -945,8 +661,6 @@ export default function App() {
               </div>
             )}
           </div>
-
-
         </div>
       </div>
     </div>

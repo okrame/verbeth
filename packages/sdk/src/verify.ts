@@ -1,8 +1,8 @@
 // packages/sdk/src/verify.ts
 import { JsonRpcProvider, getBytes, hexlify, getAddress } from "ethers";
 import { decryptAndExtractHandshakeKeys, computeTagFromInitiator, verifyDuplexTopicsChecksum, deriveDuplexTopics } from "./crypto.js";
-import { HandshakeLog, HandshakeResponseLog, IdentityProof, TopicInfoWire, DuplexTopics } from "./types.js";
-import { parseHandshakePayload, parseHandshakeKeys, decodeHandshakeResponseContent } from "./payload.js";
+import { HandshakeLog, HandshakeResponseLog, IdentityProof, TopicInfoWire, DuplexTopics, IdentityContext } from "./types.js";
+import { parseHandshakePayload, parseHandshakeKeys } from "./payload.js";
 import {
   Rpcish,
   makeViemPublicClient,
@@ -16,7 +16,8 @@ import {
  */
 export async function verifyHandshakeIdentity(
   handshakeEvent: HandshakeLog,
-  provider: JsonRpcProvider
+  provider: JsonRpcProvider,
+  ctx?: IdentityContext
 ): Promise<boolean> {
   try {
     let plaintextPayload = handshakeEvent.plaintextPayload;
@@ -56,7 +57,8 @@ export async function verifyHandshakeIdentity(
       content.identityProof,
       handshakeEvent.sender,
       parsedKeys,
-      provider
+      provider,
+      ctx
     );
   } catch (err) {
     console.error("verifyHandshakeIdentity error:", err);
@@ -73,7 +75,8 @@ export async function verifyHandshakeResponseIdentity(
   responseEvent: HandshakeResponseLog,
   responderIdentityPubKey: Uint8Array,
   initiatorEphemeralSecretKey: Uint8Array,
-  provider: JsonRpcProvider
+  provider: JsonRpcProvider,
+  ctx?: IdentityContext
 ): Promise<boolean> {
   try {
     const extractedResponse = decryptAndExtractHandshakeKeys(
@@ -116,7 +119,8 @@ export async function verifyHandshakeResponseIdentity(
       extractedResponse.identityProof,
       responseEvent.responder,
       expectedKeys,
-      provider
+      provider,
+      ctx
     );
   } catch (err) {
     console.error("verifyHandshakeResponseIdentity error:", err);
@@ -136,7 +140,8 @@ export async function verifyIdentityProof(
     identityPubKey: Uint8Array; 
     signingPubKey: Uint8Array; 
   },
-  provider: Rpcish
+  provider: Rpcish,
+  ctx?: IdentityContext
 ): Promise<boolean> {
   try {
     const client = await makeViemPublicClient(provider);
@@ -193,7 +198,20 @@ export async function verifyIdentityProof(
       return false;
     }
 
-    // if (typeof parsed.chainId === 'number' && parsed.chainId !== currentChainId) return false;
+    // anti replay cross chain or cross dapp:
+    // if ctx.* is provided, require it to be present in the signed message and match.
+    if (typeof ctx?.chainId === "number") {
+      if (typeof parsed.chainId !== "number" || parsed.chainId !== ctx.chainId) {
+        console.error("ChainId mismatch");
+        return false;
+      }
+    }
+    if (ctx?.rpId) {
+      if (!parsed.rpId || parsed.rpId !== ctx.rpId) {
+        console.error("RpId mismatch");
+        return false;
+      }
+    }
 
     return true;
   } catch (err) {
@@ -206,7 +224,8 @@ export async function verifyIdentityProof(
 
 export async function verifyAndExtractHandshakeKeys(
   handshakeEvent: HandshakeLog,
-  provider: JsonRpcProvider
+  provider: JsonRpcProvider,
+  ctx?: IdentityContext
 ): Promise<{
   isValid: boolean;
   keys?: {
@@ -214,7 +233,7 @@ export async function verifyAndExtractHandshakeKeys(
     signingPubKey: Uint8Array;
   };
 }> {
-  const isValid = await verifyHandshakeIdentity(handshakeEvent, provider);
+  const isValid = await verifyHandshakeIdentity(handshakeEvent, provider, ctx);
 
   if (!isValid) {
     return { isValid: false };
@@ -234,7 +253,8 @@ export async function verifyAndExtractHandshakeKeys(
 export async function verifyAndExtractHandshakeResponseKeys(
   responseEvent: HandshakeResponseLog,
   initiatorEphemeralSecretKey: Uint8Array,
-  provider: JsonRpcProvider
+  provider: JsonRpcProvider,
+  ctx?: IdentityContext
 ): Promise<{
   isValid: boolean;
   keys?: {
@@ -267,7 +287,8 @@ export async function verifyAndExtractHandshakeResponseKeys(
     responseEvent,
     extractedResponse.identityPubKey,
     initiatorEphemeralSecretKey,
-    provider
+    provider,
+    ctx
   );
 
   if (!isValid) {

@@ -1,9 +1,8 @@
-import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { useConnectModal } from '@rainbow-me/rainbowkit';
 import { motion } from 'framer-motion';
 
 interface CenteredHandshakeFormProps {
   isConnected: boolean;
-  isBaseConnected: boolean;
   loading: boolean;
   recipientAddress: string;
   setRecipientAddress: (address: string) => void;
@@ -12,13 +11,11 @@ interface CenteredHandshakeFormProps {
   onSendHandshake: () => void;
   contactsLength: number;
   onBackToChats?: () => void;
-  onConnectBase: () => Promise<void>;
   hasExistingIdentity: boolean;
 }
 
 export function InitialForm({
   isConnected,
-  isBaseConnected,
   loading,
   recipientAddress,
   setRecipientAddress,
@@ -27,10 +24,11 @@ export function InitialForm({
   onSendHandshake,
   contactsLength,
   onBackToChats,
-  onConnectBase,
   hasExistingIdentity
 }: CenteredHandshakeFormProps) {
-  const isAnyConnected = isConnected || isBaseConnected;
+  const { openConnectModal } = useConnectModal();
+  
+  const isAnyConnected = isConnected;
   const shouldShowConnect =
     !isAnyConnected && (recipientAddress.trim().length > 0 || message.trim().length > 0);
 
@@ -108,10 +106,10 @@ export function InitialForm({
           />
           {shouldShowConnect ? (
             <button
-              onClick={onConnectBase}
+              onClick={openConnectModal}
               className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 rounded font-medium"
             >
-              {hasExistingIdentity ? "Sign In" : "Get started"}
+              {hasExistingIdentity ? "Connect Wallet" : "Get started"}
             </button>
           ) : (
             <button

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { AbiCoder } from "ethers";
 import {
+  type IdentityContext,
   decryptMessage,
   parseHandshakePayload,
   verifyHandshakeIdentity,
@@ -32,6 +33,7 @@ interface UseMessageProcessorProps {
   readProvider: any;
   address: string | undefined;
   identityKeyPair: IdentityKeyPair | null;
+  identityContext: IdentityContext;
   onLog: (message: string) => void;
 }
 
@@ -55,6 +57,7 @@ export const useMessageProcessor = ({
   readProvider,
   address,
   identityKeyPair,
+  identityContext,
   onLog,
 }: UseMessageProcessorProps): MessageProcessorResult => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -191,9 +194,11 @@ export const useMessageProcessor = ({
               plaintextPayload: plaintextPayload,
             };
 
+            // Pass identityContext for domain & chain bound verification
             isVerified = await verifyHandshakeIdentity(
               handshakeEvent,
-              readProvider
+              readProvider,
+              identityContext
             );
           } catch (error) {
             onLog(`Failed to verify handshake identity: ${error}`);
@@ -253,7 +258,7 @@ export const useMessageProcessor = ({
         onLog(`✗ Failed to process handshake log: ${error}`);
       }
     },
-    [address, readProvider, onLog]
+    [address, readProvider, identityContext, onLog]
   );
 
   const processHandshakeResponseLog = useCallback(
@@ -304,10 +309,12 @@ export const useMessageProcessor = ({
           ciphertext: ciphertextJson,
         };
 
+        // Pass identityContext for domain & chain bound verification
         const result = await verifyAndExtractHandshakeResponseKeys(
           responseEvent,
           contact.ephemeralKey, // initiator's ephemeral secret key
-          readProvider
+          readProvider,
+          identityContext
         );
 
         if (!result.isValid || !result.keys) {
@@ -412,10 +419,9 @@ export const useMessageProcessor = ({
         setMessages((prev) => [...prev, responseMessage]);
       } catch (error) {
         onLog(`✗ Failed to process handshake response log: ${error}`);
-        console.error("Full error:", error);
       }
     },
-    [address, readProvider, onLog, identityKeyPair]
+    [address, readProvider, identityKeyPair, identityContext, onLog]
   );
 
   const processMessageLog = useCallback(

@@ -35,7 +35,7 @@ export function IdentityCreation({
                         disabled={loading}
                         className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium"
                     >
-                        {loading ? "Creating..." : "Create New Identity"}
+                        {loading ? "Creating..." : "Create New Identity (2 signatures)"}
                     </button>
 
                     <button
@@ -49,8 +49,11 @@ export function IdentityCreation({
 
                 <div className="mt-6 text-xs text-gray-500 text-center">
                     <p>
-                        Your identity keys are derived from your wallet signature and stored locally.
-                        They enable end-to-end encrypted messaging on the blockchain.
+                        You will be asked to sign two messages.
+                        The first signature deterministically derives your identity keys.
+                        The second signature creates an Identity Proof that binds the generated public keys
+                        to your wallet address, the current chain, and this dapp origin.
+                        Keys are stored locally and never leave your device.
                     </p>
                 </div>
             </div>

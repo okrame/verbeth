@@ -1,7 +1,12 @@
 import { useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
-export function CelebrationToast({ show, onClose }) {
+interface CelebrationToastProps {
+  show: boolean;
+  onClose: () => void;
+}
+
+export function CelebrationToast({ show, onClose }: CelebrationToastProps) {
   useEffect(() => {
     if (!show) return;
     const t = setTimeout(onClose, 3000);
