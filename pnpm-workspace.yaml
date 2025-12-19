@@ -5,3 +5,4 @@ onlyBuiltDependencies:
   - esbuild
   - keccak
   - secp256k1
+  - "@openzeppelin/community-contracts"
