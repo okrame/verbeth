@@ -11,7 +11,6 @@ export const MAX_RANGE_PROVIDER = 2_000;
 export const CHUNK_SIZE = 2_000;
 export const REAL_TIME_BUFFER = 3;
 
-export const SAFE_TX_SERVICE_URL = import.meta.env.VITE_SAFE_TX_SERVICE_URL as string
 export const SAFE_MODULE_ADDRESS = import.meta.env.VITE_SAFE_SESSION_MODULE as `0x${string}`
 
 /* --------------------------- EVENT SIGNATURES ---------------------------- */

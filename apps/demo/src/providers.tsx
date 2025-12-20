@@ -22,7 +22,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <RainbowKitProvider
           theme={customTheme}
           modalSize="compact"
-          initialChain={8453} 
+          initialChain={84532} 
         > 
           {children}
         </RainbowKitProvider>

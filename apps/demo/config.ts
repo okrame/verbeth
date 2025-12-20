@@ -1,5 +1,5 @@
 import { http, createConfig } from 'wagmi';
-import { base, mainnet } from 'wagmi/chains';
+import { base, mainnet, baseSepolia} from 'wagmi/chains';
 import { connectorsForWallets } from '@rainbow-me/rainbowkit';
 import {
   coinbaseWallet,
@@ -31,9 +31,10 @@ const connectors = connectorsForWallets(
 
 export const config = createConfig({
   connectors,
-  chains: [base, mainnet],
+  chains: [baseSepolia, base, mainnet],
   transports: {
-    [mainnet.id]:    http(),
+    [baseSepolia.id]: http('https://sepolia.base.org'),
     [base.id]:       http('https://base-rpc.publicnode.com'),
+    [mainnet.id]:    http(),
   },
 });

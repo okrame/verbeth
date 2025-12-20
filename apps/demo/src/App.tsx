@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { Fingerprint } from "lucide-react";
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import Safe from '@safe-global/protocol-kit'
-import SafeApiKit from '@safe-global/api-kit'
 import { useAccount, useWalletClient } from 'wagmi';
 import { useRpcClients } from './rpc.js';
-import { BrowserProvider, Wallet } from "ethers";
+import { BrowserProvider, Wallet, Contract } from "ethers";
 import {
   LogChainV1__factory,
   type LogChainV1,
@@ -22,19 +20,21 @@ import {
 import { useMessageListener } from './hooks/useMessageListener.js';
 import { useMessageProcessor } from './hooks/useMessageProcessor.js';
 import { dbService } from './services/DbService.js';
+import { getOrCreateSafeForOwner, ensureModuleEnabled } from './services/safeAccount.js';
 import {
   LOGCHAIN_SINGLETON_ADDR,
   CONTRACT_CREATION_BLOCK,
   Contact,
   StoredIdentity,
-  SAFE_MODULE_ADDRESS,
-  SAFE_TX_SERVICE_URL
+  SAFE_MODULE_ADDRESS
 } from './types.js';
 import { InitialForm } from './components/InitialForm.js';
 import { SideToastNotifications } from './components/SideToastNotification.js';
 import { IdentityCreation } from './components/IdentityCreation.js';
 import { CelebrationToast } from "./components/CelebrationToast.js";
+import { SessionSetupPrompt } from './components/SessionSetupPrompt.js';
 import { useChatActions } from './hooks/useChatActions.js';
+import { useSessionSetup } from './hooks/useSessionSetup.js';
 
 
 
@@ -58,9 +58,13 @@ export default function App() {
   const [identityProof, setIdentityProof] = useState<IdentityProof | null>(null);
   const [executor, setExecutor] = useState<IExecutor | null>(null);
   const [contract, setContract] = useState<LogChainV1 | null>(null);
-  const [signer, setSigner] = useState<any>(null);
+  const [identitySigner, setIdentitySigner] = useState<any>(null);
+  const [txSigner, setTxSigner] = useState<any>(null);
+  const [safeAddr, setSafeAddr] = useState<string | null>(null);
   const [isActivityLogOpen, setIsActivityLogOpen] = useState(false);
   const [activityLogs, setActivityLogs] = useState<string>("");
+  const [reinitTrigger, setReinitTrigger] = useState(0);
+
 
   const [verbethClient, setVerbethClient] = useState<VerbethClient | null>(null);
 
@@ -91,12 +95,12 @@ export default function App() {
 
   const createIdentity = useCallback(async () => {
     // Wagmi
-    if (signer && address) {
+    if (identitySigner && address && safeAddr) {
       setLoading(true);
       try {
         addLog("Deriving new identity key (2 signatures)...");
 
-        const result = await deriveIdentityKeyPairWithProof(signer, address, identityContext);
+        const result = await deriveIdentityKeyPairWithProof(identitySigner, address, safeAddr, identityContext);
 
         setIdentityKeyPair(result.keyPair);
         setIdentityProof(result.identityProof);
@@ -113,6 +117,9 @@ export default function App() {
         setNeedsIdentityCreation(false);
         setShowToast(true);
 
+        // Trigger re-initialization to complete Safe setup
+        setReinitTrigger(t => t + 1);
+
       } catch (signError: any) {
         if (signError.code === 4001) {
           addLog("User rejected signing request.");
@@ -126,7 +133,28 @@ export default function App() {
     }
 
     addLog("✗ Missing signer/provider or address for identity creation");
-  }, [signer, address, identityContext, addLog]);
+  }, [identitySigner, address, safeAddr, identityContext, addLog]);
+
+  const {
+    sessionSignerAddr,
+    sessionSignerBalance,
+    needsSessionSetup,
+    isSafeDeployed,
+    setSessionSignerAddr,
+    setNeedsSessionSetup,
+    setIsSafeDeployed,
+    setIsModuleEnabled,
+    refreshSessionBalance,
+    setupSession,
+  } = useSessionSetup({
+    walletClient,
+    address: address as `0x${string}` | undefined,
+    safeAddr,
+    chainId,
+    readProvider,
+    addLog,
+    onSessionSetupComplete: () => setReinitTrigger(t => t + 1),
+  });
 
   const {
     messages,
@@ -176,12 +204,12 @@ export default function App() {
   useEffect(() => {
     const currentAddress = address;
 
-    if (executor && identityKeyPair && identityProof && signer && currentAddress) {
+    if (executor && identityKeyPair && identityProof && identitySigner && currentAddress) {
       const client = new VerbethClient({
         executor,
         identityKeyPair,
         identityProof,
-        signer,
+        signer: identitySigner,
         address: currentAddress,
       });
       setVerbethClient(client);
@@ -189,7 +217,7 @@ export default function App() {
     } else {
       setVerbethClient(null);
     }
-  }, [executor, identityKeyPair, identityProof, signer, address, addLog]);
+  }, [executor, identityKeyPair, identityProof, identitySigner, address, addLog]);
 
   // sync handshakeToasts
   useEffect(() => {
@@ -223,7 +251,7 @@ export default function App() {
 
   useEffect(() => {
     handleInitialization();
-  }, [ready, readProvider, walletClient, address]);
+  }, [ready, readProvider, walletClient, address, reinitTrigger]);
 
   // hide handshake form when we have contacts AND user is connected
   useEffect(() => {
@@ -247,9 +275,15 @@ export default function App() {
     }
   }, [ready, readProvider, walletClient, address]);
 
-  const initializeWagmiAccount = async () => {
+  const initializeWagmiAccount = useCallback(async () => {
+
     const ethersProvider = new BrowserProvider(walletClient!.transport);
     const ethersSigner = await ethersProvider.getSigner();
+    setIdentitySigner(ethersSigner);
+
+    if (address !== currentAccount) {
+      await switchToAccount(address!);
+    }
 
     const net = await ethersProvider.getNetwork();
     if (Number(net.chainId) !== chainId) {
@@ -257,18 +291,75 @@ export default function App() {
       return;
     }
 
-    const contractInstance = LogChainV1__factory.connect(LOGCHAIN_SINGLETON_ADDR, ethersSigner as any);
+    // Safe init/deploy - get counterfactual address first
+    const { safeAddress, isDeployed, moduleEnabled } = await getOrCreateSafeForOwner({
+      chainId,
+      ownerAddress: address as `0x${string}`,
+      providerEip1193: walletClient!.transport,
+      ethersSigner,
+      deployIfMissing: false,
+      enableModuleDuringDeploy: false,
+    });
+    setSafeAddr(safeAddress);
+    setIsSafeDeployed(isDeployed);
+    setIsModuleEnabled(moduleEnabled ?? false);
+    console.log(`\n========== SAFE & SESSION INFO ==========`);
+    console.log(`Connected EOA wallet: ${address}`);
+    console.log(`Associated Safe address: ${safeAddress}`);
+    console.log(`   Safe deployed: ${isDeployed}`);
+    console.log(`   Chain ID: ${chainId}`);
+
+    // Check if identity exists - if not, stop here and wait for identity creation
+    const storedIdentity = await dbService.getIdentity(address!);
+    if (!storedIdentity) {
+      addLog(`Counterfactual Safe address: ${safeAddress.slice(0, 10)}... - awaiting identity creation`);
+      return;
+    }
+
+    const sessionPrivKey = await dbService.getSessionPrivKey(safeAddress, chainId);
+    const sessionWallet = new Wallet(sessionPrivKey, readProvider!);
+
+    const safeSessionSigner = new SafeSessionSigner({
+      provider: readProvider!,
+      safeAddress,
+      moduleAddress: SAFE_MODULE_ADDRESS,
+      logChainAddress: LOGCHAIN_SINGLETON_ADDR,
+      sessionSigner: sessionWallet,
+    });
+    setTxSigner(safeSessionSigner);
+    // Get session signer address for funding
+    const sessionAddr = await sessionWallet.getAddress();
+    setSessionSignerAddr(sessionAddr);
+
+    // Check balance
+    const balance = await readProvider!.getBalance(sessionAddr);
+    const balanceEth = Number(balance) / 1e18;
+    console.log(`📍 Session signer address: ${sessionAddr}`);
+    console.log(`💰 Session signer balance: ${balanceEth.toFixed(6)} ETH (${balance.toString()} wei)`);
+
+    if (balance === 0n) {
+      addLog(`Session signer needs funding: ${sessionAddr}`);
+    }
+
+    // Check if session is configured on module
+    const isValid = await safeSessionSigner.isSessionValid();
+    const isTargetAllowed = await safeSessionSigner.isTargetAllowed();
+    console.log(`Session valid on module: ${isValid}`);
+    console.log(`LogChain target allowed: ${isTargetAllowed}`);
+    setNeedsSessionSetup(!isValid || !isTargetAllowed);
+
+    if (!isValid || !isTargetAllowed) {
+      addLog(`⚠️ Session needs setup on module (valid: ${isValid}, target: ${isTargetAllowed})`);
+    }
+
+    const contractInstance = LogChainV1__factory.connect(LOGCHAIN_SINGLETON_ADDR, safeSessionSigner as any);
     const executorInstance = ExecutorFactory.createEOA(contractInstance);
 
-    setSigner(ethersSigner);
     setExecutor(executorInstance);
     setContract(contractInstance);
 
-    if (address !== currentAccount) {
-      console.log(`EOA connected: ${address!.slice(0, 8)}...`);
-      await switchToAccount(address!);
-    }
-  };
+  }, [walletClient, address, currentAccount, chainId, readProvider, addLog]);
+
 
   const switchToAccount = async (newAddress: string) => {
     setIdentityKeyPair(null);
@@ -294,7 +385,8 @@ export default function App() {
     setIdentityKeyPair(null);
     setIdentityProof(null);
     setSelectedContact(null);
-    setSigner(null);
+    setIdentitySigner(null);
+    setTxSigner(null);
     setContract(null);
     setExecutor(null);
     setNeedsIdentityCreation(false);
@@ -365,6 +457,19 @@ export default function App() {
             />
 
             <CelebrationToast show={showToast} onClose={() => setShowToast(false)} />
+
+            {/* Session Setup Prompt - show when wallet connected but session not ready */}
+            {isConnected && sessionSignerAddr && (needsSessionSetup || (sessionSignerBalance !== null && sessionSignerBalance < BigInt(0.0001 * 1e18))) && (
+              <SessionSetupPrompt
+                sessionSignerAddr={sessionSignerAddr}
+                sessionSignerBalance={sessionSignerBalance}
+                needsSessionSetup={needsSessionSetup}
+                isSafeDeployed={isSafeDeployed}
+                onSetupSession={setupSession}
+                onRefreshBalance={refreshSessionBalance}
+                loading={loading}
+              />
+            )}
 
             {needsIdentityCreation ? (
               <IdentityCreation

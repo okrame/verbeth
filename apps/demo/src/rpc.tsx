@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, useMemo } from "react";
 import { JsonRpcProvider } from "ethers";
 import { createPublicClient, http, fallback } from "viem";
-import { base } from "viem/chains";
+import { base, baseSepolia } from "viem/chains";
 
 
 type RpcState = {
@@ -19,7 +19,7 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
     (async () => {
       try {
-        const p = new JsonRpcProvider("https://mainnet.base.org", undefined, {
+        const p = new JsonRpcProvider("https://sepolia.base.org", undefined, { 
           polling: true,
           pollingInterval: 3000,
         });
@@ -35,10 +35,10 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
   const viemClient = useMemo(
     () =>
       createPublicClient({
-        chain: base,
+        chain: baseSepolia,  
         transport: fallback([
-          http("https://mainnet.base.org"),           // rate-limited 
-          http("https://base-rpc.publicnode.com"),    
+          http("https://sepolia.base.org"),             
+          http("https://base-sepolia-rpc.publicnode.com"), 
         ]),
       }),
     []

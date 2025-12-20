@@ -101,6 +101,29 @@ export class DbService {
     return this.db.identity.delete(normalizedAddress);
   }
 
+  async getSessionPrivKey(safeAddress: string, chainId: number): Promise<string> {
+    const { Wallet } = await import('ethers');
+    const normalizedSafe = this.normalizeAddress(safeAddress);
+    const key = `sessionKey_${normalizedSafe}_${chainId}`;
+    let privKey = await this.getSetting(key);
+    
+    if (!privKey) {
+      const newWallet = Wallet.createRandom();
+      privKey = newWallet.privateKey;
+      await this.setSetting(key, privKey);
+      console.log(`🔑 NEW session key created for Safe ${normalizedSafe.slice(0, 10)}...`);
+      console.log(`   Session signer address: ${newWallet.address}`);
+      console.log(`   Stored in IndexedDB with key: "${key}"`);
+    } else {
+      const existingWallet = new Wallet(privKey);
+      console.log(`🔑 EXISTING session key loaded for Safe ${normalizedSafe.slice(0, 10)}...`);
+      console.log(`   Session signer address: ${existingWallet.address}`);
+    }
+    
+    return privKey;
+  }
+
+
   /* ------------------------------ CONTACTS --------------------------------- */
   saveContact(contact: Contact) {
     const normalizedContact = {

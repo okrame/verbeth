@@ -40,6 +40,7 @@ export const useChatActions = ({
         addLog("✗ Missing recipient address or message");
         return;
       }
+      
 
       setLoading(true);
       try {
