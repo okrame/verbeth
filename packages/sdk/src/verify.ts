@@ -135,7 +135,7 @@ export async function verifyHandshakeResponseIdentity(
  */
 export async function verifyIdentityProof(
   identityProof: IdentityProof,
-  smartAccountAddress: string,
+  address: string,
   expectedUnifiedKeys: {
     identityPubKey: Uint8Array; 
     signingPubKey: Uint8Array; 
@@ -145,31 +145,36 @@ export async function verifyIdentityProof(
 ): Promise<boolean> {
   try {
     const client = await makeViemPublicClient(provider);
-    const address = smartAccountAddress as `0x${string}`;
+    const inputAddress = address as `0x${string}`;
+
+    const parsed = parseBindingMessage(identityProof.message);
+
+    if (!parsed.address) {
+      console.error("Parsed address is undefined");
+      return false;
+    }
+    const signerAddress = getAddress(parsed.address) as `0x${string}`;
 
     const okSig = await client.verifyMessage({
-      address,
+      address: signerAddress,
       message: identityProof.message,
       signature: identityProof.signature as `0x${string}`,
     });
     if (!okSig) {
-      console.error("Binding signature invalid for address");
+      console.error("Binding signature invalid for signer address");
       return false;
     }
-
-    const parsed = parseBindingMessage(identityProof.message);
 
     if (parsed.header && parsed.header !== "VerbEth Key Binding v1") {
       console.error("Unexpected binding header:", parsed.header);
       return false;
     }
 
-
     if (
-      !parsed.address ||
-      getAddress(parsed.address) !== getAddress(smartAccountAddress)
+      !parsed.executorSafeAddress ||
+      getAddress(parsed.executorSafeAddress) !== getAddress(inputAddress)
     ) {
-      console.error("Binding message address mismatch");
+      console.error("Binding message Safe address mismatch");
       return false;
     }
 

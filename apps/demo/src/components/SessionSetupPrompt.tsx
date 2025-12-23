@@ -3,6 +3,7 @@ interface SessionSetupPromptProps {
   sessionSignerBalance: bigint | null;
   needsSessionSetup: boolean;
   isSafeDeployed?: boolean;
+  isModuleEnabled?: boolean;
   onSetupSession: () => void;
   onRefreshBalance?: () => void;
   loading: boolean;
@@ -13,6 +14,7 @@ export function SessionSetupPrompt({
   sessionSignerBalance,
   needsSessionSetup,
   isSafeDeployed = false,
+  isModuleEnabled = false,
   onSetupSession,
   onRefreshBalance,
   loading,
@@ -22,7 +24,7 @@ export function SessionSetupPrompt({
   const balanceEth = sessionSignerBalance !== null ? Number(sessionSignerBalance) / 1e18 : 0;
   const needsFunding = sessionSignerBalance === null || sessionSignerBalance < BigInt(0.0001 * 1e18);
 
-  console.log(`[SessionSetupPrompt] balance: ${balanceEth} ETH, needsFunding: ${needsFunding}, needsSessionSetup: ${needsSessionSetup}, isSafeDeployed: ${isSafeDeployed}`);
+  console.log(`[SessionSetupPrompt] balance: ${balanceEth} ETH, needsFunding: ${needsFunding}, needsSessionSetup: ${needsSessionSetup}, isSafeDeployed: ${isSafeDeployed}, isModuleEnabled: ${isModuleEnabled}`);
 
   // All good - show ready state
   if (!needsFunding && !needsSessionSetup) {
@@ -38,15 +40,45 @@ export function SessionSetupPrompt({
     );
   }
 
-  // Determine transaction count for button text
-  const getTxCount = () => {
+  // Determine what setup is needed
+  const getSetupInfo = () => {
     if (!isSafeDeployed) {
-      // Deploy + Enable (batched) + setSession + setTarget = 3 txs
-      return "3 txs: Deploy Safe + Authorize";
+      // New user: everything in 1 tx
+      return {
+        txCount: "1 tx",
+        title: "Deploy & Authorize",
+        description: "One-time setup: deploy your Safe wallet, enable the session module, and authorize gasless messaging — all in a single transaction.",
+        steps: [
+          "Deploy your Safe smart wallet",
+          "Enable session module",
+          "Register session signer + allow LogChain target",
+        ],
+      };
+    } else if (!isModuleEnabled) {
+      // Safe exists but module not enabled
+      return {
+        txCount: "2 txs",
+        title: "Enable Module & Authorize",
+        description: "Enable the session module on your existing Safe and authorize gasless messaging.",
+        steps: [
+          "Enable session module on Safe",
+          "Register session signer + allow LogChain target",
+        ],
+      };
+    } else {
+      // Safe + module exist, just need session setup
+      return {
+        txCount: "1 tx",
+        title: "Authorize Session",
+        description: "One-time setup: authorize your session wallet to send messages without popups.",
+        steps: [
+          "Register session signer + allow LogChain target",
+        ],
+      };
     }
-    // setSession + setTarget = 2 txs
-    return "2 txs";
   };
+
+  const setupInfo = getSetupInfo();
 
   return (
     <div className="space-y-4 mb-6">
@@ -91,31 +123,19 @@ export function SessionSetupPrompt({
       {!needsFunding && needsSessionSetup && (
         <div className="bg-blue-900/30 border border-blue-600 rounded-lg p-4">
           <h3 className="text-blue-400 font-semibold mb-2">
-            🔑 Step 2: {!isSafeDeployed ? "Deploy & Authorize" : "Authorize Session"}
+            🔑 Step 2: {setupInfo.title}
           </h3>
           <p className="text-sm text-gray-300 mb-3">
-            {!isSafeDeployed ? (
-              <>
-                One-time setup: deploy your Safe wallet and authorize session-based messaging.
-                <br />
-                <span className="text-xs text-gray-400">
-                  This batches Safe deployment + module setup into fewer transactions.
-                </span>
-              </>
-            ) : (
-              "One-time setup: authorize your session wallet to send messages without popups."
-            )}
+            {setupInfo.description}
           </p>
           
           {/* Show what will happen */}
           <div className="bg-black/30 rounded p-2 mb-3 text-xs text-gray-400">
             <p className="font-semibold text-gray-300 mb-1">What happens:</p>
             <ol className="list-decimal list-inside space-y-0.5">
-              {!isSafeDeployed && (
-                <li>Deploy your Safe smart wallet + enable session module</li>
-              )}
-              <li>Register session signer on module</li>
-              <li>Allow LogChain contract as target</li>
+              {setupInfo.steps.map((step, i) => (
+                <li key={i}>{step}</li>
+              ))}
             </ol>
           </div>
 
@@ -129,7 +149,7 @@ export function SessionSetupPrompt({
                 <span className="animate-spin">⏳</span> Setting up...
               </span>
             ) : (
-              `${!isSafeDeployed ? "Deploy & " : ""}Authorize Session (${getTxCount()})`
+              `${setupInfo.title} (${setupInfo.txCount})`
             )}
           </button>
         </div>

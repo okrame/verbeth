@@ -1,16 +1,27 @@
 // src/hooks/useSessionSetup.ts
-import { useState, useEffect, useCallback } from 'react';
-import { BrowserProvider, Contract } from 'ethers';
-import { getOrCreateSafeForOwner, ensureModuleEnabled } from '../services/safeAccount.js';
-import { LOGCHAIN_SINGLETON_ADDR, SAFE_MODULE_ADDRESS } from '../types.js';
+import { useState, useEffect, useCallback } from "react";
+import { BrowserProvider, Contract } from "ethers";
+import {
+  getOrCreateSafeForOwner,
+  ensureModuleEnabled,
+} from "../services/safeAccount.js";
+import { LOGCHAIN_SINGLETON_ADDR, SAFE_MODULE_ADDRESS } from "../types.js";
 
 interface UseSessionSetupParams {
   walletClient: any;
-  address: `0x${string}` | undefined;
+  address: string | undefined;
   safeAddr: string | null;
+  sessionSignerAddr: string | null;
   chainId: number;
   readProvider: any;
   addLog: (message: string) => void;
+  // State from useInitIdentity
+  isSafeDeployed: boolean;
+  isModuleEnabled: boolean;
+  setIsSafeDeployed: (deployed: boolean) => void;
+  setIsModuleEnabled: (enabled: boolean) => void;
+  setNeedsSessionSetup: (needs: boolean) => void;
+  // Callbacks
   onSessionSetupComplete?: () => void;
 }
 
@@ -18,16 +29,20 @@ export function useSessionSetup({
   walletClient,
   address,
   safeAddr,
+  sessionSignerAddr,
   chainId,
   readProvider,
   addLog,
+  isSafeDeployed,
+  isModuleEnabled,
+  setIsSafeDeployed,
+  setIsModuleEnabled,
+  setNeedsSessionSetup,
   onSessionSetupComplete,
 }: UseSessionSetupParams) {
-  const [sessionSignerAddr, setSessionSignerAddr] = useState<string | null>(null);
-  const [sessionSignerBalance, setSessionSignerBalance] = useState<bigint | null>(null);
-  const [needsSessionSetup, setNeedsSessionSetup] = useState(false);
-  const [isSafeDeployed, setIsSafeDeployed] = useState(false);
-  const [isModuleEnabled, setIsModuleEnabled] = useState(false);
+  const [sessionSignerBalance, setSessionSignerBalance] = useState<
+    bigint | null
+  >(null);
   const [loading, setLoading] = useState(false);
 
   // Refresh session signer balance periodically
@@ -78,39 +93,52 @@ export function useSessionSetup({
       console.log(`Session signer: ${sessionSignerAddr}`);
       console.log(`Target (LogChain): ${LOGCHAIN_SINGLETON_ADDR}`);
 
-      let currentModuleEnabled = isModuleEnabled;
-
-      // Step 1: Deploy Safe + Enable Module in one transaction
+      // ============================================================
+      // CASE 1: Safe not deployed → Single TX (deploy + module + session)
+      // ============================================================
       if (!isSafeDeployed) {
-        addLog("Deploying Safe + enabling module (tx 1)...");
+        addLog("Deploying Safe + enabling module + configuring session (1 tx)...");
 
-        const { isDeployed, moduleEnabled } = await getOrCreateSafeForOwner({
+        const { isDeployed, moduleEnabled, sessionConfigured } = await getOrCreateSafeForOwner({
           chainId,
           ownerAddress: address as `0x${string}`,
           providerEip1193: walletClient.transport,
           ethersSigner,
           deployIfMissing: true,
-          enableModuleDuringDeploy: true,
+          sessionConfig: {
+            sessionSigner: sessionSignerAddr,
+            target: LOGCHAIN_SINGLETON_ADDR,
+          },
         });
 
         if (!isDeployed) {
           throw new Error("Safe deployment failed");
         }
 
-        console.log(`✅ Safe deployed at ${safeAddr}`);
         setIsSafeDeployed(true);
+        setIsModuleEnabled(moduleEnabled);
 
-        currentModuleEnabled = moduleEnabled ?? false;
-        setIsModuleEnabled(currentModuleEnabled);
-
-        if (currentModuleEnabled) {
-          console.log(`✅ Module enabled during deployment`);
+        if (sessionConfigured) {
+          console.log(`✅ Safe deployed + module enabled + session configured in 1 tx`);
+          addLog("✓ Setup complete (1 tx)!");
+          console.log(`==========================================\n`);
+          setNeedsSessionSetup(false);
+          // Allow RPC state propagation before reinit
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          onSessionSetupComplete?.();
+          return;
         }
+
+
+        // Fallback: helper didn't configure session, need separate tx
+        console.warn("Session not configured during deploy, falling back to separate tx");
       }
 
-      // Step 2: Enable module separately if deployment didn't include it
-      if (!currentModuleEnabled) {
-        addLog("Enabling session module (tx 2)...");
+      // ============================================================
+      // CASE 2: Safe exists but module not enabled → Enable module first
+      // ============================================================
+      if (!isModuleEnabled) {
+        addLog("Enabling session module...");
 
         const { protocolKit } = await getOrCreateSafeForOwner({
           chainId,
@@ -118,73 +146,65 @@ export function useSessionSetup({
           providerEip1193: walletClient.transport,
           ethersSigner,
           deployIfMissing: false,
+          sessionConfig: {
+            sessionSigner: sessionSignerAddr,
+            target: LOGCHAIN_SINGLETON_ADDR,
+          },
         });
 
         await ensureModuleEnabled(protocolKit);
         setIsModuleEnabled(true);
-        console.log(`Module enabled`);
+        console.log(`✅ Module enabled`);
       }
 
-      // Step 3: Register session signer
+      // ============================================================
+      // CASE 3: Safe + module exist → Just setup session
+      // ============================================================
       const moduleContract = new Contract(
         SAFE_MODULE_ADDRESS,
-        [
-          "function setSession(address safe, address signer, uint256 expiry)",
-          "function setTarget(address safe, address target, bool allowed)",
-        ],
+        ["function setupSession(address safe, address signer, uint256 expiry, address target)"],
         ethersSigner
       );
 
-      addLog("Registering session signer...");
-      const tx1 = await moduleContract.setSession(
+      addLog("Setting up session (signer + target)...");
+      const tx = await moduleContract.setupSession(
         safeAddr,
         sessionSignerAddr,
-        BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+        BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), // no expiry
+        LOGCHAIN_SINGLETON_ADDR
       );
-      console.log(`TX hash: ${tx1.hash}`);
-      await tx1.wait();
-      console.log(`✅ Session signer authorized`);
-
-      // Step 4: Allow LogChain target
-      addLog("Allowing LogChain target...");
-      const tx2 = await moduleContract.setTarget(
-        safeAddr,
-        LOGCHAIN_SINGLETON_ADDR,
-        true
-      );
-      console.log(`TX hash: ${tx2.hash}`);
-      await tx2.wait();
-      console.log(`✅ LogChain target allowed`);
+      console.log(`TX hash: ${tx.hash}`);
+      await tx.wait();
+      console.log(`✅ Session signer authorized + LogChain target allowed`);
 
       addLog("✓ Session setup complete!");
       console.log(`==========================================\n`);
       setNeedsSessionSetup(false);
-
       onSessionSetupComplete?.();
-
     } catch (err: any) {
       console.error(`Session setup error:`, err);
       addLog(`✗ Session setup failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
-  }, [walletClient, address, safeAddr, sessionSignerAddr, isSafeDeployed, isModuleEnabled, chainId, addLog, onSessionSetupComplete]);
-
-  return {
-    // State
+  }, [
+    walletClient,
+    address,
+    safeAddr,
     sessionSignerAddr,
-    sessionSignerBalance,
-    needsSessionSetup,
     isSafeDeployed,
     isModuleEnabled,
-    sessionLoading: loading,
-    // Setters (needed by initializeWagmiAccount)
-    setSessionSignerAddr,
-    setSessionSignerBalance,
-    setNeedsSessionSetup,
+    chainId,
+    addLog,
     setIsSafeDeployed,
     setIsModuleEnabled,
-    // Actions
+    setNeedsSessionSetup,
+    onSessionSetupComplete,
+  ]);
+
+  return {
+    sessionSignerBalance,
+    sessionLoading: loading,
     refreshSessionBalance,
     setupSession,
   };

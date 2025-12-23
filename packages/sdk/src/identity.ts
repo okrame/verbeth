@@ -4,6 +4,7 @@ import { Signer, concat, hexlify, getBytes } from "ethers";
 import nacl from "tweetnacl";
 import { encodeUnifiedPubKeys } from "./payload.js";
 import { IdentityContext, IdentityKeyPair, IdentityProof } from "./types.js";
+import { exec } from "child_process";
 
 
 const SECP256K1_N = BigInt(
@@ -49,15 +50,12 @@ function canonicalizeEcdsaSig65(sig: Uint8Array): Uint8Array {
   return out;
 }
 
-function buildSeedMessage(addrLower: string, ctx?: IdentityContext): string {
+function buildSeedMessage(addrLower: string): string {
   const lines = [
     "VerbEth Identity Seed v1",
     `Address: ${addrLower}`,
     "Context: verbeth",
-    "Version: 1",
   ];
-  if (typeof ctx?.chainId === "number") lines.push(`ChainId: ${ctx.chainId}`);
-  if (ctx?.rpId) lines.push(`RpId: ${ctx.rpId}`);
   return lines.join("\n");
 }
 
@@ -65,6 +63,7 @@ function buildBindingMessage(
   addrLower: string,
   pkEd25519Hex: string,
   pkX25519Hex: string,
+  executorSafeAddress?: string,
   ctx?: IdentityContext
 ): string {
   const lines = [
@@ -72,10 +71,10 @@ function buildBindingMessage(
     `Address: ${addrLower}`,
     `PkEd25519: ${pkEd25519Hex}`,
     `PkX25519: ${pkX25519Hex}`,
+    `ExecutorSafeAddress: ${executorSafeAddress ?? ""}`
   ];
   if (typeof ctx?.chainId === "number") lines.push(`ChainId: ${ctx.chainId}`);
   if (ctx?.rpId) lines.push(`RpId: ${ctx.rpId}`);
-  lines.push("Context: verbeth", "Version: 1");
   return lines.join("\n");
 }
 
@@ -86,13 +85,15 @@ function buildBindingMessage(
 export async function deriveIdentityKeyPairWithProof(
   signer: any,
   address: string,
+  executorSafeAddress?: string,
   ctx?: IdentityContext
 ): Promise<{ keyPair: IdentityKeyPair; identityProof: IdentityProof }> {
   const enc = new TextEncoder();
   const addrLower = address.toLowerCase();
+  const executorSafeAddressLower = executorSafeAddress?.toLowerCase();
 
   // 1) Signature-based seed
-  const seedMessage = buildSeedMessage(addrLower, ctx);
+  const seedMessage = buildSeedMessage(addrLower);
   let seedSignature = await signer.signMessage(seedMessage);
   const seedSigBytes = canonicalizeEcdsaSig65(getBytes(seedSignature));
   seedSignature = ""; // wipe from memory
@@ -138,11 +139,12 @@ export async function deriveIdentityKeyPairWithProof(
     signingSecretKey: signKeyPair.secretKey,
   };
 
-  // 2) Second signature: binding both public keys (as before)
+  // 2) Second signature: binding both public keys + safe address
   const message = buildBindingMessage(
     addrLower,
     pkEd25519Hex,
     pkX25519Hex,
+    executorSafeAddressLower,
     ctx
   );
   const signature = await signer.signMessage(message);
@@ -163,6 +165,7 @@ export async function deriveIdentityKeyPairWithProof(
 export async function deriveIdentityWithUnifiedKeys(
   signer: Signer,
   address: string,
+  executorSafeAddress?: string,
   ctx?: IdentityContext
 ): Promise<{
   identityProof: IdentityProof;
@@ -170,7 +173,7 @@ export async function deriveIdentityWithUnifiedKeys(
   signingPubKey: Uint8Array;
   unifiedPubKeys: Uint8Array;
 }> {
-  const result = await deriveIdentityKeyPairWithProof(signer, address, ctx);
+  const result = await deriveIdentityKeyPairWithProof(signer, address, executorSafeAddress ,ctx);
 
   const unifiedPubKeys = encodeUnifiedPubKeys(
     result.keyPair.publicKey, // X25519

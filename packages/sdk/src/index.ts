@@ -46,8 +46,8 @@ export {
   ExecutorFactory
 } from './executor.js';
 
-export { SafeSessionSigner } from "./safeSessionSigner.js";
-export type { SafeSessionSignerOptions } from "./safeSessionSigner.js";
+export { SafeSessionSigner } from "./utils/safeSessionSigner.js";
+export type { SafeSessionSignerOptions } from "./utils/safeSessionSigner.js";
 
 // high-level client API 
 export { VerbethClient } from './client/index.js';

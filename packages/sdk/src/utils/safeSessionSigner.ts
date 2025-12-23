@@ -1,4 +1,4 @@
-// packages/sdk/src/safeSessionSigner.ts
+// packages/sdk/src/utils/safeSessionSigner.ts
 import {
   AbstractSigner,
   Contract,
@@ -13,34 +13,20 @@ import {
 export interface SafeSessionSignerOptions {
   provider: Provider;
   safeAddress: string;
-  /** Safe module enabled on the Safe */
   moduleAddress: string;
-  /** only allowed target */
   logChainAddress: string;
-  /** The EOA session signer (pays gas, calls the module). Must be connected to a provider. */
   sessionSigner: Signer;
-
-  /** Default: execute(address,uint256,bytes,uint8) */
-  moduleAbi?: readonly string[];
-  /** Default: "execute" */
-  executeMethod?: string;
 }
 
-const DEFAULT_ABI = [
-  "function execute(address to, uint256 value, bytes data, uint8 operation)",
+const MODULE_ABI = [
+  "function execute(address safe, address to, uint256 value, bytes data, uint8 operation) returns (bool)",
+  "function isValidSession(address safe, address signer) view returns (bool)",
+  "function sessionExpiry(address safe, address signer) view returns (uint256)",
+  "function isAllowedTarget(address safe, address target) view returns (bool)",
 ] as const;
 
-/**
- * Ethers v6 Signer adapter:
- * - Exposes address = Safe
- * - Intercepts txs to LogChain and routes them through the Safe module
- *
- * sessionSigner is an EOA that directly sends the module tx.
- */
 export class SafeSessionSigner extends AbstractSigner {
   private module: Contract;
-  private executeMethod: string;
-
   private opts: SafeSessionSignerOptions;
 
   constructor(opts: SafeSessionSignerOptions) {
@@ -49,20 +35,32 @@ export class SafeSessionSigner extends AbstractSigner {
 
     if (!opts.sessionSigner.provider) {
       throw new Error(
-        "SafeSessionSigner: sessionSigner must be connected to a Provider (e.g., new Wallet(pk, provider))."
+        "SafeSessionSigner: sessionSigner must be connected to a Provider."
       );
     }
 
     this.module = new Contract(
       opts.moduleAddress,
-      (opts.moduleAbi ?? DEFAULT_ABI) as any,
+      MODULE_ABI as any,
       opts.sessionSigner
     );
-    this.executeMethod = opts.executeMethod ?? "execute";
   }
 
   override async getAddress(): Promise<string> {
     return this.opts.safeAddress;
+  }
+
+  async getSessionSignerAddress(): Promise<string> {
+    return this.opts.sessionSigner.getAddress();
+  }
+
+  async isSessionValid(): Promise<boolean> {
+    const signerAddr = await this.opts.sessionSigner.getAddress();
+    return this.module.isValidSession(this.opts.safeAddress, signerAddr);
+  }
+
+  async isTargetAllowed(): Promise<boolean> {
+    return this.module.isAllowedTarget(this.opts.safeAddress, this.opts.logChainAddress);
   }
 
   override async signMessage(message: string | Uint8Array): Promise<string> {
@@ -70,7 +68,7 @@ export class SafeSessionSigner extends AbstractSigner {
   }
 
   override async signTransaction(_tx: TransactionRequest): Promise<string> {
-    throw new Error("SafeSessionSigner: signTransaction not supported; use sendTransaction().");
+    throw new Error("SafeSessionSigner: use sendTransaction() instead.");
   }
 
   override async signTypedData(
@@ -78,34 +76,33 @@ export class SafeSessionSigner extends AbstractSigner {
     types: Record<string, Array<TypedDataField>>,
     value: Record<string, any>
   ): Promise<string> {
-    // delegate
     const anySigner = this.opts.sessionSigner as any;
     if (typeof anySigner.signTypedData === "function") {
       return anySigner.signTypedData(domain, types, value);
     }
-    throw new Error("SafeSessionSigner: underlying sessionSigner does not support signTypedData.");
+    throw new Error("SafeSessionSigner: signTypedData not supported.");
   }
 
   override async sendTransaction(tx: TransactionRequest): Promise<TransactionResponse> {
-    if (!tx.to) throw new Error("SafeSessionSigner: tx.to is required");
+    if (!tx.to) throw new Error("SafeSessionSigner: tx.to required");
 
     const to = String(tx.to).toLowerCase();
     const logChain = this.opts.logChainAddress.toLowerCase();
 
     if (to !== logChain) {
-      throw new Error(`SafeSessionSigner: only LogChain txs are supported. Got to=${tx.to}`);
+      throw new Error(`SafeSessionSigner: only LogChain txs allowed. Got ${tx.to}`);
     }
 
     const data = tx.data ?? "0x";
-    const fn: any = (this.module as any)[this.executeMethod];
-    if (typeof fn !== "function") {
-      throw new Error(
-        `SafeSessionSigner: module execute method "${this.executeMethod}" not found on ${this.opts.moduleAddress}`
-      );
-    }
-
-    // operation: 0 = CALL, value: 0
-    return fn(this.opts.logChainAddress, 0n, data, 0);
+    
+    // execute(safe, to, value, data, operation)
+    return this.module.execute(
+      this.opts.safeAddress,
+      this.opts.logChainAddress,
+      0n,
+      data,
+      0 
+    );
   }
 
   override connect(provider: Provider): SafeSessionSigner {

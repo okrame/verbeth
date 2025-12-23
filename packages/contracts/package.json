@@ -29,7 +29,9 @@
     "deploy:local": "hardhat ignition deploy ignition/modules/LogChain.ts --network localhost --strategy create2",
     "deploy:testnet": "hardhat ignition deploy ignition/modules/LogChain.ts --network baseSepolia --strategy create2",
     "deploy:mainnet": "hardhat ignition deploy ignition/modules/LogChain.ts --network base --strategy create2",
-    "deploy:mainnet:validator": "hardhat ignition deploy ignition/modules/UniversalSigValidator.ts --network base --strategy create2"
+    "deploy:mainnet:validator": "hardhat ignition deploy ignition/modules/UniversalSigValidator.ts --network base --strategy create2",
+    "deploy:mainnet:session": "hardhat ignition deploy ignition/modules/SessionModule.ts --network base --strategy create2",
+    "deploy:testnet:session": "hardhat ignition deploy ignition/modules/SessionModule.ts --network baseSepolia --strategy create2"
   },
   "exports": {
     "./typechain-types/*": "./typechain-types/*",

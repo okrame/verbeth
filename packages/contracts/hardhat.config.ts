@@ -49,7 +49,6 @@ const config: HardhatUserConfig = {
   ignition: {
     strategyConfig: {
       create2: {
-        // "VERBETH" in hex
         salt: "0x5645524245544800000000000000000000000000000000000000000000000000", 
       },
     },
