@@ -24,9 +24,10 @@ export function SessionSetupPrompt({
   const balanceEth = sessionSignerBalance !== null ? Number(sessionSignerBalance) / 1e18 : 0;
   const needsFunding = sessionSignerBalance === null || sessionSignerBalance < BigInt(0.0001 * 1e18);
 
-  console.log(`[SessionSetupPrompt] balance: ${balanceEth} ETH, needsFunding: ${needsFunding}, needsSessionSetup: ${needsSessionSetup}, isSafeDeployed: ${isSafeDeployed}, isModuleEnabled: ${isModuleEnabled}`);
+  if (!loading) {
+    console.log(`[SessionSetupPrompt] balance: ${balanceEth} ETH, needsFunding: ${needsFunding}, needsSessionSetup: ${needsSessionSetup}, isSafeDeployed: ${isSafeDeployed}, isModuleEnabled: ${isModuleEnabled}`);
+  }
 
-  // All good - show ready state
   if (!needsFunding && !needsSessionSetup) {
     return (
       <div className="bg-green-900/30 border border-green-600 rounded-lg p-4 mb-6">

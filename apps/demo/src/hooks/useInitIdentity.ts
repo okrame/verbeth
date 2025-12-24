@@ -8,7 +8,9 @@ import {
 import {
   IExecutor,
   ExecutorFactory,
-  deriveIdentityKeyPairWithProof,
+  deriveIdentityKeys,
+  createBindingProof,
+  DerivedIdentityKeys,
   IdentityKeyPair,
   IdentityProof,
   SafeSessionSigner,
@@ -24,7 +26,7 @@ interface UseInitIdentityParams {
   readProvider: any;
   ready: boolean;
   addLog: (message: string) => void;
-  // Callbacks
+
   onIdentityCreated?: () => void;
   onReset?: () => void;
 }
@@ -51,11 +53,11 @@ export function useInitIdentity({
   const [loading, setLoading] = useState(false);
   const [reinitTrigger, setReinitTrigger] = useState(0);
   
-  // Session-related state (initialized here, used by useSessionSetup)
   const [sessionSignerAddr, setSessionSignerAddr] = useState<string | null>(null);
   const [needsSessionSetup, setNeedsSessionSetup] = useState(false);
   const [isSafeDeployed, setIsSafeDeployed] = useState(false);
   const [isModuleEnabled, setIsModuleEnabled] = useState(false);
+  const [signingStep, setSigningStep] = useState<1 | 2 | null>(null);
 
   const rpId = globalThis.location?.host ?? '';
   const identityContext = useMemo(() => ({ chainId, rpId }), [chainId, rpId]);
@@ -68,7 +70,12 @@ export function useInitIdentity({
     setTxSigner(null);
     setContract(null);
     setExecutor(null);
+    setSafeAddr(null);
+    setSessionSignerAddr(null);
     setNeedsIdentityCreation(false);
+    setNeedsSessionSetup(false);
+    setIsSafeDeployed(false);
+    setIsModuleEnabled(false);
     onReset?.();
   }, [onReset]);
 
@@ -80,11 +87,14 @@ export function useInitIdentity({
     setCurrentAccount(newAddress);
 
     const storedIdentity = await dbService.getIdentity(newAddress);
-    if (storedIdentity) {
+    if (storedIdentity && storedIdentity.sessionPrivateKey) {
       setIdentityKeyPair(storedIdentity.keyPair);
       setIdentityProof(storedIdentity.proof ?? null);
       setNeedsIdentityCreation(false);
       addLog(`Identity keys restored from database`);
+    } else if (storedIdentity && !storedIdentity.sessionPrivateKey) {
+      setNeedsIdentityCreation(true);
+      addLog(`Identity upgrade required (to derive session key)`);
     } else {
       setNeedsIdentityCreation(true);
     }
@@ -107,17 +117,18 @@ export function useInitIdentity({
       return;
     }
 
-    // ============================================================
-    // KEY CHANGE: Get session key FIRST, based on EOA (not Safe)
-    // This ensures consistent Safe address prediction
-    // ============================================================
-    const sessionPrivKey = await dbService.getSessionPrivKey(address, chainId);
+    const storedIdentity = await dbService.getIdentity(address);
+    
+    if (!storedIdentity || !storedIdentity.sessionPrivateKey) {
+      addLog(`Awaiting identity creation...`);
+      return;
+    }
+
+    const sessionPrivKey = storedIdentity.sessionPrivateKey;
     const sessionWallet = new Wallet(sessionPrivKey, readProvider);
-    const sessionAddr = await sessionWallet.getAddress();
+    const sessionAddr = storedIdentity.sessionAddress ?? await sessionWallet.getAddress();
     setSessionSignerAddr(sessionAddr);
 
-    // Now predict/get Safe with sessionConfig included
-    // This ensures prediction matches what will be deployed
     const { safeAddress, isDeployed, moduleEnabled } = await getOrCreateSafeForOwner({
       chainId,
       ownerAddress: address as `0x${string}`,
@@ -143,22 +154,15 @@ export function useInitIdentity({
     console.log(`   Safe deployed: ${isDeployed}`);
     console.log(`   Module enabled: ${moduleEnabled}`);
     console.log(`   Chain ID: ${chainId}`);
-    console.log(`📍 Session signer address: ${sessionAddr}`);
+    console.log(`   Session signer address: ${sessionAddr}`);
 
     // Check session signer balance
     const balance = await readProvider.getBalance(sessionAddr);
     const balanceEth = Number(balance) / 1e18;
-    console.log(`💰 Session signer balance: ${balanceEth.toFixed(6)} ETH (${balance.toString()} wei)`);
+    console.log(`Session signer balance: ${balanceEth.toFixed(6)} ETH (${balance.toString()} wei)`);
 
     if (balance === 0n) {
       addLog(`Session signer needs funding: ${sessionAddr}`);
-    }
-
-    // Check if identity exists - if not, stop here and wait for identity creation
-    const storedIdentity = await dbService.getIdentity(address);
-    if (!storedIdentity) {
-      addLog(`Counterfactual Safe address: ${safeAddress.slice(0, 10)}... - awaiting identity creation`);
-      return;
     }
 
     // Create SafeSessionSigner for transaction signing
@@ -172,15 +176,19 @@ export function useInitIdentity({
     setTxSigner(safeSessionSigner);
 
     // Check if session is properly configured on the module
-    const isValid = await safeSessionSigner.isSessionValid();
-    const isTargetAllowed = await safeSessionSigner.isTargetAllowed();
-    console.log(`Session valid on module: ${isValid}`);
-    console.log(`LogChain target allowed: ${isTargetAllowed}`);
-    setNeedsSessionSetup(!isValid || !isTargetAllowed);
+    if (isDeployed) {
+      const isValid = await safeSessionSigner.isSessionValid();
+      const isTargetAllowed = await safeSessionSigner.isTargetAllowed();
+      console.log(`Session valid on module: ${isValid}`);
+      console.log(`LogChain target allowed: ${isTargetAllowed}`);
+      setNeedsSessionSetup(!isValid || !isTargetAllowed);
 
-    if (!isValid || !isTargetAllowed) {
-      addLog(`⚠️ Session needs setup on module (valid: ${isValid}, target: ${isTargetAllowed})`);
+      if (!isValid || !isTargetAllowed) {
+        addLog(`Session needs setup on module (valid: ${isValid}, target: ${isTargetAllowed})`);
+      }
     }
+
+    console.log(`==========================================\n`);
 
     const contractInstance = LogChainV1__factory.connect(LOGCHAIN_SINGLETON_ADDR, safeSessionSigner as any);
     const executorInstance = ExecutorFactory.createEOA(contractInstance);
@@ -190,30 +198,80 @@ export function useInitIdentity({
   }, [walletClient, address, currentAccount, chainId, readProvider, addLog, switchToAccount]);
 
   const createIdentity = useCallback(async () => {
-    if (!identitySigner || !address || !safeAddr) {
+    if (!identitySigner || !address || !walletClient) {
       addLog('✗ Missing signer/provider or address for identity creation');
       return;
     }
-
+    setSigningStep(1);
     setLoading(true);
     try {
-      addLog('Deriving new identity key (2 signatures)...');
+      // ================================================================
+      // Derive all keys from seed signature (1 signature)
+      // ================================================================
+      addLog('Deriving identity keys (signature 1/2)...');
 
-      const result = await deriveIdentityKeyPairWithProof(identitySigner, address, safeAddr, identityContext);
+      const derivedKeys: DerivedIdentityKeys = await deriveIdentityKeys(
+        identitySigner,
+        address
+      );
 
-      setIdentityKeyPair(result.keyPair);
-      setIdentityProof(result.identityProof);
+      console.log(`✓ Verbeth keys derived:`);
+      console.log(`   Session signer: ${derivedKeys.sessionAddress}`);
+
+      // ================================================================
+      // PREDICT SAFE ADDRESS (no signature needed)
+      // ================================================================
+      const ethersProvider = new BrowserProvider(walletClient.transport);
+      const ethersSigner = await ethersProvider.getSigner();
+
+      const { safeAddress: predictedSafe } = await getOrCreateSafeForOwner({
+        chainId,
+        ownerAddress: address as `0x${string}`,
+        providerEip1193: walletClient.transport,
+        ethersSigner,
+        deployIfMissing: false,
+        sessionConfig: {
+          sessionSigner: derivedKeys.sessionAddress,
+          target: LOGCHAIN_SINGLETON_ADDR,
+        },
+      });
+
+      console.log(`✓ Predicted Safe: ${predictedSafe}`);
+
+      // ================================================================
+      // Create binding proof with Safe address (1 signature)
+      // ================================================================
+      addLog('Creating binding proof (signature 2/2)...');
+      setSigningStep(2);
+
+      const proof = await createBindingProof(
+        identitySigner,
+        address,
+        derivedKeys,
+        predictedSafe,
+        identityContext
+      );
+
+      // ================================================================
+      // STORE IDENTITY
+      // ================================================================
+      setIdentityKeyPair(derivedKeys.keyPair);
+      setIdentityProof(proof);
 
       const identityToStore: StoredIdentity = {
         address: address,
-        keyPair: result.keyPair,
+        keyPair: derivedKeys.keyPair,
         derivedAt: Date.now(),
-        proof: result.identityProof,
+        proof: proof,
+        sessionPrivateKey: derivedKeys.sessionPrivateKey,
+        sessionAddress: derivedKeys.sessionAddress,
       };
 
       await dbService.saveIdentity(identityToStore);
-      addLog(`New identity key derived and saved for EOA`);
+      addLog(`✓ Identity created with derived session key`);
+      addLog(`  Session signer: ${derivedKeys.sessionAddress}`);
       setNeedsIdentityCreation(false);
+      setSigningStep(null);
       onIdentityCreated?.();
 
       // Trigger re-initialization to complete Safe setup
@@ -222,12 +280,13 @@ export function useInitIdentity({
       if (signError.code === 4001) {
         addLog('User rejected signing request.');
       } else {
+        console.error('Identity creation error:', signError);
         addLog(`✗ Failed to derive identity: ${signError.message}`);
       }
     } finally {
       setLoading(false);
     }
-  }, [identitySigner, address, safeAddr, identityContext, addLog, onIdentityCreated]);
+  }, [identitySigner, address, walletClient, chainId, identityContext, addLog, onIdentityCreated]);
 
   // Handle initialization on ready/wallet/address/reinit changes
   useEffect(() => {
@@ -261,6 +320,7 @@ export function useInitIdentity({
     needsIdentityCreation,
     identityLoading: loading,
     identityContext,
+    signingStep,
     // Session state (owned here, used by useSessionSetup)
     sessionSignerAddr,
     needsSessionSetup,

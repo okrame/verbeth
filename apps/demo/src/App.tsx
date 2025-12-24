@@ -76,6 +76,7 @@ export default function App() {
     setIsSafeDeployed,
     setIsModuleEnabled,
     setNeedsSessionSetup,
+    signingStep,
     // Actions
     createIdentity,
     triggerReinit,
@@ -297,6 +298,7 @@ export default function App() {
                 loading={loading}
                 onCreateIdentity={createIdentity}
                 address={address || "Not connected"}
+                signingStep={signingStep}
               />
             ) : showHandshakeForm ? (
               <InitialForm

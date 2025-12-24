@@ -28,18 +28,33 @@ export const EVENT_SIGNATURES = {
 
 /* ------------------------------- ENTITIES -------------------------------- */
 export interface Contact {
+  /** Contact's address (EOA or Safe) */
   address: string;
-  ownerAddress: string; 
-  identityPubKey?: Uint8Array; 
-  signingPubKey?: Uint8Array; 
-  ephemeralKey?: Uint8Array; 
-  topicOutbound?: string; 
+  /** Owner's address (the user viewing this contact) */
+  ownerAddress: string;
+  /** Contact's display name */
+  name?: string;
+  /** Contact's X25519 public key for encryption */
+  identityPubKey?: Uint8Array;
+  /** Contact's Ed25519 public key for signature verification */
+  signingPubKey?: Uint8Array;
+  /** Contact's ephemeral public key from handshake */
+  ephemeralKey?: Uint8Array;
+  /** Topic for outbound messages (owner → contact) */
+  topicOutbound?: string;
+  /** Topic for inbound messages (contact → owner) */
   topicInbound?: string;
-  status: 'none' | 'handshake_sent' | 'established';
+  /** Contact status */
+  status: "none" | "handshake_sent" | "established";
+  /** Last message preview */
   lastMessage?: string;
+  /** Last message timestamp */
   lastTimestamp?: number;
+  /** Unread message count */
+  unreadCount?: number;
   note?: string;
 }
+
 
 export interface Message {
   id: string; // Unique ID (txHash-logIndex or dedupKey)
@@ -75,10 +90,23 @@ export interface PendingHandshake {
 }
 
 export interface StoredIdentity {
-  address: string; // primary key
-  keyPair: IdentityKeyPair; // X25519 + Ed25519 keys
-  derivedAt: number; 
-  proof: IdentityProof; 
+  /** EOA address */
+  address: string;
+  /** VerbEth identity key pair (X25519 + Ed25519) */
+  keyPair: IdentityKeyPair;
+  /** Timestamp when identity was derived */
+  derivedAt: number;
+  /** Binding proof (ties keys to Safe address) */
+  proof?: IdentityProof;
+  /**
+   * Hex-encoded secp256k1 private key for session signer.
+   * Derived deterministically from the same seed signature as identity keys.
+   */
+  sessionPrivateKey?: string;
+  /**
+   * Ethereum address of the session signer.
+   */
+  sessionAddress?: string;
 }
 
 export interface AppSettings {
