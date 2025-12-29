@@ -7,8 +7,7 @@ Verbeth enables secure, E2EE messaging using Ethereum event logs as the only tra
 - **End-to-end encryption** using NaCl Box (X25519 + XSalsa20-Poly1305)
 - **Forward secrecy** with ephemeral keys per message
 - **Handshake protocol** for secure key exchange
-- **Privacy-focused** with minimal metadata via `recipientHash`
-- **EOA & Smart Account support** (ERC-1271/6492 compatible)
+- **EOA and Smart Account support** (Safe modules, ERC-1271/6492 compatible)
 - **Fully on-chain** - no centralized infrastructure
 
 ## Installation
@@ -35,7 +34,9 @@ const address = await signer.getAddress();
 const contract = LogChainV1__factory.connect(LOGCHAIN_ADDRESS, signer);
 
 // Derive identity keys (done once, then stored)
-const { identityKeyPair, identityProof } = await deriveIdentityKeyPairWithProof(signer);
+// Also derives session signer key for meta transactions
+const { keyPair: identityKeyPair, identityProof, sessionPrivateKey, sessionAddress } = 
+  await deriveIdentityKeyPairWithProof(signer, address, safeAddress);
 
 // Create executor (handles transaction submission)
 const executor = ExecutorFactory.createEOA(contract);
@@ -91,8 +92,19 @@ import {
   deriveIdentityKeyPairWithProof
 } from '@verbeth/sdk';
 
-// Generate identity keys
-const { identityKeyPair, identityProof } = await deriveIdentityKeyPairWithProof(signer);
+// Generate identity keys (two-phase for when Safe address isn't known upfront)
+import { deriveIdentityKeys, createBindingProof } from '@verbeth/sdk';
+
+// Phase 1: Derive keys from seed signature
+const derivedKeys = await deriveIdentityKeys(signer, address);
+// derivedKeys.sessionAddress can now be used to predict Safe address
+
+// Phase 2: Create binding proof with Safe address
+const identityProof = await createBindingProof(signer, address, derivedKeys, safeAddress);
+
+// Or use combined function if Safe address is already known:
+const { keyPair, identityProof, sessionPrivateKey, sessionAddress } = 
+  await deriveIdentityKeyPairWithProof(signer, address, safeAddress);
 
 // Initiate handshake
 const ephemeralKeyPair = nacl.box.keyPair();
@@ -156,7 +168,7 @@ const executor = ExecutorFactory.createDirectEntryPoint(
 
 ## How It Works
 
-1. **Identity Keys**: Each account derives long-term X25519 (encryption) + Ed25519 (signing) keys bound to their address via signature
+1. **Identity Keys**: Each account derives long-term X25519 (encryption) + Ed25519 (signing) + secp256k1 (session) keys from a single seed signature, then binds them to their Safe address via a second signature
 2. **Handshake**: Alice sends her ephemeral key + identity proof to Bob via a `Handshake` event
 3. **Response**: Bob verifies Alice's identity and responds with his keys + duplex topics
 4. **Messaging**: Both parties derive shared topics and exchange encrypted messages via `MessageSent` events
