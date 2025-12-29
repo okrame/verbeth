@@ -45,16 +45,24 @@ function randomTagHex(): `0x${string}` {
   return ("0x" + Buffer.from(b).toString("hex")) as `0x${string}`;
 }
 
+function mockSafeAddress(eoaAddress: string): string {
+  const hash = keccak256(toUtf8Bytes("mock-safe:" + eoaAddress.toLowerCase()));
+  return "0x" + hash.slice(26); // take last 20 bytes (40 hex chars)
+}
+
 describe("Verify Identity & Handshake (Unified)", () => {
   describe("Identity Proof Verification", () => {
     it("OK with correct unified keys", async () => {
       const wallet: HDNodeWallet = Wallet.createRandom();
+      const safeAddr = mockSafeAddress(wallet.address);
+      
       const { identityProof, identityPubKey, signingPubKey } =
-        await deriveIdentityWithUnifiedKeys(wallet, wallet.address);
+        await deriveIdentityWithUnifiedKeys(wallet, wallet.address, safeAddr);
 
+      // Verify against the Safe address (executor)
       const result = await verifyIdentityProof(
         identityProof,
-        wallet.address,
+        safeAddr,
         { identityPubKey, signingPubKey },
         mockProvider
       );
@@ -65,12 +73,16 @@ describe("Verify Identity & Handshake (Unified)", () => {
     it("KO with wrong address", async () => {
       const wallet1: HDNodeWallet = Wallet.createRandom();
       const wallet2: HDNodeWallet = Wallet.createRandom();
+      const safeAddr1 = mockSafeAddress(wallet1.address);
+      const safeAddr2 = mockSafeAddress(wallet2.address);
+      
       const { identityProof, identityPubKey, signingPubKey } =
-        await deriveIdentityWithUnifiedKeys(wallet1, wallet1.address);
+        await deriveIdentityWithUnifiedKeys(wallet1, wallet1.address, safeAddr1);
 
+      // Verify against wrong Safe address
       const result = await verifyIdentityProof(
         identityProof,
-        wallet2.address,
+        safeAddr2,
         { identityPubKey, signingPubKey },
         mockProvider
       );
@@ -80,9 +92,12 @@ describe("Verify Identity & Handshake (Unified)", () => {
 
     it("KO with wrong keys", async () => {
       const wallet: HDNodeWallet = Wallet.createRandom();
+      const safeAddr = mockSafeAddress(wallet.address);
+      
       const { identityProof } = await deriveIdentityWithUnifiedKeys(
         wallet,
-        wallet.address
+        wallet.address,
+        safeAddr
       );
 
       const wrongKeys = {
@@ -92,7 +107,7 @@ describe("Verify Identity & Handshake (Unified)", () => {
 
       const result = await verifyIdentityProof(
         identityProof,
-        wallet.address,
+        safeAddr,
         wrongKeys,
         mockProvider
       );
@@ -104,12 +119,15 @@ describe("Verify Identity & Handshake (Unified)", () => {
   describe("Handshake Verification", () => {
     it("EOA flow with unified keys", async () => {
       const wallet: HDNodeWallet = Wallet.createRandom();
+      const safeAddr = mockSafeAddress(wallet.address);
+      
       const { identityProof, unifiedPubKeys } =
-        await deriveIdentityWithUnifiedKeys(wallet, wallet.address);
+        await deriveIdentityWithUnifiedKeys(wallet, wallet.address, safeAddr);
 
+      // Sender is the Safe address (since Safe sends the tx)
       const handshakeEvent: HandshakeLog = {
         recipientHash: keccak256(toUtf8Bytes("contact:0xdead")),
-        sender: wallet.address,
+        sender: safeAddr,
         pubKeys: hexlify(unifiedPubKeys),
         ephemeralPubKey: hexlify(nacl.box.keyPair().publicKey),
         plaintextPayload: JSON.stringify({
@@ -127,9 +145,12 @@ describe("Verify Identity & Handshake (Unified)", () => {
 
     it("fails with invalid identity proof", async () => {
       const wallet: HDNodeWallet = Wallet.createRandom();
+      const safeAddr = mockSafeAddress(wallet.address);
+      
       const { unifiedPubKeys } = await deriveIdentityWithUnifiedKeys(
         wallet,
-        wallet.address
+        wallet.address,
+        safeAddr
       );
 
       const differentWallet: HDNodeWallet = Wallet.createRandom();
@@ -145,7 +166,7 @@ describe("Verify Identity & Handshake (Unified)", () => {
 
       const handshakeEvent: HandshakeLog = {
         recipientHash: keccak256(toUtf8Bytes("contact:0xdead")),
-        sender: wallet.address,
+        sender: safeAddr,
         pubKeys: hexlify(unifiedPubKeys),
         ephemeralPubKey: hexlify(nacl.box.keyPair().publicKey),
         plaintextPayload: JSON.stringify({
@@ -165,10 +186,13 @@ describe("Verify Identity & Handshake (Unified)", () => {
   describe("Handshake Response Verification", () => {
     it("EOA flow with unified keys", async () => {
       const responderWallet: HDNodeWallet = Wallet.createRandom();
+      const responderSafeAddr = mockSafeAddress(responderWallet.address);
+      
       const { identityProof, identityPubKey, unifiedPubKeys } =
         await deriveIdentityWithUnifiedKeys(
           responderWallet,
-          responderWallet.address
+          responderWallet.address,
+          responderSafeAddr
         );
 
       const aliceEphemeral = nacl.box.keyPair();
@@ -188,9 +212,10 @@ describe("Verify Identity & Handshake (Unified)", () => {
         responderEphemeral.publicKey
       );
 
+      // Responder is the Safe address
       const responseEvent: HandshakeResponseLog = {
         inResponseTo: keccak256(toUtf8Bytes("test-handshake")),
-        responder: responderWallet.address,
+        responder: responderSafeAddr,
         responderEphemeralR: hexlify(responderEphemeral.publicKey),
         ciphertext: payload,
       };
@@ -207,10 +232,13 @@ describe("Verify Identity & Handshake (Unified)", () => {
 
     it("fails with wrong identity key", async () => {
       const responderWallet: HDNodeWallet = Wallet.createRandom();
+      const responderSafeAddr = mockSafeAddress(responderWallet.address);
+      
       const { identityProof, unifiedPubKeys } =
         await deriveIdentityWithUnifiedKeys(
           responderWallet,
-          responderWallet.address
+          responderWallet.address,
+          responderSafeAddr
         );
 
       const aliceEphemeral = nacl.box.keyPair();
@@ -232,7 +260,7 @@ describe("Verify Identity & Handshake (Unified)", () => {
 
       const responseEvent: HandshakeResponseLog = {
         inResponseTo: keccak256(toUtf8Bytes("test-handshake")),
-        responder: responderWallet.address,
+        responder: responderSafeAddr,
         responderEphemeralR: hexlify(responderEphemeral.publicKey),
         ciphertext: payload,
       };

@@ -144,14 +144,19 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
     await fundTx2.wait();
     await new Promise((resolve) => setTimeout(resolve, 100));
 
+    // Derive identity keys with executorSafeAddress (3rd param) for binding proof
+    const testSmartAccountAddr = await testSmartAccount.getAddress();
     ownerIdentityKeys = await deriveIdentityKeyPairWithProof(
       smartAccountOwner,
-      await testSmartAccount.getAddress()
+      testSmartAccountAddr,
+      testSmartAccountAddr // executorSafeAddress = smart account address
     );
 
+    const responderSmartAccountAddr = await responderSmartAccount.getAddress();
     responderIdentityKeys = await deriveIdentityKeyPairWithProof(
       responderOwner,
-      await responderSmartAccount.getAddress()
+      responderSmartAccountAddr,
+      responderSmartAccountAddr // executorSafeAddress = smart account address
     );
     await new Promise((resolve) => setTimeout(resolve, 300));
   }, 180000);

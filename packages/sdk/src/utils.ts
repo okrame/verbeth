@@ -47,7 +47,7 @@ export function parseBindingMessage(message: string): {
       out.pkX25519 = hexlify(val) as `0x${string}`;
     }
     if (key === "executorsafeaddress" || key === "executorsafe") {
-      out.executorSafeAddress = getAddress(val);
+      if (val) out.executorSafeAddress = getAddress(val);
     }
     if (key === "context") out.context = val;
     if (key === "version") out.version = val;
@@ -183,4 +183,3 @@ export async function isSmartContract1271(
 export function pickOutboundTopic(isInitiator: boolean, t: DuplexTopics): `0x${string}` {
   return isInitiator ? t.topicOut : t.topicIn;
 }
-
