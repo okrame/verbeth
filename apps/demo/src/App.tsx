@@ -78,6 +78,10 @@ export default function App() {
     setNeedsSessionSetup,
     signingStep,
     // Actions
+    needsModeSelection,
+    fastModeAvailable,
+    executionMode,
+    emitterAddress,
     createIdentity,
     triggerReinit,
   } = useInitIdentity({
@@ -113,6 +117,7 @@ export default function App() {
     setIsModuleEnabled,
     setNeedsSessionSetup,
     onSessionSetupComplete: () => triggerReinit(),
+    executionMode,
   });
 
   const {
@@ -127,6 +132,7 @@ export default function App() {
     readProvider,
     identityContext,
     address: address ?? undefined,
+    emitterAddress: emitterAddress ?? undefined, 
     identityKeyPair,
     onLog: addLog
   });
@@ -140,6 +146,7 @@ export default function App() {
   } = useMessageListener({
     readProvider,
     address: address ?? undefined,
+    emitterAddress: emitterAddress ?? undefined,
     onLog: addLog,
     onEventsProcessed: processEvents
   });
@@ -243,10 +250,10 @@ export default function App() {
           {/* LEFT: title */}
           <div className="flex flex-col items-start">
             <h1 className="text-2xl sm:text-4xl font-extrabold leading-tight">
-              Blockless Chat
+              WorldLog Chat
             </h1>
             <div className="text-xs text-gray-400 pl-0.5 mt-1">
-              powered by Verbeth
+              powered by Verbeth SDK
             </div>
           </div>
           {/* RIGHT: auth buttons - EOA only */}
@@ -293,12 +300,15 @@ export default function App() {
               />
             )}
 
-            {needsIdentityCreation ? (
+            {(needsIdentityCreation || needsModeSelection) ? (
               <IdentityCreation
                 loading={loading}
-                onCreateIdentity={createIdentity}
-                address={address || "Not connected"}
+                onCreateIdentity={createIdentity} 
+                address={address ?? ''}
                 signingStep={signingStep}
+                needsModeSelection={needsModeSelection}
+                fastModeAvailable={fastModeAvailable}
+                chainId={chainId}
               />
             ) : showHandshakeForm ? (
               <InitialForm

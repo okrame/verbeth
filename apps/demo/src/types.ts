@@ -30,6 +30,8 @@ export const EVENT_SIGNATURES = {
 export interface Contact {
   /** Contact's address (EOA or Safe) */
   address: string;
+  /** Contact's emitter address (Safe in fast mode, same as address in classic mode) */
+  emitterAddress?: string;
   /** Owner's address (the user viewing this contact) */
   ownerAddress: string;
   /** Contact's display name */
@@ -79,6 +81,7 @@ export interface Message {
 export interface PendingHandshake {
   id: string;
   ownerAddress: string; 
+  emitterAddress?: string;
   sender: string;
   identityPubKey: Uint8Array;
   signingPubKey: Uint8Array;
@@ -88,6 +91,8 @@ export interface PendingHandshake {
   blockNumber: number;
   verified: boolean;
 }
+
+export type ExecutionMode = 'classic' | 'fast' | 'custom';
 
 export interface StoredIdentity {
   /** EOA address */
@@ -107,6 +112,8 @@ export interface StoredIdentity {
    * Ethereum address of the session signer.
    */
   sessionAddress?: string;
+  executionMode?: ExecutionMode;
+  emitterAddress?: string; // EOA for classic, Safe for fast/custom
 }
 
 export interface AppSettings {
@@ -147,6 +154,7 @@ export interface ProcessedEvent {
   rawLog: any;
   blockNumber: number;
   timestamp: number;
+  matchedContactAddress?: string;
 }
 
 export interface MessageListenerResult {

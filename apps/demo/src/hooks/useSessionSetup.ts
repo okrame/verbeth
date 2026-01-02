@@ -5,7 +5,7 @@ import {
   getOrCreateSafeForOwner,
   ensureModuleEnabled,
 } from "../services/safeAccount.js";
-import { LOGCHAIN_SINGLETON_ADDR, SAFE_MODULE_ADDRESS } from "../types.js";
+import { LOGCHAIN_SINGLETON_ADDR, SAFE_MODULE_ADDRESS, ExecutionMode } from "../types.js";
 
 interface UseSessionSetupParams {
   walletClient: any;
@@ -21,6 +21,8 @@ interface UseSessionSetupParams {
   setIsSafeDeployed: (deployed: boolean) => void;
   setIsModuleEnabled: (enabled: boolean) => void;
   setNeedsSessionSetup: (needs: boolean) => void;
+  // NEW: Mode from useInitIdentity
+  executionMode: ExecutionMode | null;
   // Callbacks
   onSessionSetupComplete?: () => void;
 }
@@ -38,21 +40,24 @@ export function useSessionSetup({
   setIsSafeDeployed,
   setIsModuleEnabled,
   setNeedsSessionSetup,
+  executionMode,
   onSessionSetupComplete,
 }: UseSessionSetupParams) {
-  const [sessionSignerBalance, setSessionSignerBalance] = useState<
-    bigint | null
-  >(null);
+  const [sessionSignerBalance, setSessionSignerBalance] = useState<bigint | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Refresh session signer balance periodically
+  // ===========================================================================
+  // NEW: Skip everything for classic mode
+  // ===========================================================================
+  const isClassicMode = executionMode === 'classic';
+
+  // Refresh session signer balance (only for fast mode)
   useEffect(() => {
-    if (!sessionSignerAddr || !readProvider) return;
+    if (isClassicMode || !sessionSignerAddr || !readProvider) return;
 
     const refreshBalance = async () => {
       try {
         const balance = await readProvider.getBalance(sessionSignerAddr);
-        console.log(`🔄 Balance refresh: ${Number(balance) / 1e18} ETH`);
         setSessionSignerBalance(balance);
       } catch (err) {
         console.error("Failed to refresh balance:", err);
@@ -62,20 +67,26 @@ export function useSessionSetup({
     refreshBalance();
     const interval = setInterval(refreshBalance, 10000);
     return () => clearInterval(interval);
-  }, [sessionSignerAddr, readProvider]);
+  }, [sessionSignerAddr, readProvider, isClassicMode]);
 
   const refreshSessionBalance = useCallback(async () => {
-    if (!sessionSignerAddr || !readProvider) return;
+    if (isClassicMode || !sessionSignerAddr || !readProvider) return;
     try {
       const balance = await readProvider.getBalance(sessionSignerAddr);
-      console.log(`🔄 Manual balance refresh: ${Number(balance) / 1e18} ETH`);
+      console.log(`🔄 Balance: ${Number(balance) / 1e18} ETH`);
       setSessionSignerBalance(balance);
     } catch (err) {
       console.error("Failed to refresh balance:", err);
     }
-  }, [sessionSignerAddr, readProvider]);
+  }, [sessionSignerAddr, readProvider, isClassicMode]);
 
   const setupSession = useCallback(async () => {
+    // NEW: Guard for classic mode
+    if (isClassicMode) {
+      addLog("Classic mode: no session setup needed");
+      return;
+    }
+
     if (!walletClient || !address || !safeAddr || !sessionSignerAddr) {
       addLog("Missing requirements for session setup");
       return;
@@ -86,18 +97,15 @@ export function useSessionSetup({
       const ethersProvider = new BrowserProvider(walletClient.transport);
       const ethersSigner = await ethersProvider.getSigner();
 
-      console.log(`\n========== SETTING UP SESSION ==========`);
-      console.log(`Safe: ${safeAddr}`);
-      console.log(`Safe deployed: ${isSafeDeployed}`);
+      console.log(`\n========== SETTING UP SESSION (Fast Mode) ==========`);
+      console.log(`VerbEth Safe: ${safeAddr}`);
+      console.log(`Deployed: ${isSafeDeployed}`);
       console.log(`Module enabled: ${isModuleEnabled}`);
       console.log(`Session signer: ${sessionSignerAddr}`);
-      console.log(`Target (LogChain): ${LOGCHAIN_SINGLETON_ADDR}`);
 
-      // ============================================================
-      // CASE 1: Safe not deployed → Single TX (deploy + module + session)
-      // ============================================================
+      // Case 1: Safe not deployed → Deploy + enable + configure (1 tx via helper)
       if (!isSafeDeployed) {
-        addLog("Deploying Safe + enabling module + configuring session (1 tx)...");
+        addLog("Deploying VerbEth Safe + enabling module + configuring session...");
 
         const { isDeployed, moduleEnabled, sessionConfigured } = await getOrCreateSafeForOwner({
           chainId,
@@ -109,6 +117,7 @@ export function useSessionSetup({
             sessionSigner: sessionSignerAddr,
             target: LOGCHAIN_SINGLETON_ADDR,
           },
+          useApiLookup: false, // NEW: deterministic only
         });
 
         if (!isDeployed) {
@@ -119,24 +128,18 @@ export function useSessionSetup({
         setIsModuleEnabled(moduleEnabled);
 
         if (sessionConfigured) {
-          console.log(`✅ Safe deployed + module enabled + session configured in 1 tx`);
-          addLog("✓ Setup complete (1 tx)!");
-          console.log(`==========================================\n`);
+          console.log(`✅ All configured in 1 tx`);
+          addLog("✓ Setup complete!");
           setNeedsSessionSetup(false);
-          // Allow RPC state propagation before reinit
           await new Promise(resolve => setTimeout(resolve, 1500));
           onSessionSetupComplete?.();
           return;
         }
 
-
-        // Fallback: helper didn't configure session, need separate tx
-        console.warn("Session not configured during deploy, falling back to separate tx");
+        console.warn("Session not configured during deploy, falling back...");
       }
 
-      // ============================================================
-      // CASE 2: Safe exists but module not enabled → Enable module first
-      // ============================================================
+      // Case 2: Safe exists but module not enabled
       if (!isModuleEnabled) {
         addLog("Enabling session module...");
 
@@ -150,6 +153,7 @@ export function useSessionSetup({
             sessionSigner: sessionSignerAddr,
             target: LOGCHAIN_SINGLETON_ADDR,
           },
+          useApiLookup: false,
         });
 
         await ensureModuleEnabled(protocolKit);
@@ -157,30 +161,29 @@ export function useSessionSetup({
         console.log(`✅ Module enabled`);
       }
 
-      // ============================================================
-      // CASE 3: Safe + module exist → Just setup session
-      // ============================================================
+      // Case 3: Safe + module exist → Just setup session
       const moduleContract = new Contract(
         SAFE_MODULE_ADDRESS,
         ["function setupSession(address safe, address signer, uint256 expiry, address target)"],
         ethersSigner
       );
 
-      addLog("Setting up session (signer + target)...");
+      addLog("Setting up session...");
       const tx = await moduleContract.setupSession(
         safeAddr,
         sessionSignerAddr,
-        BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), // no expiry
+        BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
         LOGCHAIN_SINGLETON_ADDR
       );
-      console.log(`TX hash: ${tx.hash}`);
+      console.log(`TX: ${tx.hash}`);
       await tx.wait();
-      console.log(`✅ Session signer authorized + LogChain target allowed`);
+      console.log(`✅ Session configured`);
 
       addLog("✓ Session setup complete!");
-      console.log(`==========================================\n`);
+      console.log(`=====================================================\n`);
       setNeedsSessionSetup(false);
       onSessionSetupComplete?.();
+
     } catch (err: any) {
       console.error(`Session setup error:`, err);
       addLog(`✗ Session setup failed: ${err.message}`);
@@ -195,12 +198,23 @@ export function useSessionSetup({
     isSafeDeployed,
     isModuleEnabled,
     chainId,
+    isClassicMode,
     addLog,
     setIsSafeDeployed,
     setIsModuleEnabled,
     setNeedsSessionSetup,
     onSessionSetupComplete,
   ]);
+
+  // NEW: Return null values for classic mode
+  if (isClassicMode) {
+    return {
+      sessionSignerBalance: null,
+      sessionLoading: false,
+      refreshSessionBalance: async () => {},
+      setupSession: async () => {},
+    };
+  }
 
   return {
     sessionSignerBalance,

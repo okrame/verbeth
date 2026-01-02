@@ -1,7 +1,8 @@
 // apps/demo/src/hooks/useMessageListener.ts
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { keccak256, toUtf8Bytes } from "ethers";
+import { keccak256, toUtf8Bytes, getBytes } from "ethers";
+import { computeTagFromInitiator } from "@verbeth/sdk";
 import { dbService } from "../services/DbService.js";
 import {
   LOGCHAIN_SINGLETON_ADDR,
@@ -22,6 +23,8 @@ import {
 interface UseMessageListenerProps {
   readProvider: any;
   address: string | undefined;
+  /** Safe address in fast mode, EOA in classic mode. Used for outbound confirmations. */
+  emitterAddress: string | undefined;
   onLog: (message: string) => void;
   onEventsProcessed: (events: ProcessedEvent[]) => void;
 }
@@ -29,6 +32,7 @@ interface UseMessageListenerProps {
 export const useMessageListener = ({
   readProvider,
   address,
+  emitterAddress,
   onLog,
   onEventsProcessed,
 }: UseMessageListenerProps): MessageListenerResult => {
@@ -183,6 +187,37 @@ export const useMessageListener = ({
     return results;
   };
 
+  /**
+   * Match HSR event to a pending contact using cryptographic tag verification.
+   * This works regardless of whether responder uses EOA or Safe.
+   */
+  const matchHsrToContact = (
+    log: any,
+    pendingContacts: Contact[]
+  ): Contact | null => {
+    const inResponseTo = log.topics[1] as string;
+    
+    // Extract responderEphemeralR (first bytes32 in log.data)
+    // ABI encoding: bytes32 is first 32 bytes = 64 hex chars + 0x prefix
+    const responderEphemeralR = log.data.slice(0, 66);
+    const R = getBytes(responderEphemeralR);
+
+    for (const contact of pendingContacts) {
+      if (!contact.ephemeralKey) continue;
+
+      try {
+        const expectedTag = computeTagFromInitiator(contact.ephemeralKey, R);
+        if (expectedTag.toLowerCase() === inResponseTo.toLowerCase()) {
+          return contact;
+        }
+      } catch {
+        // Skip contacts where tag computation fails
+      }
+    }
+
+    return null;
+  };
+
   // scan specific block range - load contacts from db when needed
   const scanBlockRange = async (
     fromBlock: number,
@@ -225,6 +260,7 @@ export const useMessageListener = ({
       );
 
       if (pendingContacts.length > 0) {
+        // Fetch ALL HSR events (no address filter - responder could be Safe or EOA)
         const responseFilter = {
           address: LOGCHAIN_SINGLETON_ADDR,
           topics: [EVENT_SIGNATURES.HandshakeResponse],
@@ -236,16 +272,12 @@ export const useMessageListener = ({
         );
 
         onLog(
-          `🔍 Found ${responseLogs.length} total handshake responses in blocks ${fromBlock}-${toBlock}`
+          `🔍 Found ${responseLogs.length} HSR events, checking against ${pendingContacts.length} pending contacts...`
         );
 
-        // Match by responder address
+        // Match by cryptographic tag (not address)
         for (const log of responseLogs) {
-          const responderAddress = "0x" + log.topics[2].slice(-40);
-
-          const matchingContact = pendingContacts.find(
-            (c) => c.address.toLowerCase() === responderAddress.toLowerCase()
-          );
+          const matchingContact = matchHsrToContact(log, pendingContacts);
 
           if (matchingContact) {
             const logKey = `${log.transactionHash}-${log.logIndex}`;
@@ -257,6 +289,7 @@ export const useMessageListener = ({
                 rawLog: log,
                 blockNumber: log.blockNumber,
                 timestamp: Date.now(),
+                matchedContactAddress: matchingContact.address, // Pass to processor
               });
             }
           }
@@ -298,10 +331,11 @@ export const useMessageListener = ({
           }
         }
 
-        // 2) OUTBOUND CONFIRMATION: we do not need topic filter, we match logs where sender = our address
-        if (address) {
+        // 2) OUTBOUND CONFIRMATION: use emitterAddress (Safe in fast mode, EOA in classic)
+        const emitter = emitterAddress || address;
+        if (emitter) {
           const senderTopic =
-            "0x000000000000000000000000" + address.slice(2).toLowerCase();
+            "0x000000000000000000000000" + emitter.slice(2).toLowerCase();
           const messageFilterOutConfirm = {
             address: LOGCHAIN_SINGLETON_ADDR,
             topics: [EVENT_SIGNATURES.MessageSent, senderTopic],

@@ -6,6 +6,7 @@ import {
   type IdentityContext,
   decryptMessage,
   parseHandshakePayload,
+  parseBindingMessage,
   verifyHandshakeIdentity,
   IdentityKeyPair,
   decodeUnifiedPubKeys,
@@ -32,6 +33,8 @@ import {
 interface UseMessageProcessorProps {
   readProvider: any;
   address: string | undefined;
+  /** Safe address in fast mode, EOA in classic mode. Used for outbound detection. */
+  emitterAddress: string | undefined;
   identityKeyPair: IdentityKeyPair | null;
   identityContext: IdentityContext;
   onLog: (message: string) => void;
@@ -56,6 +59,7 @@ interface UseMessageProcessorProps {
 export const useMessageProcessor = ({
   readProvider,
   address,
+  emitterAddress,
   identityKeyPair,
   identityContext,
   onLog,
@@ -205,10 +209,23 @@ export const useMessageProcessor = ({
           }
         }
 
+        // Extract EOA (identity) from binding message
+        let identityAddress = cleanSenderAddress; // fallback to event sender
+        if (hasValidIdentityProof && handshakeContent.identityProof?.message) {
+          try {
+            const parsed = parseBindingMessage(handshakeContent.identityProof.message);
+            if (parsed.address) {
+              identityAddress = parsed.address;
+            }
+          } catch (e) {
+          }
+        }
+
         const pendingHandshake: PendingHandshake = {
           id: log.transactionHash,
           ownerAddress: address,
-          sender: cleanSenderAddress,
+          sender: identityAddress,                    // EOA (identity)
+          emitterAddress: cleanSenderAddress,         // Safe or EOA (event sender)
           identityPubKey,
           signingPubKey,
           ephemeralPubKey,
@@ -229,7 +246,7 @@ export const useMessageProcessor = ({
         const handshakeMessage: Message = {
           id: generateTempMessageId(),
           topic: "",
-          sender: cleanSenderAddress,
+          sender: identityAddress,
           recipient: address,
           ciphertext: "",
           timestamp: Date.now(),
@@ -250,7 +267,7 @@ export const useMessageProcessor = ({
         setMessages((prev) => [...prev, handshakeMessage]);
 
         onLog(
-          `📨 Handshake received from ${cleanSenderAddress.slice(0, 8)}... ${
+          `📨 Handshake received from ${identityAddress.slice(0, 8)}... ${
             isVerified ? "✅" : "⚠️"
           }: "${handshakeContent.plaintextPayload}"`
         );
@@ -286,18 +303,20 @@ export const useMessageProcessor = ({
           `🔍 Debug: Loaded ${currentContacts.length} contacts from DB for handshake response`
         );
 
+        // Use matchedContactAddress from listener (tag-based matching)
+        // This works regardless of whether responder is EOA or Safe
         const contact = currentContacts.find(
           (c) =>
-            c.address.toLowerCase() === responder.toLowerCase() &&
+            c.address.toLowerCase() === event.matchedContactAddress?.toLowerCase() &&
             c.status === "handshake_sent"
         );
 
         if (!contact || !contact.ephemeralKey) {
           onLog(
-            `❓ Received handshake response from unknown contact: ${responder.slice(
+            `❓ Received handshake response but no matching pending contact found (responder: ${responder.slice(
               0,
               8
-            )}...`
+            )}...)`
           );
           return;
         }
@@ -319,7 +338,7 @@ export const useMessageProcessor = ({
 
         if (!result.isValid || !result.keys) {
           onLog(
-            `❌ Failed to verify handshake response from ${responder.slice(
+            `❌ Failed to verify handshake response from ${contact.address.slice(
               0,
               8
             )}... - invalid signature or tag mismatch`
@@ -358,13 +377,13 @@ export const useMessageProcessor = ({
         });
         if (!isValidTopics) {
           onLog(
-            `❌ Invalid duplex topics checksum for ${responder.slice(0, 8)}...`
+            `❌ Invalid duplex topics checksum for ${contact.address.slice(0, 8)}...`
           );
           return;
         }
 
         onLog(
-          `✅ Handshake response verified from ${responder.slice(0, 8)}...`
+          `✅ Handshake response verified from ${contact.address.slice(0, 8)}...`
         );
 
         const updatedContact: Contact = {
@@ -381,16 +400,17 @@ export const useMessageProcessor = ({
 
         await dbService.saveContact(updatedContact);
 
+        // Use contact.address (the EOA we initiated to), not responder (could be Safe)
         setContacts((prev) =>
           prev.map((c) =>
-            c.address.toLowerCase() === responder.toLowerCase()
+            c.address.toLowerCase() === contact.address.toLowerCase()
               ? updatedContact
               : c
           )
         );
 
         onLog(
-          `🤝 Handshake completed with ${responder.slice(0, 8)}... : "${
+          `🤝 Handshake completed with ${contact.address.slice(0, 8)}... : "${
             note || "No message"
           }"`
         );
@@ -398,7 +418,7 @@ export const useMessageProcessor = ({
         const responseMessage: Message = {
           id: generateTempMessageId(),
           topic: updatedContact.topicInbound || "",
-          sender: responder,
+          sender: contact.address, // Use contact address, not responder
           recipient: address,
           ciphertext: "",
           timestamp: Date.now(),
@@ -443,7 +463,9 @@ export const useMessageProcessor = ({
         const ciphertextJson = new TextDecoder().decode(
           hexToUint8Array(ciphertextBytes)
         );
-        const isOurMessage = sender.toLowerCase() === address.toLowerCase();
+        // Use emitterAddress (Safe in fast mode) for outbound detection
+        const emitter = emitterAddress || address;
+        const isOurMessage = emitter && sender.toLowerCase() === emitter.toLowerCase();
 
         if (!isOurMessage) {
           const already = await dbService.getByDedupKey(key);
@@ -583,29 +605,17 @@ export const useMessageProcessor = ({
         }
 
         // INCOMING MESSAGE
+        // Match by topicInbound (not sender address) - works for EOA or Safe senders
         const currentContacts = await dbService.getAllContacts(address);
         const contact = currentContacts.find(
           (c) =>
-            c.address.toLowerCase() === sender.toLowerCase() &&
+            c.topicInbound === topic &&
             c.status === "established"
         );
 
         if (!contact || !contact.identityPubKey || !contact.signingPubKey) {
           onLog(
-            `❓ Received message from unknown contact: ${sender.slice(0, 8)}...`
-          );
-          return;
-        }
-
-        if (contact.topicInbound && topic !== contact.topicInbound) {
-          onLog(
-            `❌ Message topic mismatch from ${sender.slice(
-              0,
-              8
-            )}... - expected ${contact.topicInbound.slice(
-              0,
-              10
-            )}..., got ${topic.slice(0, 10)}...`
+            `❓ Received message on unknown topic: ${topic.slice(0, 10)}... from ${sender.slice(0, 8)}...`
           );
           return;
         }
@@ -617,14 +627,14 @@ export const useMessageProcessor = ({
         );
 
         if (!decryptedMessage) {
-          onLog(`✗ Failed to decrypt message from ${sender.slice(0, 8)}...`);
+          onLog(`✗ Failed to decrypt message from ${contact.address.slice(0, 8)}...`);
           return;
         }
 
         const message: Message = {
           id: generateMessageId(log.transactionHash, log),
           topic: topic,
-          sender: sender,
+          sender: contact.address, // Use contact address, not on-chain sender
           recipient: address,
           ciphertext: ciphertextJson,
           timestamp: Number(timestamp) * 1000,
@@ -663,15 +673,16 @@ export const useMessageProcessor = ({
 
           await dbService.saveContact(updatedContact);
 
+          // Use contact.address (not sender from event)
           setContacts((prev) =>
             prev.map((c) =>
-              c.address.toLowerCase() === sender.toLowerCase()
+              c.address.toLowerCase() === contact.address.toLowerCase()
                 ? updatedContact
                 : c
             )
           );
 
-          onLog(`Message from ${sender.slice(0, 8)}...: "${decryptedMessage}"`);
+          onLog(`Message from ${contact.address.slice(0, 8)}...: "${decryptedMessage}"`);
         }
       } catch (error) {
         onLog(`✗ Failed to process message log: ${error}`);

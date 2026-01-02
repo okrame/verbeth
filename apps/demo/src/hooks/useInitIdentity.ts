@@ -16,8 +16,17 @@ import {
   SafeSessionSigner,
 } from '@verbeth/sdk';
 import { dbService } from '../services/DbService.js';
-import { getOrCreateSafeForOwner } from '../services/safeAccount.js';
-import { LOGCHAIN_SINGLETON_ADDR, SAFE_MODULE_ADDRESS, StoredIdentity } from '../types.js';
+import {
+  getOrCreateSafeForOwner,
+  predictVerbEthSafeAddress,
+  isHelperAvailable,
+} from '../services/safeAccount.js';
+import {
+  LOGCHAIN_SINGLETON_ADDR,
+  SAFE_MODULE_ADDRESS,
+  StoredIdentity,
+  ExecutionMode,
+} from '../types.js';
 
 interface UseInitIdentityParams {
   walletClient: any;
@@ -26,7 +35,6 @@ interface UseInitIdentityParams {
   readProvider: any;
   ready: boolean;
   addLog: (message: string) => void;
-
   onIdentityCreated?: () => void;
   onReset?: () => void;
 }
@@ -52,15 +60,23 @@ export function useInitIdentity({
   const [needsIdentityCreation, setNeedsIdentityCreation] = useState(false);
   const [loading, setLoading] = useState(false);
   const [reinitTrigger, setReinitTrigger] = useState(0);
-  
+
   const [sessionSignerAddr, setSessionSignerAddr] = useState<string | null>(null);
   const [needsSessionSetup, setNeedsSessionSetup] = useState(false);
   const [isSafeDeployed, setIsSafeDeployed] = useState(false);
   const [isModuleEnabled, setIsModuleEnabled] = useState(false);
   const [signingStep, setSigningStep] = useState<1 | 2 | null>(null);
 
+  // NEW: Execution mode state
+  const [executionMode, setExecutionMode] = useState<ExecutionMode | null>(null);
+  const [needsModeSelection, setNeedsModeSelection] = useState(false);
+  const [emitterAddress, setEmitterAddress] = useState<string | null>(null);
+
   const rpId = globalThis.location?.host ?? '';
   const identityContext = useMemo(() => ({ chainId, rpId }), [chainId, rpId]);
+
+  // NEW: Check if fast mode is available on this chain
+  const fastModeAvailable = useMemo(() => isHelperAvailable(chainId), [chainId]);
 
   const resetState = useCallback(() => {
     setCurrentAccount(null);
@@ -76,6 +92,10 @@ export function useInitIdentity({
     setNeedsSessionSetup(false);
     setIsSafeDeployed(false);
     setIsModuleEnabled(false);
+    // NEW
+    setExecutionMode(null);
+    setNeedsModeSelection(false);
+    setEmitterAddress(null);
     onReset?.();
   }, [onReset]);
 
@@ -90,13 +110,18 @@ export function useInitIdentity({
     if (storedIdentity && storedIdentity.sessionPrivateKey) {
       setIdentityKeyPair(storedIdentity.keyPair);
       setIdentityProof(storedIdentity.proof ?? null);
+      // NEW: Restore mode from storage
+      setExecutionMode(storedIdentity.executionMode ?? 'fast'); // default to fast for legacy
+      setEmitterAddress(storedIdentity.emitterAddress ?? null);
       setNeedsIdentityCreation(false);
-      addLog(`Identity keys restored from database`);
+      setNeedsModeSelection(false);
+      addLog(`Identity restored (${storedIdentity.executionMode ?? 'fast'} mode)`);
     } else if (storedIdentity && !storedIdentity.sessionPrivateKey) {
-      setNeedsIdentityCreation(true);
-      addLog(`Identity upgrade required (to derive session key)`);
+      setNeedsModeSelection(true);
+      addLog(`Identity upgrade required`);
     } else {
-      setNeedsIdentityCreation(true);
+      // NEW: Need mode selection before identity creation
+      setNeedsModeSelection(true);
     }
   }, [addLog]);
 
@@ -113,17 +138,41 @@ export function useInitIdentity({
 
     const net = await ethersProvider.getNetwork();
     if (Number(net.chainId) !== chainId) {
-      addLog(`Wrong network: connected to chain ${Number(net.chainId)}, expected ${chainId}. Please switch network in your wallet.`);
+      addLog(`Wrong network: connected to chain ${Number(net.chainId)}, expected ${chainId}.`);
       return;
     }
 
     const storedIdentity = await dbService.getIdentity(address);
-    
+
     if (!storedIdentity || !storedIdentity.sessionPrivateKey) {
-      addLog(`Awaiting identity creation...`);
+      addLog(`Awaiting mode selection & identity creation...`);
       return;
     }
 
+    const currentMode = storedIdentity.executionMode ?? 'fast';
+    setExecutionMode(currentMode);
+    setEmitterAddress(storedIdentity.emitterAddress ?? address);
+
+    // =========================================================================
+    // CLASSIC MODE: EOA executor, no Safe setup needed
+    // =========================================================================
+    if (currentMode === 'classic') {
+      addLog(`Classic mode: using EOA executor`);
+
+      const contractInstance = LogChainV1__factory.connect(LOGCHAIN_SINGLETON_ADDR, ethersSigner as any);
+      const executorInstance = ExecutorFactory.createEOA(contractInstance);
+
+      setExecutor(executorInstance);
+      setContract(contractInstance);
+      setTxSigner(ethersSigner);
+      setSafeAddr(null);
+      setNeedsSessionSetup(false);
+      return;
+    }
+
+    // =========================================================================
+    // FAST MODE: VerbEth Safe + session signer
+    // =========================================================================
     const sessionPrivKey = storedIdentity.sessionPrivateKey;
     const sessionWallet = new Wallet(sessionPrivKey, readProvider);
     const sessionAddr = storedIdentity.sessionAddress ?? await sessionWallet.getAddress();
@@ -139,6 +188,8 @@ export function useInitIdentity({
         sessionSigner: sessionAddr,
         target: LOGCHAIN_SINGLETON_ADDR,
       },
+      // NEW: Never use API for fast mode
+      useApiLookup: false,
     });
 
     setSafeAddr(safeAddress);
@@ -148,24 +199,21 @@ export function useInitIdentity({
       setNeedsSessionSetup(true);
     }
 
-    console.log(`\n========== SAFE & SESSION INFO ==========`);
+    console.log(`\n========== SAFE & SESSION INFO (Fast Mode) ==========`);
     console.log(`Connected EOA wallet: ${address}`);
-    console.log(`Associated Safe address: ${safeAddress}`);
+    console.log(`VerbEth Safe address: ${safeAddress}`);
     console.log(`   Safe deployed: ${isDeployed}`);
     console.log(`   Module enabled: ${moduleEnabled}`);
     console.log(`   Chain ID: ${chainId}`);
-    console.log(`   Session signer address: ${sessionAddr}`);
+    console.log(`   Session signer: ${sessionAddr}`);
 
-    // Check session signer balance
     const balance = await readProvider.getBalance(sessionAddr);
-    const balanceEth = Number(balance) / 1e18;
-    console.log(`Session signer balance: ${balanceEth.toFixed(6)} ETH (${balance.toString()} wei)`);
+    console.log(`   Session signer balance: ${Number(balance) / 1e18} ETH`);
 
     if (balance === 0n) {
       addLog(`Session signer needs funding: ${sessionAddr}`);
     }
 
-    // Create SafeSessionSigner for transaction signing
     const safeSessionSigner = new SafeSessionSigner({
       provider: readProvider,
       safeAddress,
@@ -175,20 +223,19 @@ export function useInitIdentity({
     });
     setTxSigner(safeSessionSigner);
 
-    // Check if session is properly configured on the module
     if (isDeployed) {
       const isValid = await safeSessionSigner.isSessionValid();
       const isTargetAllowed = await safeSessionSigner.isTargetAllowed();
-      console.log(`Session valid on module: ${isValid}`);
-      console.log(`LogChain target allowed: ${isTargetAllowed}`);
+      console.log(`   Session valid: ${isValid}`);
+      console.log(`   Target allowed: ${isTargetAllowed}`);
       setNeedsSessionSetup(!isValid || !isTargetAllowed);
 
       if (!isValid || !isTargetAllowed) {
-        addLog(`Session needs setup on module (valid: ${isValid}, target: ${isTargetAllowed})`);
+        addLog(`Session needs setup (valid: ${isValid}, target: ${isTargetAllowed})`);
       }
     }
 
-    console.log(`==========================================\n`);
+    console.log(`=====================================================\n`);
 
     const contractInstance = LogChainV1__factory.connect(LOGCHAIN_SINGLETON_ADDR, safeSessionSigner as any);
     const executorInstance = ExecutorFactory.createEOA(contractInstance);
@@ -197,16 +244,26 @@ export function useInitIdentity({
     setContract(contractInstance);
   }, [walletClient, address, currentAccount, chainId, readProvider, addLog, switchToAccount]);
 
-  const createIdentity = useCallback(async () => {
+  // ===========================================================================
+  // NEW: Mode-aware identity creation
+  // ===========================================================================
+  const createIdentity = useCallback(async (selectedMode: ExecutionMode) => {
     if (!identitySigner || !address || !walletClient) {
-      addLog('✗ Missing signer/provider or address for identity creation');
+      addLog('✗ Missing signer/provider or address');
       return;
     }
+
+    if (selectedMode === 'custom') {
+      addLog('Custom mode coming soon');
+      return;
+    }
+
     setSigningStep(1);
     setLoading(true);
+
     try {
       // ================================================================
-      // Derive all keys from seed signature (1 signature)
+      // Step 1: Derive keys (same for all modes)
       // ================================================================
       addLog('Deriving identity keys (signature 1/2)...');
 
@@ -215,31 +272,30 @@ export function useInitIdentity({
         address
       );
 
-      console.log(`✓ Verbeth keys derived:`);
-      console.log(`   Session signer: ${derivedKeys.sessionAddress}`);
+      console.log(`✓ Keys derived, session signer: ${derivedKeys.sessionAddress}`);
 
       // ================================================================
-      // PREDICT SAFE ADDRESS (no signature needed)
+      // Step 2: Determine emitter address based on mode
       // ================================================================
-      const ethersProvider = new BrowserProvider(walletClient.transport);
-      const ethersSigner = await ethersProvider.getSigner();
+      let emitter: string;
 
-      const { safeAddress: predictedSafe } = await getOrCreateSafeForOwner({
-        chainId,
-        ownerAddress: address as `0x${string}`,
-        providerEip1193: walletClient.transport,
-        ethersSigner,
-        deployIfMissing: false,
-        sessionConfig: {
-          sessionSigner: derivedKeys.sessionAddress,
-          target: LOGCHAIN_SINGLETON_ADDR,
-        },
-      });
-
-      console.log(`✓ Predicted Safe: ${predictedSafe}`);
+      if (selectedMode === 'classic') {
+        // Classic mode: EOA is the emitter
+        emitter = address;
+        console.log(`✓ Classic mode: emitter = EOA (${address})`);
+      } else {
+        // Fast mode: Predict VerbEth Safe address (deterministic, no API)
+        emitter = await predictVerbEthSafeAddress({
+          chainId,
+          ownerAddress: address as `0x${string}`,
+          sessionSignerAddr: derivedKeys.sessionAddress,
+          providerEip1193: walletClient.transport,
+        });
+        console.log(`✓ Fast mode: emitter = VerbEth Safe (${emitter})`);
+      }
 
       // ================================================================
-      // Create binding proof with Safe address (1 signature)
+      // Step 3: Create binding proof with correct emitter
       // ================================================================
       addLog('Creating binding proof (signature 2/2)...');
       setSigningStep(2);
@@ -248,16 +304,13 @@ export function useInitIdentity({
         identitySigner,
         address,
         derivedKeys,
-        predictedSafe,
+        emitter,
         identityContext
       );
 
       // ================================================================
-      // STORE IDENTITY
+      // Step 4: Store identity with mode info
       // ================================================================
-      setIdentityKeyPair(derivedKeys.keyPair);
-      setIdentityProof(proof);
-
       const identityToStore: StoredIdentity = {
         address: address,
         keyPair: derivedKeys.keyPair,
@@ -265,30 +318,41 @@ export function useInitIdentity({
         proof: proof,
         sessionPrivateKey: derivedKeys.sessionPrivateKey,
         sessionAddress: derivedKeys.sessionAddress,
+        // NEW: Store mode and emitter
+        executionMode: selectedMode,
+        emitterAddress: emitter,
       };
 
       await dbService.saveIdentity(identityToStore);
-      addLog(`✓ Identity created with derived session key`);
-      addLog(`  Session signer: ${derivedKeys.sessionAddress}`);
-      setNeedsIdentityCreation(false);
-      setSigningStep(null);
-      onIdentityCreated?.();
 
-      // Trigger re-initialization to complete Safe setup
+      setIdentityKeyPair(derivedKeys.keyPair);
+      setIdentityProof(proof);
+      setExecutionMode(selectedMode);
+      setEmitterAddress(emitter);
+      setNeedsIdentityCreation(false);
+      setNeedsModeSelection(false);
+      setSigningStep(null);
+
+      addLog(`✓ Identity created (${selectedMode} mode)`);
+      addLog(`  Emitter: ${emitter.slice(0, 10)}...`);
+
+      onIdentityCreated?.();
       setReinitTrigger((t) => t + 1);
+
     } catch (signError: any) {
       if (signError.code === 4001) {
         addLog('User rejected signing request.');
       } else {
         console.error('Identity creation error:', signError);
-        addLog(`✗ Failed to derive identity: ${signError.message}`);
+        addLog(`✗ Failed: ${signError.message}`);
       }
     } finally {
       setLoading(false);
+      setSigningStep(null);
     }
   }, [identitySigner, address, walletClient, chainId, identityContext, addLog, onIdentityCreated]);
 
-  // Handle initialization on ready/wallet/address/reinit changes
+  // Handle initialization
   useEffect(() => {
     const handleInit = async () => {
       try {
@@ -301,7 +365,7 @@ export function useInitIdentity({
         }
       } catch (error) {
         console.error('Failed to initialize:', error);
-        addLog(`✗ Failed to initialize: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        addLog(`✗ Failed to initialize: ${error instanceof Error ? error.message : 'Unknown'}`);
       }
     };
     handleInit();
@@ -321,7 +385,15 @@ export function useInitIdentity({
     identityLoading: loading,
     identityContext,
     signingStep,
-    // Session state (owned here, used by useSessionSetup)
+
+    // NEW: Mode state
+    executionMode,
+    needsModeSelection,
+    emitterAddress,
+    fastModeAvailable,
+    setExecutionMode,
+
+    // Session state
     sessionSignerAddr,
     needsSessionSetup,
     isSafeDeployed,
@@ -330,6 +402,7 @@ export function useInitIdentity({
     setNeedsSessionSetup,
     setIsSafeDeployed,
     setIsModuleEnabled,
+
     // Actions
     createIdentity,
     resetState,

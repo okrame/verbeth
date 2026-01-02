@@ -22,11 +22,11 @@ export class VerbEthDatabase extends Dexie {
     this.version(1).stores({
       identity: "address",
       contacts:
-        "[address+ownerAddress], ownerAddress, lastTimestamp, status, topicOutbound, topicInbound",
+        "[address+ownerAddress], ownerAddress, lastTimestamp, status, topicOutbound, topicInbound, emitterAddress",
       messages:
         "id, ownerAddress, sender, recipient, topic, nonce, timestamp, blockTimestamp, read, status, [ownerAddress+sender+status], [ownerAddress+sender+topic+nonce+status]",
-      dedup: "key, messageId, txHash, blockNumber", // key is PRIMARY KEY
-      pendingHandshakes: "id, ownerAddress, sender, timestamp, verified",
+      dedup: "key, messageId, txHash, blockNumber",
+      pendingHandshakes: "id, ownerAddress, sender, timestamp, verified, emitterAddress",
       settings: "name",
     });
 

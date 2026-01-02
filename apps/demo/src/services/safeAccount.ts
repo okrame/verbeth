@@ -20,25 +20,88 @@ export interface SessionConfig {
   target: string
 }
 
+export async function predictVerbEthSafeAddress(params: {
+  chainId: number
+  ownerAddress: `0x${string}`
+  sessionSignerAddr: string
+  providerEip1193: any
+  contractNetworks?: any
+}): Promise<`0x${string}`> {
+  const { chainId, ownerAddress, sessionSignerAddr, providerEip1193, contractNetworks } = params
+
+  const sessionConfig: SessionConfig = {
+    sessionSigner: sessionSignerAddr,
+    target: LOGCHAIN_SINGLETON_ADDR,
+  }
+
+  const safeAccountConfig = buildSafeAccountConfig(
+    getAddress(ownerAddress),
+    chainId,
+    sessionConfig
+  )
+
+  const predictedSafe = {
+    safeAccountConfig,
+    safeDeploymentConfig: { saltNonce: '0' },
+  }
+
+  const maybeNetworks = contractNetworks ? { contractNetworks } : {}
+
+  const tempKit = await Safe.init({
+    provider: providerEip1193,
+    signer: ownerAddress,
+    predictedSafe,
+    ...maybeNetworks,
+  })
+
+  return (await tempKit.getAddress()) as `0x${string}`
+}
+
+export async function checkSafeOnChainStatus(params: {
+  safeAddress: `0x${string}`
+  providerEip1193: any
+  ownerAddress: `0x${string}`
+  contractNetworks?: any
+}): Promise<{
+  isDeployed: boolean
+  moduleEnabled: boolean
+}> {
+  const { safeAddress, providerEip1193, ownerAddress, contractNetworks } = params
+  const maybeNetworks = contractNetworks ? { contractNetworks } : {}
+
+  try {
+    const protocolKit = await Safe.init({
+      provider: providerEip1193,
+      signer: ownerAddress,
+      safeAddress,
+      ...maybeNetworks,
+    })
+
+    const isDeployed = await protocolKit.isSafeDeployed()
+    if (!isDeployed) {
+      return { isDeployed: false, moduleEnabled: false }
+    }
+
+    const moduleEnabled = await protocolKit.isModuleEnabled(SAFE_MODULE_ADDRESS)
+    return { isDeployed: true, moduleEnabled }
+  } catch {
+    return { isDeployed: false, moduleEnabled: false }
+  }
+}
+
 export async function getOrCreateSafeForOwner(params: {
   chainId: number
   ownerAddress: `0x${string}`
   providerEip1193: any
   ethersSigner: any
-  /**
-   * Deploy the Safe if it doesn't exist yet
-   */
   deployIfMissing?: boolean
-  /**
-   * Session config - MUST be provided for consistent address prediction.
-   * The Safe address is deterministic based on setup params including to/data.
-   * Pass the same sessionConfig for both prediction and deployment.
-   */
   sessionConfig: SessionConfig
-  /**
-   * Pass Safe contractNetworks if on a chain not bundled in this protocol-kit version
-   */
   contractNetworks?: any
+  /**
+   * NEW: Only set to true for "custom" mode (import existing Safe)
+   * Default: false (deterministic VerbEth Safe only)
+   */
+  useApiLookup?: boolean
 }) {
   const {
     chainId,
@@ -48,110 +111,86 @@ export async function getOrCreateSafeForOwner(params: {
     deployIfMissing = false,
     sessionConfig,
     contractNetworks,
+    useApiLookup = false, // NEW: defaults to false
   } = params
 
   const ownerAddress = getAddress(rawOwnerAddress) as `0x${string}`
-
-  const apiKit = new SafeApiKit({
-    chainId: BigInt(chainId),
-    ...(SAFE_API_KEY ? { apiKey: SAFE_API_KEY } : {}),
-  })
-
-  let existingSafeAddress: `0x${string}` | undefined
-
-  // 1) Try to find an existing Safe for owner via API
-  //    Note: This may return a Safe with different config. We'll verify below.
-  try {
-    const { safes } = await apiKit.getSafesByOwner(ownerAddress)
-    existingSafeAddress = safes?.[0] as `0x${string}` | undefined
-  } catch (e: any) {
-    const status =
-      e?.response?.status ??
-      e?.status ??
-      e?.cause?.status ??
-      (typeof e?.message === 'string' && e.message.includes('404') ? 404 : undefined)
-
-    if (status === 404) {
-      existingSafeAddress = undefined
-    } else {
-      throw new Error(`Safe Tx Service error: ${e?.message ?? String(e)}`)
-    }
-  }
-
-  // Spread optional contractNetworks only if provided
   const maybeNetworks = contractNetworks ? { contractNetworks } : {}
 
-  // 2) Build predicted safe config - ALWAYS include sessionConfig for consistent address
+  // 1) ALWAYS build deterministic config first
   const safeAccountConfig = buildSafeAccountConfig(ownerAddress, chainId, sessionConfig)
-
   const predictedSafe = {
     safeAccountConfig,
-    safeDeploymentConfig: {
-      saltNonce: '0',
-    },
+    safeDeploymentConfig: { saltNonce: '0' },
   }
 
-  // 2b) If API didn't find a Safe, check on-chain at predicted address
-  if (!existingSafeAddress) {
-    const tempKit = await Safe.init({
-      provider: providerEip1193,
-      signer: ownerAddress,
-      predictedSafe,
-      ...maybeNetworks,
-    })
-    const predictedAddress = await tempKit.getAddress()
-    const isDeployedOnChain = await tempKit.isSafeDeployed()
-
-    if (isDeployedOnChain) {
-      existingSafeAddress = predictedAddress as `0x${string}`
-      console.log(`Safe not in API but found on-chain at ${predictedAddress}`)
-    }
-  }
-
-  // 3) If existing Safe found, use it (may have been deployed with different config)
-  if (existingSafeAddress) {
-    const protocolKit = await Safe.init({
-      provider: providerEip1193,
-      signer: ownerAddress,
-      safeAddress: existingSafeAddress,
-      ...maybeNetworks,
-    })
-
-    const moduleEnabled = await protocolKit.isModuleEnabled(SAFE_MODULE_ADDRESS)
-
-    return {
-      safeAddress: existingSafeAddress,
-      protocolKit,
-      isDeployed: true,
-      moduleEnabled,
-      sessionConfigured: false, // Can't know without checking module state
-    }
-  }
-
-  // 4) No existing Safe - predict address with our config
-  let protocolKit = await Safe.init({
+  // 2) Compute deterministic VerbEth Safe address
+  const tempKit = await Safe.init({
     provider: providerEip1193,
     signer: ownerAddress,
     predictedSafe,
     ...maybeNetworks,
   })
+  const verbEthSafeAddress = (await tempKit.getAddress()) as `0x${string}`
 
-  const safeAddress = (await protocolKit.getAddress()) as `0x${string}`
+  // 3) Check if OUR deterministic Safe exists on-chain
+  const isDeployedOnChain = await tempKit.isSafeDeployed()
 
+  if (isDeployedOnChain) {
+    // Our VerbEth Safe exists - use it
+    const protocolKit = await Safe.init({
+      provider: providerEip1193,
+      signer: ownerAddress,
+      safeAddress: verbEthSafeAddress,
+      ...maybeNetworks,
+    })
+
+    const moduleEnabled = await protocolKit.isModuleEnabled(SAFE_MODULE_ADDRESS)
+
+    console.log(`Found VerbEth Safe on-chain at ${verbEthSafeAddress}`)
+    return {
+      safeAddress: verbEthSafeAddress,
+      protocolKit,
+      isDeployed: true,
+      moduleEnabled,
+      sessionConfigured: moduleEnabled, // If module enabled via helper, session is configured
+    }
+  }
+
+  // 4) OPTIONAL: API lookup for custom mode only
+  if (useApiLookup) {
+    const apiKit = new SafeApiKit({
+      chainId: BigInt(chainId),
+      ...(SAFE_API_KEY ? { apiKey: SAFE_API_KEY } : {}),
+    })
+
+    try {
+      const { safes } = await apiKit.getSafesByOwner(ownerAddress)
+      if (safes?.length) {
+        console.log(`API found ${safes.length} Safe(s) for owner (custom mode)`)
+        // For custom mode, caller would handle Safe selection UI
+        // This is placeholder for "coming soon" feature
+      }
+    } catch (e: any) {
+      console.warn(`Safe API lookup failed: ${e?.message}`)
+    }
+  }
+
+  // 5) VerbEth Safe not deployed yet - return predicted address
   if (!deployIfMissing) {
     return {
-      safeAddress,
-      protocolKit,
+      safeAddress: verbEthSafeAddress,
+      protocolKit: tempKit,
       isDeployed: false,
       moduleEnabled: false,
       sessionConfigured: false,
     }
   }
 
-  // 5) Deploy (createProxyWithNonce tx)
-  console.log(`🚀 Deploying Safe with module + session configured...`)
+  // 6) Deploy the VerbEth Safe
+  console.log(`🚀 Deploying VerbEth Safe with module + session configured...`)
 
-  const deploymentTx = await protocolKit.createSafeDeploymentTransaction()
+  const deploymentTx = await tempKit.createSafeDeploymentTransaction()
 
   const txResp = await ethersSigner.sendTransaction({
     to: deploymentTx.to,
@@ -160,52 +199,44 @@ export async function getOrCreateSafeForOwner(params: {
   })
   const receipt = await txResp.wait()
 
-  const statusOk = receipt?.status === 1 || receipt?.status === 1n
-  if (!statusOk) {
+  if (receipt?.status !== 1 && receipt?.status !== 1n) {
     throw new Error('Safe deployment reverted')
   }
 
-  console.log(`✅ Safe deployed at ${safeAddress}`)
+  console.log(`✅ VerbEth Safe deployed at ${verbEthSafeAddress}`)
 
-  // If we used the helper with sessionConfig, module + session are already configured
-  // Skip verification to avoid timing issues with RPC propagation
   const helperAddress = MODULE_SETUP_HELPER_ADDRESS[chainId]
   if (helperAddress && sessionConfig) {
     console.log(`   Module enabled: true (via helper)`)
     console.log(`   Session configured: true (via helper)`)
 
     return {
-      safeAddress,
-      protocolKit: null, // Not needed - caller should trigger reinit
+      safeAddress: verbEthSafeAddress,
+      protocolKit: null,
       isDeployed: true,
       moduleEnabled: true,
       sessionConfigured: true,
     }
   }
 
-  // Fallback: re-init and verify (for chains without helper)
-  // Add small delay to allow RPC propagation
+  // Fallback for chains without helper
   await new Promise((resolve) => setTimeout(resolve, 2000))
 
-  protocolKit = await Safe.init({
+  const protocolKit = await Safe.init({
     provider: providerEip1193,
     signer: ownerAddress,
-    safeAddress,
+    safeAddress: verbEthSafeAddress,
     ...maybeNetworks,
   })
 
   const moduleEnabled = await protocolKit.isModuleEnabled(SAFE_MODULE_ADDRESS)
-  const sessionConfigured = false // Helper wasn't used
-
-  console.log(`   Module enabled: ${moduleEnabled}`)
-  console.log(`   Session configured: ${sessionConfigured}`)
 
   return {
-    safeAddress,
+    safeAddress: verbEthSafeAddress,
     protocolKit,
     isDeployed: true,
     moduleEnabled,
-    sessionConfigured,
+    sessionConfigured: false,
   }
 }
 
@@ -249,6 +280,10 @@ function buildSafeAccountConfig(
     to: helperAddress,
     data: setupData,
   }
+}
+
+export function isHelperAvailable(chainId: number): boolean {
+  return !!MODULE_SETUP_HELPER_ADDRESS[chainId]
 }
 
 /**
