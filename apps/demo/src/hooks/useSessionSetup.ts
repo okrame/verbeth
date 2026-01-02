@@ -21,10 +21,7 @@ interface UseSessionSetupParams {
   setIsSafeDeployed: (deployed: boolean) => void;
   setIsModuleEnabled: (enabled: boolean) => void;
   setNeedsSessionSetup: (needs: boolean) => void;
-  // NEW: Mode from useInitIdentity
   executionMode: ExecutionMode | null;
-  // Callbacks
-  onSessionSetupComplete?: () => void;
 }
 
 export function useSessionSetup({
@@ -41,14 +38,10 @@ export function useSessionSetup({
   setIsModuleEnabled,
   setNeedsSessionSetup,
   executionMode,
-  onSessionSetupComplete,
 }: UseSessionSetupParams) {
   const [sessionSignerBalance, setSessionSignerBalance] = useState<bigint | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // ===========================================================================
-  // NEW: Skip everything for classic mode
-  // ===========================================================================
   const isClassicMode = executionMode === 'classic';
 
   // Refresh session signer balance (only for fast mode)
@@ -81,7 +74,7 @@ export function useSessionSetup({
   }, [sessionSignerAddr, readProvider, isClassicMode]);
 
   const setupSession = useCallback(async () => {
-    // NEW: Guard for classic mode
+    //Guard for classic mode
     if (isClassicMode) {
       addLog("Classic mode: no session setup needed");
       return;
@@ -117,7 +110,7 @@ export function useSessionSetup({
             sessionSigner: sessionSignerAddr,
             target: LOGCHAIN_SINGLETON_ADDR,
           },
-          useApiLookup: false, // NEW: deterministic only
+          useApiLookup: false, 
         });
 
         if (!isDeployed) {
@@ -130,9 +123,10 @@ export function useSessionSetup({
         if (sessionConfigured) {
           console.log(`✅ All configured in 1 tx`);
           addLog("✓ Setup complete!");
+          setIsModuleEnabled(true);
           setNeedsSessionSetup(false);
-          await new Promise(resolve => setTimeout(resolve, 1500));
-          onSessionSetupComplete?.();
+          // Don't call onSessionSetupComplete - state already updated via setters.
+          // Calling reinit would read stale RPC data and overwrite correct state.
           return;
         }
 
@@ -182,7 +176,6 @@ export function useSessionSetup({
       addLog("✓ Session setup complete!");
       console.log(`=====================================================\n`);
       setNeedsSessionSetup(false);
-      onSessionSetupComplete?.();
 
     } catch (err: any) {
       console.error(`Session setup error:`, err);
@@ -203,10 +196,9 @@ export function useSessionSetup({
     setIsSafeDeployed,
     setIsModuleEnabled,
     setNeedsSessionSetup,
-    onSessionSetupComplete,
   ]);
 
-  // NEW: Return null values for classic mode
+  //Return null values for classic mode
   if (isClassicMode) {
     return {
       sessionSignerBalance: null,

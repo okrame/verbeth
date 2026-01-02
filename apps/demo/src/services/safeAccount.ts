@@ -111,7 +111,7 @@ export async function getOrCreateSafeForOwner(params: {
     deployIfMissing = false,
     sessionConfig,
     contractNetworks,
-    useApiLookup = false, // NEW: defaults to false
+    useApiLookup = false, 
   } = params
 
   const ownerAddress = getAddress(rawOwnerAddress) as `0x${string}`

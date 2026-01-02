@@ -83,7 +83,6 @@ export default function App() {
     executionMode,
     emitterAddress,
     createIdentity,
-    triggerReinit,
   } = useInitIdentity({
     walletClient,
     address,
@@ -116,7 +115,6 @@ export default function App() {
     setIsSafeDeployed,
     setIsModuleEnabled,
     setNeedsSessionSetup,
-    onSessionSetupComplete: () => triggerReinit(),
     executionMode,
   });
 
@@ -250,7 +248,7 @@ export default function App() {
           {/* LEFT: title */}
           <div className="flex flex-col items-start">
             <h1 className="text-2xl sm:text-4xl font-extrabold leading-tight">
-              WorldLog Chat
+              World Post
             </h1>
             <div className="text-xs text-gray-400 pl-0.5 mt-1">
               powered by Verbeth SDK

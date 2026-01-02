@@ -44,7 +44,6 @@ export function SessionSetupPrompt({
   // Determine what setup is needed
   const getSetupInfo = () => {
     if (!isSafeDeployed) {
-      // New user: everything in 1 tx
       return {
         txCount: "1 tx",
         title: "Deploy & Authorize",

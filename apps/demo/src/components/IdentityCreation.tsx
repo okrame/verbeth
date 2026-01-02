@@ -9,7 +9,6 @@ interface IdentityCreationProps {
     onImportIdentity?: () => void;
     address: string;
     signingStep?: 1 | 2 | null;
-    // NEW: Mode-related props
     needsModeSelection: boolean;
     fastModeAvailable: boolean;
     chainId: number;
@@ -100,7 +99,6 @@ function StepIndicator({ step }: { step: 1 | 2 }) {
     );
 }
 
-// NEW: Mode selection card component
 function ModeCard({
     mode,
     title,
@@ -168,7 +166,7 @@ export function IdentityCreation({
     fastModeAvailable,
     chainId,
 }: IdentityCreationProps) {
-    // NEW: Track selected mode locally before identity creation starts
+    //Track selected mode locally before identity creation starts
     const [selectedMode, setSelectedMode] = useState<ExecutionMode | null>(null);
 
     const handleModeSelect = (mode: ExecutionMode) => {
