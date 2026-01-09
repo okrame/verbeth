@@ -203,10 +203,13 @@ export const useMessageListener = ({
     const R = getBytes(responderEphemeralR);
 
     for (const contact of pendingContacts) {
-      if (!contact.ephemeralKey) continue;
+  if (!contact.handshakeEphemeralSecret) continue;
 
       try {
-        const expectedTag = computeTagFromInitiator(contact.ephemeralKey, R);
+        const expectedTag = computeTagFromInitiator(
+          getBytes(contact.handshakeEphemeralSecret),
+          R
+        );
         if (expectedTag.toLowerCase() === inResponseTo.toLowerCase()) {
           return contact;
         }

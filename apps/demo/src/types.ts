@@ -1,5 +1,6 @@
-import type { IdentityKeyPair, IdentityProof } from '@verbeth/sdk';
-import { keccak256, toUtf8Bytes } from 'ethers';
+import type { IdentityKeyPair, IdentityProof, RatchetSession as SDKRatchetSession, SessionStatus, SkippedKey  } from '@verbeth/sdk';
+import { keccak256, toUtf8Bytes, hexlify, getBytes } from 'ethers';
+export type { SessionStatus } from '@verbeth/sdk';
 
 /* ------------------------------- CONSTANTS -------------------------------- */
 export const LOGCHAIN_SINGLETON_ADDR =
@@ -40,8 +41,6 @@ export interface Contact {
   identityPubKey?: Uint8Array;
   /** Contact's Ed25519 public key for signature verification */
   signingPubKey?: Uint8Array;
-  /** Contact's ephemeral public key from handshake */
-  ephemeralKey?: Uint8Array;
   /** Topic for outbound messages (owner → contact) */
   topicOutbound?: string;
   /** Topic for inbound messages (contact → owner) */
@@ -55,6 +54,13 @@ export interface Contact {
   /** Unread message count */
   unreadCount?: number;
   note?: string;
+
+  /** Conversation ID for ratchet session lookup */
+  conversationId?: string;
+  /** Previous conversation ID (after session reset) */
+  previousConversationId?: string;
+  /** Initiator's ephemeral secret (stored until handshake response received) */
+  handshakeEphemeralSecret?: string; // hex
 }
 
 
@@ -115,6 +121,53 @@ export interface StoredIdentity {
   executionMode?: ExecutionMode;
   emitterAddress?: string; // EOA for classic, Safe for fast/custom
 }
+
+// **
+//  * Stored ratchet session in IndexedDB.
+//  * Extends SDK RatchetSession with serialization-friendly format.
+//  */
+export interface StoredRatchetSession {
+  conversationId: string;
+  topicOutbound: string;
+  topicInbound: string;
+  myAddress: string;
+  contactAddress: string;
+  rootKey: string;
+  dhMySecretKey: string;
+  dhMyPublicKey: string;
+  dhTheirPublicKey: string;
+  sendingChainKey: string | null;
+  sendingMsgNumber: number;
+  receivingChainKey: string | null;
+  receivingMsgNumber: number;
+  previousChainLength: number;
+  skippedKeys: StoredSkippedKey[];
+  createdAt: number;
+  updatedAt: number;
+  epoch: number;
+  status: SessionStatus;
+}
+
+export interface StoredSkippedKey {
+  dhPubKeyHex: string;
+  msgNumber: number;
+  messageKey: string;
+  createdAt: number;
+}
+
+export interface PendingOutbound {
+  id: string;
+  conversationId: string;
+  topic: string;
+  payloadHex: string;
+  plaintext: string;
+  sessionStateBefore: string;
+  sessionStateAfter: string;
+  createdAt: number;
+  txHash: string | null;
+  status: 'preparing' | 'submitted' | 'confirmed' | 'failed';
+}
+
 
 export interface AppSettings {
   name: string;
@@ -178,3 +231,79 @@ export interface MessageProcessorResult {
 }
 
 export const generateTempMessageId = () => `temp-${Date.now()}-${Math.random()}`;
+
+// =============================================================================
+// SERIALIZATION HELPERS
+// =============================================================================
+
+/**
+ * Convert SDK RatchetSession to storable format.
+ */
+export function serializeRatchetSession(session: SDKRatchetSession): StoredRatchetSession {
+  return {
+    conversationId: session.conversationId,
+    topicOutbound: session.topicOutbound.toLowerCase() as `0x${string}`,
+    topicInbound: session.topicInbound.toLowerCase() as `0x${string}`,
+    myAddress: session.myAddress,
+    contactAddress: session.contactAddress,
+
+    rootKey: hexlify(session.rootKey),
+    dhMySecretKey: hexlify(session.dhMySecretKey),
+    dhMyPublicKey: hexlify(session.dhMyPublicKey),
+    dhTheirPublicKey: hexlify(session.dhTheirPublicKey),
+
+    sendingChainKey: session.sendingChainKey ? hexlify(session.sendingChainKey) : null,
+    sendingMsgNumber: session.sendingMsgNumber,
+    receivingChainKey: session.receivingChainKey ? hexlify(session.receivingChainKey) : null,
+    receivingMsgNumber: session.receivingMsgNumber,
+
+    previousChainLength: session.previousChainLength,
+    skippedKeys: session.skippedKeys.map((sk: any) => ({
+      dhPubKeyHex: sk.dhPubKeyHex,
+      msgNumber: sk.msgNumber,
+      messageKey: hexlify(sk.messageKey),
+      createdAt: sk.createdAt,
+    })),
+
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    epoch: session.epoch,
+    status: session.status,
+  };
+}
+
+/**
+ * Convert stored format back to SDK RatchetSession.
+ */
+export function deserializeRatchetSession(stored: StoredRatchetSession): SDKRatchetSession {
+  return {
+    conversationId: stored.conversationId,
+    topicOutbound: stored.topicOutbound as `0x${string}`,
+    topicInbound: stored.topicInbound as `0x${string}`,
+    myAddress: stored.myAddress,
+    contactAddress: stored.contactAddress,
+
+    rootKey: getBytes(stored.rootKey),
+    dhMySecretKey: getBytes(stored.dhMySecretKey),
+    dhMyPublicKey: getBytes(stored.dhMyPublicKey),
+    dhTheirPublicKey: getBytes(stored.dhTheirPublicKey),
+
+    sendingChainKey: stored.sendingChainKey ? getBytes(stored.sendingChainKey) : null,
+    sendingMsgNumber: stored.sendingMsgNumber,
+    receivingChainKey: stored.receivingChainKey ? getBytes(stored.receivingChainKey) : null,
+    receivingMsgNumber: stored.receivingMsgNumber,
+
+    previousChainLength: stored.previousChainLength,
+    skippedKeys: stored.skippedKeys.map((sk) => ({
+      dhPubKeyHex: sk.dhPubKeyHex,
+      msgNumber: sk.msgNumber,
+      messageKey: getBytes(sk.messageKey),
+      createdAt: sk.createdAt,
+    })),
+
+    createdAt: stored.createdAt,
+    updatedAt: stored.updatedAt,
+    epoch: stored.epoch,
+    status: stored.status,
+  };
+}

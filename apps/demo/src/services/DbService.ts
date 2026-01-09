@@ -4,7 +4,15 @@ import type {
   Contact,
   Message,
   PendingHandshake,
+  StoredRatchetSession,
+  PendingOutbound,
 } from "../types.js";
+import {
+  serializeRatchetSession,
+  deserializeRatchetSession,
+} from "../types.js";
+import type { RatchetSession, SessionStatus } from "@verbeth/sdk";
+import { pruneExpiredSkippedKeys } from "@verbeth/sdk";
 
 export class DbService {
   private readonly db: VerbEthDatabase;
@@ -398,6 +406,212 @@ export class DbService {
     return this.db.pendingHandshakes.delete(id);
   }
 
+  /* ========================= RATCHET SESSIONS ========================= */
+
+  /**
+   * Save or update a ratchet session.
+   * Automatically serializes Uint8Arrays to hex strings.
+   */
+  async saveRatchetSession(session: RatchetSession): Promise<void> {
+    const stored = serializeRatchetSession(session);
+    console.log(`💾 Saving ratchet session: ${stored.conversationId.slice(0, 10)}...`);
+    await this.db.ratchetSessions.put(stored);
+  }
+
+  /**
+   * Get ratchet session by conversation ID.
+   */
+  async getRatchetSessionByConversation(conversationId: string): Promise<RatchetSession | null> {
+  const stored = await this.db.ratchetSessions.get(conversationId);
+  if (!stored) return null;
+  
+  const session = deserializeRatchetSession(stored);
+  const pruned = pruneExpiredSkippedKeys(session);
+  
+  if (pruned.skippedKeys.length !== session.skippedKeys.length) {
+    await this.saveRatchetSession(pruned);
+  }
+  
+  return pruned;
+}
+
+  /**
+   * Get ratchet session by inbound topic (for incoming message processing).
+   */
+  async getRatchetSessionByTopic(topicInbound: string): Promise<RatchetSession | null> {
+    const stored = await this.db.ratchetSessions
+      .where("topicInbound")
+      .equals(topicInbound.toLowerCase())
+      .first();
+    if (!stored) return null;
+    const session = deserializeRatchetSession(stored);
+
+    // Prune expired skipped keys (24h TTL)
+    const pruned = pruneExpiredSkippedKeys(session);
+    
+    // If keys were pruned, persist the cleaned session
+    if (pruned.skippedKeys.length !== session.skippedKeys.length) {
+      await this.saveRatchetSession(pruned);
+    }
+    
+    return pruned;
+}
+
+  /**
+   * Update ratchet session status.
+   */
+  async updateRatchetSessionStatus(
+    conversationId: string,
+    status: SessionStatus
+  ): Promise<void> {
+    await this.db.ratchetSessions.update(conversationId, {
+      status,
+      updatedAt: Date.now(),
+    });
+    console.log(`📝 Updated session ${conversationId.slice(0, 10)}... status to: ${status}`);
+  }
+
+  /**
+   * Delete ratchet session.
+   */
+  async deleteRatchetSession(conversationId: string): Promise<void> {
+    await this.db.ratchetSessions.delete(conversationId);
+    console.log(`🗑️ Deleted ratchet session: ${conversationId.slice(0, 10)}...`);
+  }
+
+  /* ========================= PENDING OUTBOUND ========================= */
+
+  /**
+   * Save a pending outbound message (for two-phase commit).
+   */
+  async savePendingOutbound(pending: PendingOutbound): Promise<void> {
+    console.log(`📤 Saving pending outbound: ${pending.id.slice(0, 10)}...`);
+    await this.db.pendingOutbound.put(pending);
+  }
+
+  /**
+   * Get pending outbound by ID.
+   */
+  async getPendingOutbound(id: string): Promise<PendingOutbound | null> {
+    return await this.db.pendingOutbound.get(id) ?? null;
+  }
+
+  /**
+   * Get pending outbound by transaction hash (for confirmation matching).
+   * This is the PRIMARY lookup method for confirmations.
+   */
+  async getPendingOutboundByTxHash(txHash: string): Promise<PendingOutbound | null> {
+    return await this.db.pendingOutbound
+      .where("txHash")
+      .equals(txHash.toLowerCase())
+      .first() ?? null;
+  }
+
+  /**
+   * Get all pending outbound for a conversation (for sequential blocking check).
+   */
+  async getPendingOutboundByConversation(conversationId: string): Promise<PendingOutbound[]> {
+    return await this.db.pendingOutbound
+      .where("conversationId")
+      .equals(conversationId)
+      .filter((p) => p.status === "preparing" || p.status === "submitted")
+      .toArray();
+  }
+
+  /**
+   * Update pending outbound status and optionally set txHash.
+   */
+  async updatePendingOutboundStatus(
+    id: string,
+    status: PendingOutbound["status"],
+    txHash?: string
+  ): Promise<void> {
+    const updates: Partial<PendingOutbound> = { status };
+    if (txHash) {
+      updates.txHash = txHash.toLowerCase();
+    }
+    await this.db.pendingOutbound.update(id, updates);
+    console.log(`📝 Updated pending outbound ${id.slice(0, 10)}... status to: ${status}`);
+  }
+
+  /**
+   * Commit pending outbound: apply sessionStateAfter and delete pending record.
+   * Called when on-chain confirmation is received.
+   */
+  async commitPendingOutbound(id: string): Promise<void> {
+    const pending = await this.db.pendingOutbound.get(id);
+    if (!pending) {
+      console.warn(`⚠️ Pending outbound ${id} not found for commit`);
+      return;
+    }
+
+    // Parse and save the committed session state
+    const sessionAfter: StoredRatchetSession = JSON.parse(pending.sessionStateAfter);
+    await this.db.ratchetSessions.put(sessionAfter);
+
+    // Delete the pending record
+    await this.db.pendingOutbound.delete(id);
+
+    console.log(`✅ Committed pending outbound ${id.slice(0, 10)}... - session state updated`);
+  }
+
+  /**
+   * Delete pending outbound (on failure - no session state change).
+   */
+  async deletePendingOutbound(id: string): Promise<void> {
+    await this.db.pendingOutbound.delete(id);
+    console.log(`🗑️ Deleted pending outbound: ${id.slice(0, 10)}...`);
+  }
+
+  /**
+   * Clean up stale pending outbound records (older than maxAge).
+   */
+  async cleanupStalePendingOutbound(maxAgeMs: number = 24 * 60 * 60 * 1000): Promise<number> {
+    const cutoff = Date.now() - maxAgeMs;
+    const stale = await this.db.pendingOutbound
+      .where("createdAt")
+      .below(cutoff)
+      .toArray();
+
+    for (const p of stale) {
+      await this.db.pendingOutbound.delete(p.id);
+    }
+
+    if (stale.length > 0) {
+      console.log(`🧹 Cleaned up ${stale.length} stale pending outbound records`);
+    }
+
+    return stale.length;
+  }
+
+  /**
+   * Clear all ratchet data for a user (for reset/debug).
+   */
+  async clearRatchetData(myAddress: string): Promise<void> {
+    const normalizedAddress = this.normalizeAddress(myAddress);
+
+    await this.db.transaction(
+      "rw",
+      [this.db.ratchetSessions, this.db.pendingOutbound],
+      async () => {
+        const sessions = await this.db.ratchetSessions
+          .where("myAddress")
+          .equals(normalizedAddress)
+          .toArray();
+
+        for (const s of sessions) {
+          await this.db.ratchetSessions.delete(s.conversationId);
+          await this.db.pendingOutbound
+            .where("conversationId")
+            .equals(s.conversationId)
+            .delete();
+        }
+      }
+    );
+
+    console.log(`🧹 Cleared all ratchet data for ${normalizedAddress.slice(0, 8)}...`);
+  }
+
   /* -------------------------------- SETTINGS ------------------------------ */
   setSetting(name: string, value: any) {
     return this.db.settings.put({ name, value });
@@ -446,6 +660,8 @@ export class DbService {
         this.db.messages,
         this.db.pendingHandshakes,
         this.db.settings,
+        this.db.ratchetSessions,    
+        this.db.pendingOutbound,    
       ],
       async () => {
         await this.db.identity.clear();
@@ -453,6 +669,8 @@ export class DbService {
         await this.db.messages.clear();
         await this.db.pendingHandshakes.clear();
         await this.db.settings.clear();
+        await this.db.ratchetSessions.clear();   
+        await this.db.pendingOutbound.clear();    
       }
     );
     console.log("All database data cleared");
@@ -469,6 +687,8 @@ export class DbService {
         this.db.messages,
         this.db.pendingHandshakes,
         this.db.settings,
+        this.db.ratchetSessions,   
+        this.db.pendingOutbound,    
       ],
       async () => {
         await this.db.identity.delete(normalizedAddr);
@@ -486,6 +706,19 @@ export class DbService {
           .where("ownerAddress")
           .equals(normalizedAddr)
           .delete();
+
+        //Delete ratchet data
+        const sessions = await this.db.ratchetSessions
+          .where("myAddress")
+          .equals(normalizedAddr)
+          .toArray();
+        for (const s of sessions) {
+          await this.db.ratchetSessions.delete(s.conversationId);
+          await this.db.pendingOutbound
+            .where("conversationId")
+            .equals(s.conversationId)
+            .delete();
+        }
 
         const staleSettings = await this.db.settings
           .where("name")
@@ -511,11 +744,13 @@ export class DbService {
       messages: await this.db.messages.toArray(),
       pendingHandshakes: await this.db.pendingHandshakes.toArray(),
       settings: await this.db.settings.toArray(),
+      ratchetSessions: await this.db.ratchetSessions.toArray(),    
+      pendingOutbound: await this.db.pendingOutbound.toArray(),    
       exportedAt: Date.now(),
     } as const;
 
     console.log(
-      `Exported ${payload.identity.length} identities, ${payload.contacts.length} contacts, ${payload.messages.length} messages`
+      `Exported ${payload.identity.length} identities, ${payload.contacts.length} contacts, ${payload.messages.length} messages, ${payload.ratchetSessions.length} ratchet sessions`
     );
     return JSON.stringify(payload);
   }
@@ -532,6 +767,8 @@ export class DbService {
         this.db.messages,
         this.db.pendingHandshakes,
         this.db.settings,
+        this.db.ratchetSessions,   
+        this.db.pendingOutbound,   
       ],
       async () => {
         if (data.identity) await this.db.identity.bulkPut(data.identity);
@@ -540,6 +777,10 @@ export class DbService {
         if (data.pendingHandshakes)
           await this.db.pendingHandshakes.bulkPut(data.pendingHandshakes);
         if (data.settings) await this.db.settings.bulkPut(data.settings);
+        if (data.ratchetSessions)                                         
+          await this.db.ratchetSessions.bulkPut(data.ratchetSessions);
+        if (data.pendingOutbound)                                         
+          await this.db.pendingOutbound.bulkPut(data.pendingOutbound);
       }
     );
     console.log("✅ Database import completed");

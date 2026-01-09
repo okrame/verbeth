@@ -1,10 +1,9 @@
 // apps/demo/src/hooks/useMessageProcessor.ts
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { AbiCoder } from "ethers";
+import { AbiCoder, getBytes } from "ethers";
 import {
   type IdentityContext,
-  decryptMessage,
   parseHandshakePayload,
   parseBindingMessage,
   verifyHandshakeIdentity,
@@ -15,6 +14,12 @@ import {
   verifyDerivedDuplexTopics,
   computeTagFromInitiator,
   pickOutboundTopic,
+  // Ratchet imports
+  initSessionAsInitiator,
+  ratchetDecrypt,
+  parseRatchetPayload,
+  isRatchetPayload,
+  verifyMessageSignature,
 } from "@verbeth/sdk";
 
 import { dbService } from "../services/DbService.js";
@@ -213,19 +218,20 @@ export const useMessageProcessor = ({
         let identityAddress = cleanSenderAddress; // fallback to event sender
         if (hasValidIdentityProof && handshakeContent.identityProof?.message) {
           try {
-            const parsed = parseBindingMessage(handshakeContent.identityProof.message);
+            const parsed = parseBindingMessage(
+              handshakeContent.identityProof.message
+            );
             if (parsed.address) {
               identityAddress = parsed.address;
             }
-          } catch (e) {
-          }
+          } catch (e) {}
         }
 
         const pendingHandshake: PendingHandshake = {
           id: log.transactionHash,
           ownerAddress: address,
-          sender: identityAddress,                    // EOA (identity)
-          emitterAddress: cleanSenderAddress,         // Safe or EOA (event sender)
+          sender: identityAddress, // EOA (identity)
+          emitterAddress: cleanSenderAddress, // Safe or EOA (event sender)
           identityPubKey,
           signingPubKey,
           ephemeralPubKey,
@@ -307,11 +313,12 @@ export const useMessageProcessor = ({
         // This works regardless of whether responder is EOA or Safe
         const contact = currentContacts.find(
           (c) =>
-            c.address.toLowerCase() === event.matchedContactAddress?.toLowerCase() &&
+            c.address.toLowerCase() ===
+              event.matchedContactAddress?.toLowerCase() &&
             c.status === "handshake_sent"
         );
 
-        if (!contact || !contact.ephemeralKey) {
+        if (!contact || !contact.handshakeEphemeralSecret) {
           onLog(
             `❓ Received handshake response but no matching pending contact found (responder: ${responder.slice(
               0,
@@ -331,7 +338,7 @@ export const useMessageProcessor = ({
         // Pass identityContext for domain & chain bound verification
         const result = await verifyAndExtractHandshakeResponseKeys(
           responseEvent,
-          contact.ephemeralKey, // initiator's ephemeral secret key
+          getBytes(contact.handshakeEphemeralSecret!),
           readProvider,
           identityContext
         );
@@ -355,8 +362,8 @@ export const useMessageProcessor = ({
         }
 
         const saltHex = computeTagFromInitiator(
-          contact.ephemeralKey, // Alice's ephemeral secret (stored when she sent handshake)
-          hexToUint8Array(responderEphemeralRBytes) // Bob's public R from the response event
+          getBytes(contact.handshakeEphemeralSecret!), // Alice's ephemeral secret (hex → Uint8Array)
+          hexToUint8Array(responderEphemeralRBytes)    // Bob's public R from the response event
         );
         const salt = Uint8Array.from(Buffer.from(saltHex.slice(2), "hex"));
 
@@ -377,23 +384,52 @@ export const useMessageProcessor = ({
         });
         if (!isValidTopics) {
           onLog(
-            `❌ Invalid duplex topics checksum for ${contact.address.slice(0, 8)}...`
+            `❌ Invalid duplex topics checksum for ${contact.address.slice(
+              0,
+              8
+            )}...`
           );
           return;
         }
 
         onLog(
-          `✅ Handshake response verified from ${contact.address.slice(0, 8)}...`
+          `✅ Handshake response verified from ${contact.address.slice(
+            0,
+            8
+          )}...`
         );
+
+        // Determine topics from initiator's perspective
+        const topicOutbound = pickOutboundTopic(true, duplexTopics); // Alice is initiator
+        const topicInbound = pickOutboundTopic(false, duplexTopics); // Bob is responder
+
+        // =====================================================================
+        // RATCHET: Initialize session as INITIATOR
+        // CRITICAL: Use ephemeralPubKey from INSIDE the decrypted payload,
+        // NOT the on-chain responderEphemeralR (which is only for tag verification).
+        // This separation provides unlinkability between handshake and conversation.
+        // =====================================================================
+        const ratchetSession = initSessionAsInitiator({
+          myAddress: address,
+          contactAddress: contact.address,
+          myHandshakeEphemeralSecret: getBytes(contact.handshakeEphemeralSecret!),
+          theirResponderEphemeralPubKey: ephemeralPubKey, // From decrypted payload!
+          topicOutbound,
+          topicInbound,
+        });
+
+        // Save ratchet session
+        await dbService.saveRatchetSession(ratchetSession);
 
         const updatedContact: Contact = {
           ...contact,
           status: "established" as ContactStatus,
           identityPubKey,
           signingPubKey,
-          ephemeralKey: undefined,
-          topicOutbound: pickOutboundTopic(true, duplexTopics), // Alice is initiator
-          topicInbound: pickOutboundTopic(false, duplexTopics), // Bob is responder
+          handshakeEphemeralSecret: undefined, // Clear ephemeral secret (no longer needed)
+          topicOutbound,
+          topicInbound,
+          conversationId: ratchetSession.conversationId,
           lastMessage: note || "Handshake accepted",
           lastTimestamp: Date.now(),
         };
@@ -458,14 +494,18 @@ export const useMessageProcessor = ({
         const [ciphertextBytes, timestamp, nonce] = decoded;
         const topic = log.topics[2];
         const sender = "0x" + log.topics[1].slice(-40);
-        const key = `${address.toLowerCase()}:${generateMessageId(log.transactionHash, log)}`;
+        const key = `${address.toLowerCase()}:${generateMessageId(
+          log.transactionHash,
+          log
+        )}`;
 
-        const ciphertextJson = new TextDecoder().decode(
-          hexToUint8Array(ciphertextBytes)
-        );
+        // Raw ciphertext bytes (could be ratchet binary or legacy JSON)
+        const ciphertextHex = ciphertextBytes as string;
+        const ciphertextRaw = hexToUint8Array(ciphertextHex);
         // Use emitterAddress (Safe in fast mode) for outbound detection
         const emitter = emitterAddress || address;
-        const isOurMessage = emitter && sender.toLowerCase() === emitter.toLowerCase();
+        const isOurMessage =
+          emitter && sender.toLowerCase() === emitter.toLowerCase();
 
         if (!isOurMessage) {
           const already = await dbService.getByDedupKey(key);
@@ -491,13 +531,58 @@ export const useMessageProcessor = ({
             )}..., nonce=${Number(nonce)}`
           );
 
+          // =====================================================================
+          // RATCHET TWO-PHASE COMMIT: Match by txHash (primary method)
+          // =====================================================================
+          const pending = await dbService.getPendingOutboundByTxHash(log.transactionHash);
+
+          if (pending && pending.status === "submitted") {
+            // Commit the session state (applies sessionStateAfter)
+            await dbService.commitPendingOutbound(pending.id);
+
+            // Update message status from pending to confirmed
+            const newId = generateMessageId(log.transactionHash, log);
+            await dbService.updateMessage(pending.id, {
+              id: newId,
+              status: "confirmed",
+              blockNumber: log.blockNumber,
+              blockTimestamp: Date.now(),
+              ciphertext: ciphertextHex,
+              nonce: Number(nonce),
+              dedupKey: key,
+            });
+
+            await dbService.upsertDedup({
+              key,
+              messageId: newId,
+              txHash: log.transactionHash,
+              blockNumber: log.blockNumber,
+            });
+
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === pending.id
+                  ? { ...m, id: newId, status: "confirmed", blockNumber: log.blockNumber }
+                  : m
+              )
+            );
+
+            onLog(
+              `✅ Message confirmed: "${pending.plaintext.slice(0, 30)}..." (${pending.id.slice(0, 8)} → ${newId.slice(0, 8)})`
+            );
+            return;
+          }
+
+          // =====================================================================
+          // LEGACY FALLBACK: In-memory FIFO matching (for non-ratchet messages)
+          // =====================================================================
           const q = pendingMessagesRef.current.get(topic) ?? [];
-          const pendingMessage = q.shift(); // confirm the oldest
+          const pendingMessage = q.shift();
           pendingMessagesRef.current.set(topic, q);
 
           if (pendingMessage) {
             onLog(
-              `Matched pending by topic. Content preview:: "${pendingMessage.decrypted?.slice(
+              `Matched pending by topic (legacy). Content preview: "${pendingMessage.decrypted?.slice(
                 0,
                 100
               )}..."`
@@ -509,7 +594,7 @@ export const useMessageProcessor = ({
               id: newId,
               blockNumber: log.blockNumber,
               blockTimestamp: Date.now(),
-              ciphertext: ciphertextJson,
+              ciphertext: ciphertextHex,
               nonce: Number(nonce),
               dedupKey: key,
               status: "confirmed",
@@ -540,6 +625,7 @@ export const useMessageProcessor = ({
               )}..." (${pendingMessage.id} → ${newId})`
             );
           } else {
+            // DB fallback for multi-tab / refresh scenarios
             const dbFallback = await dbService.findPendingMessage(
               address,
               topic,
@@ -547,7 +633,6 @@ export const useMessageProcessor = ({
               address
             );
 
-            // for "lastMessage" updates
             const allContacts = await dbService.getAllContacts(address);
             const byTopic = allContacts.find((c) => c.topicOutbound === topic);
 
@@ -557,7 +642,7 @@ export const useMessageProcessor = ({
               topic,
               sender: address,
               recipient: byTopic?.address,
-              ciphertext: ciphertextJson,
+              ciphertext: ciphertextHex,
               timestamp: Number(timestamp) * 1000,
               blockTimestamp: Date.now(),
               blockNumber: log.blockNumber,
@@ -572,7 +657,6 @@ export const useMessageProcessor = ({
             };
 
             if (dbFallback) {
-              // Replace the pending row in-place (preserves the bubble)
               await dbService.updateMessage(dbFallback.id, confirmed);
               await dbService.upsertDedup({
                 key,
@@ -604,44 +688,81 @@ export const useMessageProcessor = ({
           return;
         }
 
-        // INCOMING MESSAGE
-        // Match by topicInbound (not sender address) - works for EOA or Safe senders
-        const currentContacts = await dbService.getAllContacts(address);
-        const contact = currentContacts.find(
-          (c) =>
-            c.topicInbound === topic &&
-            c.status === "established"
-        );
-
-        if (!contact || !contact.identityPubKey || !contact.signingPubKey) {
+// =====================================================================
+        // INCOMING MESSAGE - Use ratchet session for decryption
+        // =====================================================================
+        
+        // Try to find ratchet session by inbound topic
+        const session = await dbService.getRatchetSessionByTopic(topic);
+        
+        if (!session) {
           onLog(
             `❓ Received message on unknown topic: ${topic.slice(0, 10)}... from ${sender.slice(0, 8)}...`
           );
           return;
         }
 
-        const decryptedMessage = decryptMessage(
-          ciphertextJson,
-          identityKeyPair.secretKey,
+        // Find contact for signing key verification
+        const contact = await dbService.getContact(session.contactAddress, address);
+        if (!contact?.signingPubKey) {
+          onLog(`✗ No signing key for contact ${session.contactAddress.slice(0, 8)}...`);
+          return;
+        }
+
+        // Check if ratchet format
+        if (!isRatchetPayload(ciphertextRaw)) {
+          onLog(`✗ Message not in ratchet format from ${contact.address.slice(0, 8)}...`);
+          return;
+        }
+
+        const parsed = parseRatchetPayload(ciphertextRaw);
+        if (!parsed) {
+          onLog(`✗ Failed to parse ratchet payload from ${contact.address.slice(0, 8)}...`);
+          return;
+        }
+
+        // =====================================================================
+        // AUTH-FIRST: Verify signature BEFORE any ratchet operations (DoS protection)
+        // =====================================================================
+        const sigValid = verifyMessageSignature(
+          parsed.signature,
+          parsed.header,
+          parsed.ciphertext,
           contact.signingPubKey
         );
 
-        if (!decryptedMessage) {
-          onLog(`✗ Failed to decrypt message from ${contact.address.slice(0, 8)}...`);
+        if (!sigValid) {
+          onLog(`✗ Invalid signature on message from ${contact.address.slice(0, 8)}..., ignoring`);
           return;
         }
+
+        // =====================================================================
+        // DECRYPT with ratchet (signature verified, safe to proceed)
+        // =====================================================================
+        const decryptResult = ratchetDecrypt(session, parsed.header, parsed.ciphertext);
+
+        if (!decryptResult) {
+          onLog(`✗ Ratchet decryption failed from ${contact.address.slice(0, 8)}...`);
+          return;
+        }
+
+        // Commit new session state immediately (receiving is safe to commit)
+        await dbService.saveRatchetSession(decryptResult.session);
+
+        // Decode plaintext
+        const decryptedText = new TextDecoder().decode(decryptResult.plaintext);
 
         const message: Message = {
           id: generateMessageId(log.transactionHash, log),
           topic: topic,
           sender: contact.address, // Use contact address, not on-chain sender
           recipient: address,
-          ciphertext: ciphertextJson,
+          ciphertext: ciphertextHex,
           timestamp: Number(timestamp) * 1000,
           blockTimestamp: Date.now(),
           blockNumber: log.blockNumber,
           direction: "incoming" as MessageDirection,
-          decrypted: decryptedMessage,
+          decrypted: decryptedText,
           read: false,
           nonce: Number(nonce),
           dedupKey: key,
@@ -667,13 +788,12 @@ export const useMessageProcessor = ({
 
           const updatedContact: Contact = {
             ...contact,
-            lastMessage: decryptedMessage,
+            lastMessage: decryptedText,
             lastTimestamp: Date.now(),
           };
 
           await dbService.saveContact(updatedContact);
 
-          // Use contact.address (not sender from event)
           setContacts((prev) =>
             prev.map((c) =>
               c.address.toLowerCase() === contact.address.toLowerCase()
@@ -682,13 +802,13 @@ export const useMessageProcessor = ({
             )
           );
 
-          onLog(`Message from ${contact.address.slice(0, 8)}...: "${decryptedMessage}"`);
+          onLog(`📩 Message from ${contact.address.slice(0, 8)}...: "${decryptedText}"`);
         }
       } catch (error) {
         onLog(`✗ Failed to process message log: ${error}`);
       }
     },
-    [address, identityKeyPair, onLog]
+    [address, emitterAddress, identityKeyPair, onLog]
   );
 
   const processEvents = useCallback(

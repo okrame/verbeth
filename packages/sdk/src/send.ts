@@ -1,5 +1,12 @@
 // packages/sdk/src/send.ts
 
+/**
+ * Handshake and message sending functions.
+ * 
+ * NOTE: sendEncryptedMessage is REMOVED - use ratchet for established sessions.
+ * Only handshake functions remain here.
+ */
+
 import { 
   keccak256,
   toUtf8Bytes,
@@ -8,71 +15,27 @@ import {
   getBytes
 } from "ethers";
 import nacl from 'tweetnacl';
-import { getNextNonce } from './utils/nonce.js';
-import { encryptMessage, encryptStructuredPayload, deriveDuplexTopics } from './crypto.js';
+import { encryptStructuredPayload, deriveDuplexTopics } from './crypto.js';
 import { 
   HandshakeContent, 
   serializeHandshakeContent,
   encodeUnifiedPubKeys,
   createHandshakeResponseContent,
-  decodeUnifiedPubKeys,
 } from './payload.js';
 import { IdentityKeyPair, IdentityProof, TopicInfoWire } from './types.js';  
 import { IExecutor } from './executor.js';
-import { computeTagFromResponder } from './crypto.js'
-
-
-
-/**
- * Sends an encrypted message assuming recipient's keys were already obtained via handshake.
- * Executor-agnostic: works with EOA, UserOp, and Direct EntryPoint (for tests)
- */
-export async function sendEncryptedMessage({
-  executor,
-  topic,
-  message,
-  recipientPubKey,
-  senderAddress,
-  senderSignKeyPair,
-  timestamp
-}: {
-  executor: IExecutor;
-  topic: string;
-  message: string;
-  recipientPubKey: Uint8Array;          // X25519 key for encryption
-  senderAddress: string;
-  senderSignKeyPair: nacl.SignKeyPair;  // Ed25519 keys for signing
-  timestamp: number;
-}) {
-  if (!executor) {
-    throw new Error("Executor must be provided");
-  }
-
-  const ephemeralKeyPair = nacl.box.keyPair();
-
-  const ciphertext = encryptMessage(
-    message,
-    recipientPubKey,                      // X25519 for encryption
-    ephemeralKeyPair.secretKey,
-    ephemeralKeyPair.publicKey,
-    senderSignKeyPair.secretKey,          // Ed25519 for signing
-    senderSignKeyPair.publicKey
-  );
-
-  const nonce = getNextNonce(senderAddress, topic);
-
-  return executor.sendMessage(toUtf8Bytes(ciphertext), topic, timestamp, nonce);
-}
+import { computeTagFromResponder } from './crypto.js';
 
 /**
  * Initiates an on-chain handshake with unified keys and mandatory identity proof.
  * Executor-agnostic: works with EOA, UserOp, and Direct EntryPoint (for tests)
+ * 
+ * @returns Transaction and ephemeral keypair (MUST be persisted for session init)
  */
 export async function initiateHandshake({
   executor,
   recipientAddress,
   identityKeyPair,
-  ephemeralPubKey,
   plaintextPayload,
   identityProof,
   signer
@@ -80,14 +43,19 @@ export async function initiateHandshake({
   executor: IExecutor;
   recipientAddress: string;
   identityKeyPair: IdentityKeyPair;
-  ephemeralPubKey: Uint8Array;
   plaintextPayload: string;
   identityProof: IdentityProof;
   signer: Signer;
-}) {
+}): Promise<{
+  tx: any;
+  ephemeralKeyPair: nacl.BoxKeyPair;
+}> {
   if (!executor) {
     throw new Error("Executor must be provided");
   }
+
+  // Generate ephemeral keypair for this handshake
+  const ephemeralKeyPair = nacl.box.keyPair();
 
   const recipientHash = keccak256(
     toUtf8Bytes('contact:' + recipientAddress.toLowerCase())
@@ -106,50 +74,83 @@ export async function initiateHandshake({
     identityKeyPair.signingPublicKey  // Ed25519 for signing
   );
 
-  return await executor.initiateHandshake(
+  const tx = await executor.initiateHandshake(
     recipientHash,
     hexlify(unifiedPubKeys),
-    hexlify(ephemeralPubKey),
+    hexlify(ephemeralKeyPair.publicKey),
     toUtf8Bytes(serializedPayload)
   );
+
+  return {
+    tx,
+    ephemeralKeyPair, // Caller MUST persist secretKey for ratchet session init
+  };
 }
 
 /**
  * Responds to a handshake with unified keys and mandatory identity proof.
  * Executor-agnostic: works with EOA, UserOp, and Direct EntryPoint (for tests)
+ * 
+ * @returns Transaction, tag, salt, AND ephemeral keys (MUST be persisted for ratchet session)
  */
 export async function respondToHandshake({
   executor,
-  initiatorPubKey, // X25519 key from initiator (ephemeral)
+  initiatorEphemeralPubKey,
   responderIdentityKeyPair,
-  responderEphemeralKeyPair,
   note,
   identityProof,
   signer,
   initiatorIdentityPubKey,
 }: {
   executor: IExecutor;
-  initiatorPubKey: Uint8Array;
+  initiatorEphemeralPubKey: Uint8Array;
   responderIdentityKeyPair: IdentityKeyPair;
-  responderEphemeralKeyPair?: nacl.BoxKeyPair;
   note?: string;
   identityProof: IdentityProof;
   signer: Signer;
   initiatorIdentityPubKey?: Uint8Array;
-}) {
+}): Promise<{
+  tx: any;
+  salt: Uint8Array;
+  tag: `0x${string}`;
+  /** Responder's DH ratchet secret - MUST persist as dhMySecretKey in ratchet session */
+  responderEphemeralSecret: Uint8Array;
+  /** Responder's DH ratchet public - inside encrypted payload, NOT on-chain */
+  responderEphemeralPublic: Uint8Array;
+}> {
   if (!executor) {
     throw new Error("Executor must be provided");
   }
 
-  const ephemeralKeyPair = responderEphemeralKeyPair || nacl.box.keyPair();
-
-  // Generate a separate ephemeral key (R,r) just for the tag
-  const tagKeyPair = nacl.box.keyPair();                
+  // =========================================================================
+  // TWO SEPARATE KEYPAIRS for unlinkability:
+  // 
+  // 1. tagKeyPair (R, r): ONLY for tag computation
+  //    - R goes on-chain as responderEphemeralR
+  //    - Used by Alice to verify the tag
+  //    - NOT used for ratchet
+  //
+  // 2. ratchetKeyPair: For post-handshake encryption and first DH ratchet key
+  //    - Public key goes INSIDE encrypted payload (not on-chain)
+  //    - Becomes dhMySecretKey/dhMyPublicKey in ratchet session
+  //
+  // Why this matters: With a single keypair, the on-chain R would equal the
+  // first message's DH header, allowing observers to link HandshakeResponse
+  // to subsequent conversation. With two keypairs, there's no on-chain link.
+  // =========================================================================
+  
+  // Keypair for tag computation - R goes on-chain
+  const tagKeyPair = nacl.box.keyPair();
+  
+  // Keypair for ratchet - public key is HIDDEN inside encrypted payload
+  const ratchetKeyPair = nacl.box.keyPair();
+  
+  // Tag is derived from tagKeyPair, not ratchetKeyPair
   const inResponseTo = computeTagFromResponder(
     tagKeyPair.secretKey,
-    initiatorPubKey
+    initiatorEphemeralPubKey
   );
-  const salt: Uint8Array = getBytes(inResponseTo); // for topics HKDF
+  const salt: Uint8Array = getBytes(inResponseTo);
 
   let topicInfo: TopicInfoWire | undefined = undefined;
   if (initiatorIdentityPubKey) {
@@ -161,34 +162,38 @@ export async function respondToHandshake({
     topicInfo = { out: topicOut, in: topicIn, chk: checksum };
   }
 
-  
+  // Response content includes ratchetKeyPair.publicKey (hidden inside encrypted payload)
   const responseContent = createHandshakeResponseContent(
-    responderIdentityKeyPair.publicKey,        // X25519
-    responderIdentityKeyPair.signingPublicKey, // Ed25519
-    ephemeralKeyPair.publicKey,
+    responderIdentityKeyPair.publicKey,        // X25519 identity
+    responderIdentityKeyPair.signingPublicKey, // Ed25519 signing
+    ratchetKeyPair.publicKey,                  // First DH ratchet key (INSIDE payload)
     note,
     identityProof,
     topicInfo
   );
   
-  // Encrypt the response for the initiator
+  // Encrypt using ratchetKeyPair (the epk in encrypted payload = ratchetKeyPair.publicKey)
   const payload = encryptStructuredPayload(
     responseContent,
-    initiatorPubKey,              // Encrypt to initiator's X25519 (ephemeral) key
-    ephemeralKeyPair.secretKey,
-    ephemeralKeyPair.publicKey
+    initiatorEphemeralPubKey,
+    ratchetKeyPair.secretKey,
+    ratchetKeyPair.publicKey
   );
 
-  // Execute the transaction
+  // Execute transaction - tagKeyPair.publicKey goes on-chain (NOT ratchetKeyPair)
   const tx = await executor.respondToHandshake(
     inResponseTo, 
-    hexlify(tagKeyPair.publicKey), 
+    hexlify(tagKeyPair.publicKey),  // Tag key on-chain for tag verification
     toUtf8Bytes(payload)
   );
   
   return {
     tx,
     salt,
-    tag: inResponseTo
+    tag: inResponseTo,
+    // Return RATCHET keys (not tag keys) for session initialization
+    // These are DIFFERENT from the on-chain responderEphemeralR
+    responderEphemeralSecret: ratchetKeyPair.secretKey,
+    responderEphemeralPublic: ratchetKeyPair.publicKey,
   };
 }

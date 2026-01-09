@@ -251,7 +251,7 @@ export default function App() {
               World Post
             </h1>
             <div className="text-xs text-gray-400 pl-0.5 mt-1">
-              powered by Verbeth SDK
+              powered by the World Computer
             </div>
           </div>
           {/* RIGHT: auth buttons - EOA only */}

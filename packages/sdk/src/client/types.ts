@@ -30,5 +30,8 @@ export interface HandshakeResult {
 export interface HandshakeResponseResult {
   tx: any;
   duplexTopics: DuplexTopics;
-  tag: string;
+  tag: `0x${string}`;
+  salt: Uint8Array;
+  responderEphemeralSecret: Uint8Array;
+  responderEphemeralPublic: Uint8Array;
 }

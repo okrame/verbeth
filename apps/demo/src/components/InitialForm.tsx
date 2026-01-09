@@ -78,11 +78,11 @@ export function InitialForm({
           ) : (
             <div className="w-full text-center">
               <h2 className="text-2xl font-semibold">
-                {isAnyConnected ? "Hi, start your first chat" : "just verb it"}
+                {isAnyConnected ? "Hi, start your first chat" : "Chat away with anyone"}
               </h2>
               <div className="mt-2">
                 <span className="text-sm text-gray-400">
-                  Uncensorable. Private by design.
+                  Private, unstoppable digital correspondence. 
                 </span>
               </div>
             </div>

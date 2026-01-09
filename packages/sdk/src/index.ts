@@ -56,3 +56,5 @@ export type {
   HandshakeResult,
   HandshakeResponseResult 
 } from './client/index.js';
+
+export * from './ratchet/index.js';

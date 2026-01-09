@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from "vitest";
 import nacl from "tweetnacl";
 import { JsonRpcProvider } from "ethers";
 
-import { sendEncryptedMessage } from "../src/index.js";
 import { getNextNonce } from "../src/utils/nonce.js";
 import { convertPublicKeyToX25519 } from "../src/utils/x25519.js";
 import { isSmartContract1271, parseBindingMessage } from "../src/utils.js";
@@ -45,79 +44,10 @@ describe("Utils Functions", () => {
   });
 });
 
-describe("sendEncryptedMessage", () => {
-  it("calls contract.sendMessage with expected parameters", async () => {
-    const mockSendMessage = vi.fn().mockResolvedValue("txHash");
-    const fakeContract = {
-      sendMessage: mockSendMessage,
-    } as unknown as LogChainV1;
-
-    const executor = ExecutorFactory.createEOA(fakeContract);
-    const recipientKey = nacl.box.keyPair();
-    const senderSign = nacl.sign.keyPair();
-
-    await sendEncryptedMessage({
-      executor: executor,
-      topic: "0x" + "ab".repeat(32),
-      message: "hi",
-      recipientPubKey: recipientKey.publicKey,
-      senderAddress: "0xAlice",
-      senderSignKeyPair: senderSign,
-      timestamp: 42,
-    });
-
-    expect(mockSendMessage).toHaveBeenCalledTimes(1);
-
-    const callArgs = mockSendMessage.mock.calls[0];
-    expect(callArgs).toHaveLength(4); // ciphertext, topic, timestamp, nonce
-    expect(typeof callArgs[1]).toBe("string");
-    expect(typeof callArgs[2]).toBe("number");
-    expect(typeof callArgs[3]).toBe("bigint");
-  });
-
-  it("generates different nonces for different calls", async () => {
-    const mockSendMessage = vi.fn().mockResolvedValue("txHash");
-    const fakeContract = {
-      sendMessage: mockSendMessage,
-    } as unknown as LogChainV1;
-
-    const executor = ExecutorFactory.createEOA(fakeContract);
-    const recipientKey = nacl.box.keyPair();
-    const senderSign = nacl.sign.keyPair();
-
-    // send two messages from same sender
-    await sendEncryptedMessage({
-      executor: executor,
-      topic: "0x" + "ab".repeat(32),
-      message: "message 1",
-      recipientPubKey: recipientKey.publicKey,
-      senderAddress: "0xAlice",
-      senderSignKeyPair: senderSign,
-      timestamp: 42,
-    });
-
-    await sendEncryptedMessage({
-      executor: executor,
-      topic: "0x" + "ab".repeat(32),
-      message: "message 2",
-      recipientPubKey: recipientKey.publicKey,
-      senderAddress: "0xAlice",
-      senderSignKeyPair: senderSign,
-      timestamp: 43,
-    });
-
-    expect(mockSendMessage).toHaveBeenCalledTimes(2);
-
-    const firstNonce = mockSendMessage.mock.calls[0][3];
-    const secondNonce = mockSendMessage.mock.calls[1][3];
-    expect(secondNonce).toBe(firstNonce + 1n);
-  });
-});
 
 describe("Unified Keys Utilities", () => {
   it("should handle unified key operations", () => {
     expect(typeof isSmartContract1271).toBe("function");
-    expect(typeof sendEncryptedMessage).toBe("function");
   });
 });
 

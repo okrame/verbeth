@@ -1,5 +1,17 @@
 // packages/sdk/src/crypto.ts
 
+/**
+ * Cryptographic utilities for Verbeth.
+ * 
+ * This module handles:
+ * - Handshake encryption/decryption (NaCl box - one-time exchange)
+ * - Topic derivation (HKDF + Keccak)
+ * - Tag computation for handshake responses
+ * 
+ * NOTE: Post-handshake message encryption uses the ratchet module.
+ * See `ratchet/encrypt.ts` and `ratchet/decrypt.ts` for Double Ratchet.
+ */
+
 import nacl from 'tweetnacl';
 import { keccak256, toUtf8Bytes, dataSlice } from 'ethers';
 import { sha256 } from '@noble/hashes/sha2';
@@ -15,8 +27,13 @@ import {
 } from './payload.js';
 import { IdentityProof } from './types.js'; 
 
+// =============================================================================
+// Handshake Encryption (NaCl Box)
+// =============================================================================
+
 /**
- * Encrypts a structured payload (JSON-serializable objects)
+ * Encrypts a structured payload (JSON-serializable objects) using NaCl box.
+ * Used for handshake responses where ratchet is not yet established.
  */
 export function encryptStructuredPayload<T>(
   payload: T,
@@ -42,7 +59,8 @@ export function encryptStructuredPayload<T>(
 }
 
 /**
- * Decrypts a structured payload with converter function
+ * Decrypts a structured payload with converter function.
+ * Used for handshake responses where ratchet is not yet established.
  */
 export function decryptStructuredPayload<T>(
   payloadJson: string,
@@ -64,7 +82,16 @@ export function decryptStructuredPayload<T>(
   return decodeStructuredContent(box, converter);
 }
 
-//  wrappers for encrypting and decrypting messages
+// =============================================================================
+// Legacy Message Encryption (for backward compatibility / log decryption)
+// =============================================================================
+
+/**
+ * Encrypts a message using NaCl box.
+ * 
+ * @deprecated For new messages, use ratchetEncrypt() from the ratchet module.
+ * This function is kept for backward compatibility with legacy logs.
+ */
 export function encryptMessage(
   message: string,
   recipientPublicKey: Uint8Array,
@@ -84,6 +111,12 @@ export function encryptMessage(
   );
 }
 
+/**
+ * Decrypts a message using NaCl box.
+ * 
+ * @deprecated For new messages, use ratchetDecrypt() from the ratchet module.
+ * This function is kept for backward compatibility with legacy logs.
+ */
 export function decryptMessage(
   payloadJson: string,
   recipientSecretKey: Uint8Array,
@@ -98,17 +131,21 @@ export function decryptMessage(
   return result ? result.content : null;
 }
 
+// =============================================================================
+// Handshake Response Decryption
+// =============================================================================
+
 /**
- * Decrypts handshake response and extracts individual keys from unified format
+ * Decrypts handshake response and extracts individual keys from unified format.
  */
 export function decryptHandshakeResponse(
   payloadJson: string,
   initiatorEphemeralSecretKey: Uint8Array
 ): HandshakeResponseContent | null {
-  return decryptStructuredPayload(
+  return decryptStructuredPayload<HandshakeResponseContent>(
     payloadJson,
     initiatorEphemeralSecretKey,
-    (obj) => {
+    (obj: any): HandshakeResponseContent => {
       if (!obj.identityProof) {
         throw new Error("Invalid handshake response: missing identityProof");
       }
@@ -116,14 +153,19 @@ export function decryptHandshakeResponse(
         unifiedPubKeys: Uint8Array.from(Buffer.from(obj.unifiedPubKeys, 'base64')),
         ephemeralPubKey: Uint8Array.from(Buffer.from(obj.ephemeralPubKey, 'base64')),
         note: obj.note,
-        identityProof: obj.identityProof
+        identityProof: obj.identityProof,
+        topicInfo: obj.topicInfo ? {
+          out: obj.topicInfo.out,
+          in: obj.topicInfo.in,
+          chk: obj.topicInfo.chk
+        } : undefined
       };
     }
   );
 }
 
 /**
- * helper to decrypt handshake response and extract individual keys
+ * Helper to decrypt handshake response and extract individual keys.
  */
 export function decryptAndExtractHandshakeKeys(
   payloadJson: string,
@@ -150,6 +192,9 @@ export function decryptAndExtractHandshakeKeys(
   };
 }
 
+// =============================================================================
+// Tag Computation (Handshake Response Linkage)
+// =============================================================================
 
 /**
  * HKDF(sha256) on shared secret, info="verbeth:hsr", then Keccak-256 -> bytes32 (0x...)
@@ -181,6 +226,9 @@ export function computeTagFromInitiator(
   return finalizeHsrTag(shared);
 }
 
+// =============================================================================
+// Topic Derivation
+// =============================================================================
 
 /**
  * Derives a bytes32 topic from the shared secret via HKDF(SHA256) + Keccak-256.
@@ -196,7 +244,9 @@ function deriveTopic(
   return keccak256(okm) as `0x${string}`;
 }
 
-
+/**
+ * Derives long-term shared secret from identity keys.
+ */
 export function deriveLongTermShared(
   myIdentitySecretKey: Uint8Array,
   theirIdentityPublicKey: Uint8Array
@@ -225,6 +275,9 @@ export function deriveDuplexTopics(
   return { topicOut, topicIn, checksum };
 }
 
+/**
+ * Verifies duplex topics checksum.
+ */
 export function verifyDuplexTopicsChecksum(
   topicOut: `0x${string}`,
   topicIn: `0x${string}`,
