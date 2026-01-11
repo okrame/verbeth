@@ -72,7 +72,7 @@ export function InitialForm({
                 onClick={onBackToChats}
                 className="text-sm text-gray-400 hover:text-white flex items-center gap-1 transition-colors"
               >
-                ← Back to chats
+                Go to chats
               </button>
             </>
           ) : (

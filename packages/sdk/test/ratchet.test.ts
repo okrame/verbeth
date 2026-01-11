@@ -3,31 +3,22 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import nacl from "tweetnacl";
 import {
-  // Session
   initSessionAsResponder,
   initSessionAsInitiator,
   computeConversationId,
-  // Encrypt/Decrypt
   ratchetEncrypt,
   ratchetDecrypt,
   pruneExpiredSkippedKeys,
-  // Codec
   packageRatchetPayload,
   parseRatchetPayload,
   isRatchetPayload,
   hexToBytes,
   bytesToHex,
-  // Auth
   verifyMessageSignature,
-  // KDF
   generateDHKeyPair,
-  // Types
   RatchetSession,
 } from "../src/ratchet/index.js";
 
-// =============================================================================
-// Test Helpers
-// =============================================================================
 
 function createTestTopics(): { topicOut: `0x${string}`; topicIn: `0x${string}` } {
   const randomBytes = nacl.randomBytes(32);
@@ -47,7 +38,6 @@ function createSigningKeyPair() {
 describe("Double Ratchet", () => {
   describe("Session Initialization", () => {
     it("should create matching sessions for responder and initiator", () => {
-      // Simulate handshake ephemeral keys
       const aliceEphemeral = generateDHKeyPair();
       const bobEphemeral = generateDHKeyPair();
       const topics = createTestTopics();
@@ -266,13 +256,12 @@ describe("Double Ratchet", () => {
 
       expect(isRatchetPayload(validPayload)).toBe(true);
 
-      // Legacy JSON would start with { (0x7b)
       const jsonPayload = new TextEncoder().encode('{"v":1}');
       expect(isRatchetPayload(jsonPayload)).toBe(false);
     });
 
     it("should reject truncated payloads", () => {
-      const truncated = new Uint8Array(50); // Less than minimum 105 bytes
+      const truncated = new Uint8Array(50); 
       truncated[0] = 0x01;
 
       expect(parseRatchetPayload(truncated)).toBeNull();
@@ -428,10 +417,10 @@ describe("Double Ratchet", () => {
         status: "active",
       };
 
-      const pruned = pruneExpiredSkippedKeys(session, 50000); // 50 second TTL for test
+      const pruned = pruneExpiredSkippedKeys(session, 50000); 
 
       expect(pruned.skippedKeys.length).toBe(1);
-      expect(pruned.skippedKeys[0].msgNumber).toBe(0); // Fresh one remains
+      expect(pruned.skippedKeys[0].msgNumber).toBe(0); 
     });
 
     it("should convert hex to bytes and back", () => {

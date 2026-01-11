@@ -1,3 +1,5 @@
+// src/services/DbService.ts
+
 import { VerbEthDatabase } from "./schema.js";
 import type {
   StoredIdentity,
@@ -414,7 +416,7 @@ export class DbService {
    */
   async saveRatchetSession(session: RatchetSession): Promise<void> {
     const stored = serializeRatchetSession(session);
-    console.log(`💾 Saving ratchet session: ${stored.conversationId.slice(0, 10)}...`);
+    console.log(`💾 Saving ratchet session: ${stored.conversationId.slice(0, 10)}... (sendingMsgNumber=${stored.sendingMsgNumber})`);
     await this.db.ratchetSessions.put(stored);
   }
 
@@ -535,24 +537,24 @@ export class DbService {
   }
 
   /**
-   * Commit pending outbound: apply sessionStateAfter and delete pending record.
+   * Finalize pending outbound: just delete the pending record.
    * Called when on-chain confirmation is received.
+   * 
+   * With the new architecture, session state is committed immediately during
+   * encryption, so confirmation just needs to clean up the pending record.
    */
-  async commitPendingOutbound(id: string): Promise<void> {
+  async finalizePendingOutbound(id: string): Promise<{ plaintext: string } | null> {
     const pending = await this.db.pendingOutbound.get(id);
     if (!pending) {
-      console.warn(`⚠️ Pending outbound ${id} not found for commit`);
-      return;
+      console.warn(`⚠️ Pending outbound ${id} not found for finalization`);
+      return null;
     }
 
-    // Parse and save the committed session state
-    const sessionAfter: StoredRatchetSession = JSON.parse(pending.sessionStateAfter);
-    await this.db.ratchetSessions.put(sessionAfter);
-
-    // Delete the pending record
+    // Just delete the pending record - session state was already committed
     await this.db.pendingOutbound.delete(id);
 
-    console.log(`✅ Committed pending outbound ${id.slice(0, 10)}... - session state updated`);
+    console.log(`✅ Finalized pending outbound ${id.slice(0, 10)}...`);
+    return { plaintext: pending.plaintext };
   }
 
   /**

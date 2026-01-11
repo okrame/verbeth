@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Fingerprint } from "lucide-react";
+import { Fingerprint, RotateCcw, X } from "lucide-react";
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWalletClient } from 'wagmi';
 import { useRpcClients } from './rpc.js';
@@ -12,6 +12,7 @@ import {
   LOGCHAIN_SINGLETON_ADDR,
   CONTRACT_CREATION_BLOCK,
   Contact,
+  Message,
 } from './types.js';
 import { InitialForm } from './components/InitialForm.js';
 import { SideToastNotifications } from './components/SideToastNotification.js';
@@ -123,6 +124,8 @@ export default function App() {
     pendingHandshakes,
     contacts,
     addMessage,
+    updateMessageStatus,  
+    removeMessage,        
     removePendingHandshake,
     updateContact,
     processEvents
@@ -152,12 +155,17 @@ export default function App() {
   const {
     sendHandshake,
     acceptHandshake,
-    sendMessageToContact
+    sendMessageToContact,
+    retryFailedMessage,      // NEW: Retry action
+    cancelQueuedMessage,     // NEW: Cancel action
+    getContactQueueStatus,   // NEW: Queue status
   } = useChatActions({
     verbethClient,
     addLog,
     updateContact: async (contact: Contact) => { await updateContact(contact); },
     addMessage: async (message: any) => { await addMessage(message); },
+    updateMessageStatus,  // NEW: Pass to useChatActions
+    removeMessage,        // NEW: Pass to useChatActions
     removePendingHandshake: async (id: string) => { await removePendingHandshake(id); },
     setSelectedContact,
     setLoading,
@@ -219,6 +227,98 @@ export default function App() {
     setShowHandshakeForm(!ready || !currentlyConnected || contacts.length === 0 || needsIdentityCreation);
   }, [ready, isConnected, contacts.length, needsIdentityCreation]);
 
+  // Helper to render message with status and retry/cancel actions
+  const renderMessage = (msg: Message) => {
+    const isOutgoing = msg.direction === 'outgoing';
+    const isFailed = msg.status === 'failed';
+    const isPending = msg.status === 'pending';
+
+    return (
+      <div
+        key={msg.id}
+        className={`max-w-[80%] ${isOutgoing ? 'ml-auto' : ''}`}
+      >
+        <div
+          className={`p-3 rounded-lg ${
+            isOutgoing
+              ? isFailed
+                ? 'bg-red-900/50 border border-red-700'
+                : 'bg-blue-600'
+              : 'bg-gray-700'
+          } ${msg.type === 'system' ? 'bg-gray-800 text-gray-400 italic' : ''} 
+          ${isPending ? 'opacity-70' : ''}`}
+        >
+          <p className="text-sm flex items-center gap-1">
+            {msg.type === "system" && msg.verified !== undefined && (
+              msg.verified ? (
+                <span className="relative group cursor-help">
+                  <Fingerprint size={14} className="text-green-400 inline-block mr-1" />
+                  <span className="absolute bottom-full left-0 mb-1 px-2 py-1 text-xs rounded bg-gray-900 text-green-100 border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
+                    Identity proof verified
+                  </span>
+                </span>
+              ) : (
+                <span className="relative group cursor-help">
+                  <Fingerprint size={14} className="text-red-400 inline-block mr-1" />
+                  <span className="absolute bottom-full left-0 mb-1 px-2 py-1 text-xs rounded bg-gray-900 text-red-100 border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
+                    Identity proof not verified
+                  </span>
+                </span>
+              )
+            )}
+
+            {msg.type === "system" && msg.decrypted ? (
+              <>
+                <span className="font-bold">{msg.decrypted.split(":")[0]}:</span>
+                {msg.decrypted.split(":").slice(1).join(":")}
+              </>
+            ) : (
+              msg.decrypted || msg.ciphertext
+            )}
+          </p>
+
+          <div className="flex justify-between items-center mt-1">
+            <span className="text-xs text-gray-300">
+              {new Date(msg.timestamp).toLocaleTimeString()}
+            </span>
+            {isOutgoing && (
+              <span className="text-xs" title={`Status: ${msg.status}`}>
+                {msg.status === 'confirmed' ? '✓✓' :
+                  msg.status === 'failed' ? '✗' :
+                    msg.status === 'pending' ? '✓' : '?'}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Failed message actions */}
+        {isFailed && isOutgoing && (
+          <div className="flex items-center justify-end gap-2 mt-1 text-xs">
+            <span className="text-red-400">Failed to send</span>
+            <button
+              onClick={() => retryFailedMessage(msg.id)}
+              className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors"
+              title="Send again"
+            >
+              <RotateCcw size={12} />
+              <span>Retry</span>
+            </button>
+            <button
+              onClick={() => cancelQueuedMessage(msg.id)}
+              className="flex items-center gap-1 text-gray-400 hover:text-gray-300 transition-colors"
+              title="Delete message"
+            >
+              <X size={12} />
+              <span>Delete</span>
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Get queue status for selected contact
+  const queueStatus = selectedContact ? getContactQueueStatus(selectedContact) : null;
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -409,57 +509,7 @@ export default function App() {
                               );
                             })
                             .sort((a, b) => a.timestamp - b.timestamp)
-                            .map((msg) => (
-                              <div
-                                key={msg.id}
-                                className={`max-w-[80%] p-3 rounded-lg ${msg.direction === 'outgoing'
-                                  ? 'ml-auto bg-blue-600'
-                                  : 'bg-gray-700'
-                                  } ${msg.type === 'system' ? 'bg-gray-800 text-gray-400 italic' : ''}`}
-                              >
-                                <p className="text-sm flex items-center gap-1">
-                                  {msg.type === "system" && msg.verified !== undefined && (
-                                    msg.verified ? (
-                                      <span className="relative group cursor-help">
-                                        <Fingerprint size={14} className="text-green-400 inline-block mr-1" />
-                                        <span className="absolute bottom-full left-0 mb-1 px-2 py-1 text-xs rounded bg-gray-900 text-green-100 border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
-                                          Identity proof verified
-                                        </span>
-                                      </span>
-                                    ) : (
-                                      <span className="relative group cursor-help">
-                                        <Fingerprint size={14} className="text-red-400 inline-block mr-1" />
-                                        <span className="absolute bottom-full left-0 mb-1 px-2 py-1 text-xs rounded bg-gray-900 text-red-100 border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
-                                          Identity proof not verified
-                                        </span>
-                                      </span>
-                                    )
-                                  )}
-
-                                  {msg.type === "system" && msg.decrypted ? (
-                                    <>
-                                      <span className="font-bold">{msg.decrypted.split(":")[0]}:</span>
-                                      {msg.decrypted.split(":").slice(1).join(":")}
-                                    </>
-                                  ) : (
-                                    msg.decrypted || msg.ciphertext
-                                  )}
-                                </p>
-
-                                <div className="flex justify-between items-center mt-1">
-                                  <span className="text-xs text-gray-300">
-                                    {new Date(msg.timestamp).toLocaleTimeString()}
-                                  </span>
-                                  {msg.direction === 'outgoing' && (
-                                    <span className="text-xs" title={`Status: ${msg.status}`}>
-                                      {msg.status === 'confirmed' ? '✓✓' :
-                                        msg.status === 'failed' ? '✗' :
-                                          msg.status === 'pending' ? '✓' : '?'}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
+                            .map(renderMessage)}
                           {messages.filter(m => {
                             const currentAddress = address;
                             if (!currentAddress || !selectedContact?.address) return false;
@@ -475,6 +525,23 @@ export default function App() {
                               </p>
                             )}
                         </div>
+
+                        {/* Queue Status Indicator */}
+                        {queueStatus && queueStatus.queueLength > 0 && (
+                          <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-yellow-900/30 border border-yellow-800 rounded text-xs text-yellow-300">
+                            {queueStatus.isProcessing ? (
+                              <>
+                                <span className="animate-spin w-3 h-3 border border-yellow-400 border-t-transparent rounded-full"></span>
+                                <span>Sending {queueStatus.queueLength} message{queueStatus.queueLength > 1 ? 's' : ''}...</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>📨</span>
+                                <span>{queueStatus.queueLength} message{queueStatus.queueLength > 1 ? 's' : ''} queued</span>
+                              </>
+                            )}
+                          </div>
+                        )}
 
                         {/* Message Input */}
                         {selectedContact.status === 'established' && selectedContact.identityPubKey && (

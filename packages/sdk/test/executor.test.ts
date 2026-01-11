@@ -53,7 +53,6 @@ const mockSigner = {
 
 // Test data
 const testRecipientKey = nacl.box.keyPair();
-const testSenderSignKey = nacl.sign.keyPair();
 const testIdentityKeyPair: IdentityKeyPair = {
   publicKey: new Uint8Array(32).fill(1),
   secretKey: new Uint8Array(32).fill(2),

@@ -3,11 +3,11 @@
 /**
  * Message Queue Hook for Sequential Processing with Optimistic UI.
  * 
- * Solves the race condition problem by:
- * 1. Immediately showing messages in UI (optimistic)
- * 2. Queuing messages per conversation
- * 3. Processing queue sequentially in background
- * 4. Handling failures with retry capability
+ * 1. Session state is cached per conversation and persists across processQueue calls
+ * 2. After encryption, session state is immediately saved to DB (not waiting for confirmation)
+ * 3. Failed messages don't corrupt session state - the ratchet slot is "burned"
+ * 4. Confirmations now just clean up pending records, not commit session state
+ * 
  */
 
 import { useCallback, useRef, useEffect } from "react";
@@ -27,9 +27,6 @@ import {
   serializeRatchetSession,
 } from "../types.js";
 
-// =============================================================================
-// Types
-// =============================================================================
 
 export type QueuedMessageStatus = 
   | "queued"      // In queue, waiting for previous to complete
@@ -47,9 +44,6 @@ export interface QueuedMessage {
   error?: string;
   txHash?: string;
   createdAt: number;
-  // Pre-computed encryption (computed when message reaches front of queue)
-  encryptedPayload?: Uint8Array;
-  sessionStateAfter?: string;
 }
 
 interface ConversationQueue {
@@ -62,23 +56,27 @@ interface UseMessageQueueProps {
   addLog: (message: string) => void;
   addMessage: (message: Message) => Promise<void>;
   updateMessageStatus: (id: string, status: Message["status"], error?: string) => Promise<void>;
+  removeMessage: (id: string) => Promise<void>;
   updateContact: (contact: Contact) => Promise<void>;
 }
 
-// =============================================================================
-// Hook
-// =============================================================================
 
 export const useMessageQueue = ({
   verbethClient,
   addLog,
   addMessage,
   updateMessageStatus,
+  removeMessage,
   updateContact,
 }: UseMessageQueueProps) => {
-  // Queue per conversation
+
   const queuesRef = useRef<Map<string, ConversationQueue>>(new Map());
   
+  // persistent session cache across processQueue invocations
+  // This ensures we never lose track of the latest session state
+  const sessionCacheRef = useRef<Map<string, RatchetSession>>(new Map());
+  
+  const failedMessagesRef = useRef<Map<string, QueuedMessage>>(new Map());
   // Track mounted state to prevent updates after unmount
   const mountedRef = useRef(true);
 
@@ -99,19 +97,40 @@ export const useMessageQueue = ({
     const queue = queuesRef.current.get(conversationId);
     if (!queue || queue.isProcessing || queue.messages.length === 0) return;
 
-    // Mark as processing
     queue.isProcessing = true;
+
+    // Check session cache first, only fall back to DB if not cached
+    // This ensures we always use the most recently advanced session state
+    let currentSession: RatchetSession | null = sessionCacheRef.current.get(conversationId) ?? null;
+    
+    if (!currentSession) {
+      try {
+        currentSession = await dbService.getRatchetSessionByConversation(conversationId);
+        if (currentSession) {
+          sessionCacheRef.current.set(conversationId, currentSession);
+          addLog(`📂 Loaded session from DB for ${conversationId.slice(0, 10)}...`);
+        }
+      } catch (error) {
+        addLog(`✗ Failed to load ratchet session for ${conversationId.slice(0, 10)}...`);
+        queue.isProcessing = false;
+        return;
+      }
+    }
+
+    if (!currentSession) {
+      addLog(`✗ No ratchet session found for ${conversationId.slice(0, 10)}...`);
+      queue.isProcessing = false;
+      return;
+    }
 
     while (queue.messages.length > 0 && mountedRef.current) {
       const message = queue.messages[0];
       
-      // Skip already processed messages
       if (message.status === "confirmed" || message.status === "pending") {
         queue.messages.shift();
         continue;
       }
 
-      // Skip failed messages (user must explicitly retry)
       if (message.status === "failed") {
         queue.messages.shift();
         continue;
@@ -120,32 +139,44 @@ export const useMessageQueue = ({
       try {
         message.status = "sending";
         
-        // 1. Load current session state
-        const session = await dbService.getRatchetSessionByConversation(conversationId);
-        if (!session) {
-          throw new Error("No ratchet session found");
-        }
+        // use the cached in-memory session state
+        const sessionBefore = currentSession;
 
-        // 2. Encrypt with ratchet
         const plaintext = new TextEncoder().encode(message.plaintext);
         const { session: nextSession, header, ciphertext, signature } = ratchetEncrypt(
-          session,
+          sessionBefore,
           plaintext,
           verbethClient.identityKeyPairInstance.signingSecretKey
         );
 
-        // 3. Package binary payload
+        // =====================================================================
+        // Update BOTH in-memory cache AND DB immediately after encryption
+        // I.e., we commit the session state BEFORE sending the tx
+        // 
+        // Why this is safe:
+        // 1. If tx succeeds: receiver gets message, session states are in sync
+        // 2. If tx fails: the ratchet "slot" is burned, but receiver's skip-key
+        //    mechanism will handle the gap when they receive subsequent messages
+        // 3. This matches how Signal handles message failures
+        // =====================================================================
+        currentSession = nextSession;
+        sessionCacheRef.current.set(conversationId, nextSession);
+        
+        await dbService.saveRatchetSession(nextSession);
+        addLog(`💾 Session state committed (sendingMsgNumber=${nextSession.sendingMsgNumber})`);
+
+        // Package binary payload
         const payload = packageRatchetPayload(signature, header, ciphertext);
         const payloadHex = hexlify(payload);
 
-        // 4. Create pending record (two-phase commit)
+        // Create pending record for confirmation matching (simplified - no session state)
         const pending: PendingOutbound = {
           id: message.id,
           conversationId,
-          topic: session.topicOutbound,
+          topic: sessionBefore.topicOutbound,
           payloadHex,
           plaintext: message.plaintext,
-          sessionStateBefore: JSON.stringify(serializeRatchetSession(session)),
+          sessionStateBefore: JSON.stringify(serializeRatchetSession(sessionBefore)),
           sessionStateAfter: JSON.stringify(serializeRatchetSession(nextSession)),
           createdAt: message.createdAt,
           txHash: null,
@@ -153,25 +184,25 @@ export const useMessageQueue = ({
         };
         await dbService.savePendingOutbound(pending);
 
-        // 5. Send transaction
+        // Send transaction
         const timestamp = Math.floor(Date.now() / 1000);
-        const nonce = nextSession.sendingMsgNumber - 1;
+        const nonce = nextSession.sendingMsgNumber - 1; // The message number we just used
 
         await dbService.updatePendingOutboundStatus(message.id, "submitted");
 
         const tx = await verbethClient.executorInstance.sendMessage(
           payload,
-          session.topicOutbound,
+          sessionBefore.topicOutbound,
           timestamp,
           BigInt(nonce)
         );
 
-        // 6. Update with txHash
+        // Update with txHash
         message.txHash = tx.hash;
         message.status = "pending";
         await dbService.updatePendingOutboundStatus(message.id, "submitted", tx.hash);
 
-        addLog(`📤 Message sent: "${message.plaintext.slice(0, 30)}..." (tx: ${tx.hash.slice(0, 10)}...)`);
+        addLog(`📤 Message sent: "${message.plaintext.slice(0, 30)}..." (tx: ${tx.hash.slice(0, 10)}..., n=${nonce})`);
 
         // Update contact
         const updatedContact: Contact = {
@@ -191,23 +222,34 @@ export const useMessageQueue = ({
         message.status = "failed";
         message.error = errorMessage;
 
-        // Rollback: delete pending record if it was created
+        // =====================================================================
+        // On failure, we do NOT roll back session state
+        // The ratchet slot is "burned" - the encryption already advanced the
+        // chain. If we rolled back, we'd reuse the same key which is a security
+        // violation. Instead, we let the slot be skipped - the receiver will
+        // handle this via their skip-key mechanism.
+        //
+        // This is intentional and matches Signal's behavior.
+        // =====================================================================
+
+        
         try {
           await dbService.deletePendingOutbound(message.id);
         } catch {
-          // Ignore cleanup errors
         }
 
-        // Update UI message status
         await updateMessageStatus(message.id, "failed", errorMessage);
 
-        addLog(`✗ Failed to send: "${message.plaintext.slice(0, 20)}..." - ${errorMessage}`);
+        addLog(`✗ Failed to send (slot burned): "${message.plaintext.slice(0, 20)}..." - ${errorMessage}`);
 
-        // Remove failed message from queue (user can retry via UI)
+        // Store failed message for retry/cancel
+        failedMessagesRef.current.set(message.id, { ...message });
+
+        // Remove from active queue
         queue.messages.shift();
 
-        // Don't break - continue processing remaining messages
-        // (they might succeed if the failure was transient)
+        // Continue processing remaining messages with the advanced session state
+        // (currentSession is already updated, which is correct)
       }
     }
 
@@ -239,7 +281,7 @@ export const useMessageQueue = ({
     const messageId = generateTempMessageId();
     const conversationId = contact.conversationId;
 
-    // 1. Create queued message
+    // Create queued message
     const queuedMessage: QueuedMessage = {
       id: messageId,
       conversationId,
@@ -249,17 +291,17 @@ export const useMessageQueue = ({
       createdAt: Date.now(),
     };
 
-    // 2. Get or create queue for this conversation
+    // Get or create queue for this conversation
     let queue = queuesRef.current.get(conversationId);
     if (!queue) {
       queue = { messages: [], isProcessing: false };
       queuesRef.current.set(conversationId, queue);
     }
 
-    // 3. Add to queue
+    // Add to queue
     queue.messages.push(queuedMessage);
 
-    // 4. Show optimistic UI message immediately
+    // Show optimistic UI message immediately
     const optimisticMessage: Message = {
       id: messageId,
       topic: contact.topicOutbound || "",
@@ -283,8 +325,7 @@ export const useMessageQueue = ({
 
     addLog(`📝 Message queued: "${messageText.slice(0, 30)}..."`);
 
-    // 5. Trigger queue processing (non-blocking)
-    // Use setTimeout to ensure this runs after current execution
+    // Trigger queue processing (non-blocking)
     setTimeout(() => processQueue(conversationId), 0);
 
     return messageId;
@@ -292,9 +333,48 @@ export const useMessageQueue = ({
 
   /**
    * Retry a failed message.
+   * 
+   * IMPORTANT: The original ratchet slot was burned. Retry creates a NEW
+   * encryption with the current (advanced) session state. This means the
+   * message number will be different from the original attempt.
    */
   const retryMessage = useCallback(async (messageId: string): Promise<boolean> => {
-    // Find the message in any queue
+    // Check the failed messages map first
+    const failedMessage = failedMessagesRef.current.get(messageId);
+    
+    if (failedMessage) {
+      const conversationId = failedMessage.conversationId;
+      
+      // Remove from failed messages map
+      failedMessagesRef.current.delete(messageId);
+      
+      // Reset status for retry
+      failedMessage.status = "queued";
+      failedMessage.error = undefined;
+      failedMessage.createdAt = Date.now();
+      
+      // Get or create queue
+      let queue = queuesRef.current.get(conversationId);
+      if (!queue) {
+        queue = { messages: [], isProcessing: false };
+        queuesRef.current.set(conversationId, queue);
+      }
+      
+      // Add to end of queue
+      queue.messages.push(failedMessage);
+      
+      // Update UI status back to pending
+      await updateMessageStatus(messageId, "pending");
+      
+      addLog(`🔄 Retrying message (new slot): "${failedMessage.plaintext.slice(0, 30)}..."`);
+      
+      // Trigger processing
+      setTimeout(() => processQueue(conversationId), 0);
+      
+      return true;
+    }
+    
+    // Fallback: check if still in active queue (shouldn't happen normally)
     for (const [conversationId, queue] of queuesRef.current.entries()) {
       const messageIndex = queue.messages.findIndex(
         m => m.id === messageId && m.status === "failed"
@@ -303,7 +383,6 @@ export const useMessageQueue = ({
       if (messageIndex !== -1) {
         const message = queue.messages[messageIndex];
         
-        // Reset status and re-add to queue
         message.status = "queued";
         message.error = undefined;
         message.createdAt = Date.now();
@@ -312,28 +391,38 @@ export const useMessageQueue = ({
         queue.messages.splice(messageIndex, 1);
         queue.messages.push(message);
 
-        // Update UI
         await updateMessageStatus(messageId, "pending");
         
         addLog(`🔄 Retrying message: "${message.plaintext.slice(0, 30)}..."`);
 
-        // Trigger processing
         setTimeout(() => processQueue(conversationId), 0);
         
         return true;
       }
     }
 
-    // Message not in queue - might need to reload from DB
-    // For now, return false
     addLog(`✗ Could not find message ${messageId} to retry`);
     return false;
   }, [addLog, updateMessageStatus, processQueue]);
 
   /**
-   * Cancel a queued (not yet sent) message.
+   * Cancel/delete a failed or queued message.
    */
   const cancelMessage = useCallback(async (messageId: string): Promise<boolean> => {
+    // Check failed messages map first
+    const failedMessage = failedMessagesRef.current.get(messageId);
+    
+    if (failedMessage) {
+      failedMessagesRef.current.delete(messageId);
+      
+      // Remove from DB and UI
+      await removeMessage(messageId);
+      
+      addLog(`🗑️ Deleted message: "${failedMessage.plaintext.slice(0, 30)}..."`);
+      return true;
+    }
+    
+    // Fallback: check active queues
     for (const [, queue] of queuesRef.current.entries()) {
       const messageIndex = queue.messages.findIndex(
         m => m.id === messageId && (m.status === "queued" || m.status === "failed")
@@ -343,16 +432,16 @@ export const useMessageQueue = ({
         const message = queue.messages[messageIndex];
         queue.messages.splice(messageIndex, 1);
         
-        // Remove from DB/UI
-        await dbService.deleteMessage(messageId);
+        await removeMessage(messageId);
         
-        addLog(`🗑️ Cancelled message: "${message.plaintext.slice(0, 30)}..."`);
+        addLog(`🗑️ Deleted message: "${message.plaintext.slice(0, 30)}..."`);
         return true;
       }
     }
     
+    addLog(`✗ Could not find message ${messageId} to delete`);
     return false;
-  }, [addLog]);
+  }, [addLog, removeMessage]);
 
   /**
    * Get queue status for a conversation.
@@ -374,10 +463,21 @@ export const useMessageQueue = ({
   }, []);
 
   /**
+   * Invalidate cached session for a conversation.
+   * Call this when session is reset or updated externally.
+   */
+  const invalidateSessionCache = useCallback((conversationId: string) => {
+    sessionCacheRef.current.delete(conversationId);
+    addLog(`🔄 Session cache invalidated for ${conversationId.slice(0, 10)}...`);
+  }, [addLog]);
+
+  /**
    * Clear all queues (e.g., on logout).
    */
   const clearAllQueues = useCallback(() => {
     queuesRef.current.clear();
+    failedMessagesRef.current.clear();
+    sessionCacheRef.current.clear();
   }, []);
 
   return {
@@ -385,6 +485,7 @@ export const useMessageQueue = ({
     retryMessage,
     cancelMessage,
     getQueueStatus,
+    invalidateSessionCache,
     clearAllQueues,
   };
 };

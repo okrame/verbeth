@@ -1,12 +1,9 @@
 // src/hooks/useChatActions.ts
 
 /**
- * Chat actions hook with Double Ratchet integration.
+ * Chat actions hook with Double Ratchet integration and Message Queue.
  * 
- * Key changes from legacy:
- * - acceptHandshake now creates ratchet session
- * - sendMessageToContact uses ratchet encryption with two-phase commit
- * - Sequential blocking: only one pending message per conversation
+ * UPDATED: Added session cache invalidation for when sessions are reset externally.
  */
 
 import { useCallback } from "react";
@@ -14,24 +11,22 @@ import { hexlify } from "ethers";
 import {
   pickOutboundTopic,
   VerbethClient,
-  // Ratchet imports
   initSessionAsResponder,
-  ratchetEncrypt,
-  packageRatchetPayload,
 } from "@verbeth/sdk";
 import { dbService } from "../services/DbService.js";
 import {
   Contact,
-  PendingOutbound,
   generateTempMessageId,
-  serializeRatchetSession,
 } from "../types.js";
+import { useMessageQueue } from "./useMessageQueue.js";
 
 interface UseChatActionsProps {
   verbethClient: VerbethClient | null;
   addLog: (message: string) => void;
   updateContact: (contact: Contact) => Promise<void>;
   addMessage: (message: any) => Promise<void>;
+  updateMessageStatus: (id: string, status: "pending" | "confirmed" | "failed", error?: string) => Promise<void>;
+  removeMessage: (id: string) => Promise<void>;
   removePendingHandshake: (id: string) => Promise<void>;
   setSelectedContact: (contact: Contact | null) => void;
   setLoading: (loading: boolean) => void;
@@ -44,12 +39,30 @@ export const useChatActions = ({
   addLog,
   updateContact,
   addMessage,
+  updateMessageStatus,
+  removeMessage,
   removePendingHandshake,
   setSelectedContact,
   setLoading,
   setMessage,
   setRecipientAddress,
 }: UseChatActionsProps) => {
+
+  const {
+    queueMessage,
+    retryMessage,
+    cancelMessage,
+    getQueueStatus,
+    invalidateSessionCache,
+    clearAllQueues,
+  } = useMessageQueue({
+    verbethClient,
+    addLog,
+    addMessage,
+    updateMessageStatus,
+    removeMessage,
+    updateContact,
+  });
 
   /**
    * Send a handshake to initiate contact.
@@ -74,12 +87,10 @@ export const useChatActions = ({
           message
         );
 
-        // Store ephemeral secret for ratchet session init when response arrives
         const newContact: Contact = {
           address: recipientAddress,
           ownerAddress: verbethClient.userAddress,
           status: "handshake_sent",
-          // Store ephemeral secret (hex) for later use in initSessionAsInitiator
           handshakeEphemeralSecret: hexlify(ephemeralKeyPair.secretKey),
           lastMessage: message,
           lastTimestamp: Date.now(),
@@ -137,10 +148,7 @@ export const useChatActions = ({
     ]
   );
 
-  /**
-   * Accept a handshake and create ratchet session.
-   * This is where the responder's ratchet session is initialized.
-   */
+
   const acceptHandshake = useCallback(
     async (handshake: any, responseMessage: string) => {
       if (!verbethClient) {
@@ -149,7 +157,6 @@ export const useChatActions = ({
       }
 
       try {
-        // Accept handshake - now returns ephemeral keys for ratchet
         const {
           tx,
           duplexTopics,
@@ -161,11 +168,9 @@ export const useChatActions = ({
           responseMessage
         );
 
-        // Determine topics from responder's perspective
-        const topicOutbound = pickOutboundTopic(false, duplexTopics); // Responder
-        const topicInbound = pickOutboundTopic(true, duplexTopics);   // Responder
+        const topicOutbound = pickOutboundTopic(false, duplexTopics);
+        const topicInbound = pickOutboundTopic(true, duplexTopics);
 
-        // Initialize ratchet session as responder
         const ratchetSession = initSessionAsResponder({
           myAddress: verbethClient.userAddress,
           contactAddress: handshake.sender,
@@ -176,10 +181,8 @@ export const useChatActions = ({
           topicInbound,
         });
 
-        // Save ratchet session
         await dbService.saveRatchetSession(ratchetSession);
 
-        // Update contact with session info
         const newContact: Contact = {
           address: handshake.sender,
           ownerAddress: verbethClient.userAddress,
@@ -240,10 +243,6 @@ export const useChatActions = ({
     ]
   );
 
-  /**
-   * Send an encrypted message using Double Ratchet.
-   * Implements two-phase commit with sequential blocking.
-   */
   const sendMessageToContact = useCallback(
     async (contact: Contact, messageText: string) => {
       if (!verbethClient) {
@@ -256,146 +255,77 @@ export const useChatActions = ({
         return;
       }
 
-      // 1. SEQUENTIAL BLOCKING: Check for existing pending outbound
-      const existingPending = await dbService.getPendingOutboundByConversation(
-        contact.conversationId
-      );
-      if (existingPending.length > 0) {
-        addLog("⏳ Please wait for previous message to confirm before sending another");
-        return;
-      }
-
-      setLoading(true);
-      const pendingId = generateTempMessageId();
-
-      try {
-        // 2. Load ratchet session
-        const session = await dbService.getRatchetSessionByConversation(
-          contact.conversationId
-        );
-        if (!session) {
-          addLog("✗ No ratchet session for this contact");
-          setLoading(false);
-          return;
-        }
-
-        // 3. Encrypt with ratchet (returns new session state, doesn't mutate)
-        const plaintext = new TextEncoder().encode(messageText);
-        const { session: nextSession, header, ciphertext, signature } = ratchetEncrypt(
-          session,
-          plaintext,
-          verbethClient.identityKeyPairInstance.signingSecretKey
-        );
-
-        // 4. Package binary payload
-        const payload = packageRatchetPayload(signature, header, ciphertext);
-        const payloadHex = hexlify(payload);
-
-        // 5. Create pending record (two-phase commit)
-        const pending: PendingOutbound = {
-          id: pendingId,
-          conversationId: session.conversationId,
-          topic: session.topicOutbound,
-          payloadHex,
-          plaintext: messageText,
-          sessionStateBefore: JSON.stringify(serializeRatchetSession(session)),
-          sessionStateAfter: JSON.stringify(serializeRatchetSession(nextSession)),
-          createdAt: Date.now(),
-          txHash: null,
-          status: "preparing",
-        };
-        await dbService.savePendingOutbound(pending);
-
-        // 6. Add optimistic UI message
-        await addMessage({
-          id: pendingId,
-          topic: session.topicOutbound,
-          sender: verbethClient.userAddress,
-          recipient: contact.address,
-          ciphertext: "",
-          timestamp: Date.now(),
-          blockTimestamp: Date.now(),
-          blockNumber: 0,
-          direction: "outgoing" as const,
-          decrypted: messageText,
-          read: true,
-          nonce: nextSession.sendingMsgNumber - 1,
-          dedupKey: `pending-${pendingId}`,
-          type: "text" as const,
-          ownerAddress: verbethClient.userAddress,
-          status: "pending" as const,
-        });
-
-        // 7. Send transaction
-        const timestamp = Math.floor(Date.now() / 1000);
-        const nonce = nextSession.sendingMsgNumber - 1;
-
-        await dbService.updatePendingOutboundStatus(pendingId, "submitted");
-
-        // Send the binary payload as bytes
-        // The executor.sendMessage expects: (payload: Uint8Array | bytes, topic, timestamp, nonce)
-        const tx = await verbethClient.executorInstance.sendMessage(
-          payload,                           // Raw binary payload
-          session.topicOutbound,             // Topic (bytes32 hex)
-          timestamp,                         // Unix timestamp
-          BigInt(nonce)                      // Convert to bigint
-        );
-
-        // Update with txHash for confirmation matching
-        await dbService.updatePendingOutboundStatus(pendingId, "submitted", tx.hash);
-
-        addLog(
-          `Message sent to ${contact.address.slice(0, 8)}...: "${messageText}" (tx: ${tx.hash})`
-        );
-
-        // Update contact last message
-        const updatedContact: Contact = {
-          ...contact,
-          lastMessage: messageText,
-          lastTimestamp: Date.now(),
-        };
-        await updateContact(updatedContact);
-
-        // Note: Actual session state commit happens in useMessageProcessor
-        // when we see the on-chain confirmation
-
-      } catch (error) {
-        console.error("Failed to send message:", error);
-
-        // Rollback: delete pending record, keep old session state
-        try {
-          await dbService.deletePendingOutbound(pendingId);
-        } catch (cleanupError) {
-          console.error("Failed to cleanup pending outbound:", cleanupError);
-        }
-        
-        try {
-          await dbService.updateMessage(pendingId, { status: "failed" });
-        } catch (updateError) {
-          console.error("Failed to mark message as failed:", updateError);
-        }
-
-        addLog(
-          `✗ Failed to send message: ${
-            error instanceof Error ? error.message : "Unknown error"
-          }`
-        );
-      } finally {
-        setLoading(false);
+      const messageId = await queueMessage(contact, messageText);
+      
+      if (messageId) {
+        setMessage("");
       }
     },
-    [
-      verbethClient,
-      addLog,
-      addMessage,
-      updateContact,
-      setLoading,
-    ]
+    [verbethClient, addLog, queueMessage, setMessage]
+  );
+
+
+  // here the message number will be different from the original attempt.
+  const retryFailedMessage = useCallback(
+    async (messageId: string) => {
+      const success = await retryMessage(messageId);
+      if (!success) {
+        addLog(`✗ Could not retry message`);
+      }
+    },
+    [retryMessage, addLog]
+  );
+
+  /**
+   * Cancel a queued message.
+   */
+  const cancelQueuedMessage = useCallback(
+    async (messageId: string) => {
+      const success = await cancelMessage(messageId);
+      if (!success) {
+        addLog(`✗ Could not cancel message`);
+      }
+    },
+    [cancelMessage, addLog]
+  );
+
+  /**
+   * Get the queue status for a contact.
+   */
+  const getContactQueueStatus = useCallback(
+    (contact: Contact) => {
+      if (!contact.conversationId) {
+        return { queueLength: 0, isProcessing: false, pendingMessages: [] };
+      }
+      return getQueueStatus(contact.conversationId);
+    },
+    [getQueueStatus]
+  );
+
+  /**
+   * Invalidate session cache for a contact.
+   * Call this when a session is reset or updated externally.
+   */
+  const invalidateContactSessionCache = useCallback(
+    (contact: Contact) => {
+      if (contact.conversationId) {
+        invalidateSessionCache(contact.conversationId);
+      }
+    },
+    [invalidateSessionCache]
   );
 
   return {
+    // Existing actions
     sendHandshake,
     acceptHandshake,
     sendMessageToContact,
+    
+    // Queue-related actions
+    retryFailedMessage,
+    cancelQueuedMessage,
+    getContactQueueStatus,
+    invalidateContactSessionCache,
+    clearAllQueues,
   };
 };

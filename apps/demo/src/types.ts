@@ -122,10 +122,7 @@ export interface StoredIdentity {
   emitterAddress?: string; // EOA for classic, Safe for fast/custom
 }
 
-// **
-//  * Stored ratchet session in IndexedDB.
-//  * Extends SDK RatchetSession with serialization-friendly format.
-//  */
+// Extends SDK RatchetSession with serialization-friendly format.
 export interface StoredRatchetSession {
   conversationId: string;
   topicOutbound: string;
@@ -225,10 +222,13 @@ export interface MessageProcessorResult {
   pendingHandshakes: PendingHandshake[];
   contacts: Contact[];
   addMessage: (message: Message) => void;
+  updateMessageStatus: (id: string, status: Message["status"], error?: string) => Promise<void>;
+  removeMessage: (id: string) => Promise<void>;
   removePendingHandshake: (id: string) => void;
   updateContact: (contact: Contact) => void;
   processEvents: (events: ProcessedEvent[]) => Promise<void>;
 }
+
 
 export const generateTempMessageId = () => `temp-${Date.now()}-${Math.random()}`;
 
