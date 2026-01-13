@@ -11,18 +11,7 @@ import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
 import { hmac } from '@noble/hashes/hmac';
 import nacl from 'tweetnacl';
-
-// =============================================================================
-// Root Key Derivation
-// =============================================================================
-
 /**
- * Derive new root key and chain key from DH output.
- * Called on every DH ratchet step.
- * 
- * KDF_RK(rk, dh_out) = HKDF(dh_out, rk, "VerbethRatchet", 64)
- *   → (new_rk[0:32], chain_key[32:64])
- * 
  * @param rootKey - Current root key (32 bytes)
  * @param dhOutput - DH shared secret (32 bytes)
  * @returns New root key and chain key
@@ -38,17 +27,7 @@ export function kdfRootKey(
   };
 }
 
-// =============================================================================
-// Chain Key Derivation
-// =============================================================================
-
 /**
- * Derive message key and advance chain key.
- * Called for every message sent/received.
- * 
- * KDF_CK(ck) = (HMAC(ck, 0x02), HMAC(ck, 0x01))
- *   → (new_chain_key, message_key)
- * 
  * @param chainKey - Current chain key (32 bytes)
  * @returns New chain key and message key for encryption/decryption
  */
@@ -65,10 +44,6 @@ export function kdfChainKey(
     messageKey: messageKey,
   };
 }
-
-// =============================================================================
-// Diffie-Hellman Operations
-// =============================================================================
 
 /**
  * Perform X25519 Diffie-Hellman key exchange.

@@ -2,12 +2,7 @@
 
 /**
  * Ratchet Session Initialization.
- * 
- * CRITICAL DESIGN: Initial shared secret is derived from ephemeral↔ephemeral DH ONLY.
- * NO identity keys are used in secret derivation. This ensures that compromise of
- * identity keys NEVER allows decryption of past messages, not even the first one.
- * 
- * Authentication is provided separately via Ed25519 signatures on every message.
+ * Initial shared secret is derived from ephemeral to ephemeral DH only.
  */
 
 import { keccak256, toUtf8Bytes } from 'ethers';
@@ -18,10 +13,6 @@ import {
 } from './types.js';
 import { kdfRootKey, dh, generateDHKeyPair } from './kdf.js';
 
-// =============================================================================
-// Helpers
-// =============================================================================
-
 /**
  * Compute deterministic conversation ID from topics.
  * Sorting ensures both parties derive the same ID regardless of perspective.
@@ -31,18 +22,9 @@ export function computeConversationId(topicA: string, topicB: string): string {
   return keccak256(toUtf8Bytes(sorted.join(':')));
 }
 
-// =============================================================================
-// Session Initialization
-// =============================================================================
-
 /**
- * Initialize session as RESPONDER (Bob).
  * Called after receiving handshake, before/during sending response.
- * 
- * Bob reuses his HandshakeResponse ephemeral key (responderEphemeralR) as his
- * first DH ratchet key. This avoids adding new fields to the on-chain format.
- * 
- * ⚠️ CRITICAL: The responder MUST persist myResponderEphemeralSecret immediately.
+ * The responder must persist myResponderEphemeralSecret immediately.
  * This becomes dhMySecretKey and is required for all future ratchet operations.
  * 
  * @param params - Initialization parameters
@@ -59,8 +41,6 @@ export function initSessionAsResponder(params: InitResponderParams): RatchetSess
     topicInbound,
   } = params;
 
-  // Initial shared secret: DH(myEphemeral, theirEphemeral) ONLY
-  // NO identity keys → true forward secrecy from message 0
   const sharedSecret = dh(myResponderEphemeralSecret, theirHandshakeEphemeralPubKey);
 
   // Derive initial root key and sending chain key
@@ -86,11 +66,10 @@ export function initSessionAsResponder(params: InitResponderParams): RatchetSess
     dhMyPublicKey: myResponderEphemeralPublic,
     dhTheirPublicKey: theirHandshakeEphemeralPubKey,
 
-    // Bob can send immediately using sendingChainKey
     sendingChainKey,
     sendingMsgNumber: 0,
 
-    // Receiving chain not yet established (Alice hasn't sent with her new DH key)
+    // Receiving chain not yet established
     receivingChainKey: null,
     receivingMsgNumber: 0,
 
@@ -104,13 +83,9 @@ export function initSessionAsResponder(params: InitResponderParams): RatchetSess
 }
 
 /**
- * Initialize session as INITIATOR (Alice).
  * Called after receiving and validating handshake response.
  * 
- * Alice performs an immediate DH ratchet step upon initialization because
- * Bob's ratchet ephemeral (from inside the decrypted payload) is his first DH public key.
- * 
- * IMPORTANT: theirResponderEphemeralPubKey comes from INSIDE the decrypted
+ * NB: theirResponderEphemeralPubKey comes from inside the decrypted
  * HandshakeResponse payload, NOT from the on-chain responderEphemeralR field.
  * The on-chain R is only used for tag verification and is different for unlinkability.
  * 
@@ -127,20 +102,18 @@ export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSess
     topicInbound,
   } = params;
 
-  // Initial shared secret: DH(myEphemeral, theirEphemeral) ONLY
-  // This matches what Bob computed: DH(bobEphemeral, aliceEphemeral)
   const sharedSecret = dh(myHandshakeEphemeralSecret, theirResponderEphemeralPubKey);
 
-  // Derive same initial root key as Bob
+  // Derive same initial root key as hs responder
   const { rootKey: initialRootKey, chainKey: bobsSendingChain } = kdfRootKey(
     new Uint8Array(32), // Same initial salt
     sharedSecret
   );
 
-  // Generate Alice's first DH keypair for sending
+  // Generate first DH keypair for sending
   const myDHKeyPair = generateDHKeyPair();
 
-  // Perform sending ratchet step (Alice does this immediately)
+  // Perform sending ratchet step
   const dhSend = dh(myDHKeyPair.secretKey, theirResponderEphemeralPubKey);
   const { rootKey: finalRootKey, chainKey: sendingChainKey } = kdfRootKey(
     initialRootKey,
@@ -158,16 +131,14 @@ export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSess
 
     rootKey: finalRootKey,
 
-    // Alice's newly generated DH keypair
     dhMySecretKey: myDHKeyPair.secretKey,
     dhMyPublicKey: myDHKeyPair.publicKey,
-    // Bob's responder ephemeral is his first DH public key
+
     dhTheirPublicKey: theirResponderEphemeralPubKey,
 
     sendingChainKey,
     sendingMsgNumber: 0,
 
-    // Alice's receiving chain = Bob's sending chain (from initial secret)
     receivingChainKey: bobsSendingChain,
     receivingMsgNumber: 0,
 

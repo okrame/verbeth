@@ -17,16 +17,9 @@
 
 import { MessageHeader, ParsedRatchetPayload, RATCHET_VERSION_V1 } from './types.js';
 
-/** Minimum valid payload length: version + sig + header */
 const MIN_PAYLOAD_LENGTH = 1 + 64 + 32 + 4 + 4; // 105 bytes
 
-// =============================================================================
-// Encoding
-// =============================================================================
-
 /**
- * Package a ratchet message into binary format.
- * 
  * @param signature - Ed25519 signature (64 bytes)
  * @param header - Message header (dh, pn, n)
  * @param ciphertext - Encrypted payload (nonce + secretbox output)
@@ -50,14 +43,11 @@ export function packageRatchetPayload(
 
   let offset = 0;
 
-  // Version byte
   payload[offset++] = RATCHET_VERSION_V1;
 
-  // Signature (64 bytes)
   payload.set(signature, offset);
   offset += 64;
 
-  // DH public key (32 bytes)
   payload.set(header.dh, offset);
   offset += 32;
 
@@ -69,15 +59,10 @@ export function packageRatchetPayload(
   view.setUint32(offset, header.n, false);
   offset += 4;
 
-  // Ciphertext (variable length)
   payload.set(ciphertext, offset);
 
   return payload;
 }
-
-// =============================================================================
-// Decoding
-// =============================================================================
 
 /**
  * Parse a binary ratchet payload.
@@ -87,23 +72,20 @@ export function packageRatchetPayload(
  */
 export function parseRatchetPayload(payload: Uint8Array): ParsedRatchetPayload | null {
   if (payload.length < MIN_PAYLOAD_LENGTH) {
-    return null; // Too short
+    return null; 
   }
 
   const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
   let offset = 0;
 
-  // Version
   const version = payload[offset++];
   if (version !== RATCHET_VERSION_V1) {
-    return null; // Unknown version
+    return null;
   }
 
-  // Signature (64 bytes)
   const signature = payload.slice(offset, offset + 64);
   offset += 64;
 
-  // DH public key (32 bytes)
   const dh = payload.slice(offset, offset + 32);
   offset += 32;
 
@@ -115,7 +97,6 @@ export function parseRatchetPayload(payload: Uint8Array): ParsedRatchetPayload |
   const n = view.getUint32(offset, false);
   offset += 4;
 
-  // Ciphertext (remaining bytes)
   const ciphertext = payload.slice(offset);
 
   return {
@@ -126,12 +107,7 @@ export function parseRatchetPayload(payload: Uint8Array): ParsedRatchetPayload |
   };
 }
 
-// =============================================================================
-// Detection
-// =============================================================================
-
 /**
- * Check if payload is in ratchet binary format.
  * Used to distinguish ratchet messages from legacy JSON format.
  * 
  * @param payload - Raw payload bytes
@@ -143,7 +119,6 @@ export function isRatchetPayload(payload: Uint8Array): boolean {
 
 /**
  * Check if hex string represents a ratchet payload.
- * Convenience wrapper for hex-encoded payloads from chain.
  * 
  * @param hexPayload - Hex string (with or without 0x prefix)
  * @returns true if payload is ratchet format
@@ -158,16 +133,7 @@ export function isRatchetPayloadHex(hexPayload: string): boolean {
   return firstByte === RATCHET_VERSION_V1;
 }
 
-// =============================================================================
-// Utilities
-// =============================================================================
 
-/**
- * Convert hex string to Uint8Array.
- * 
- * @param hex - Hex string (with or without 0x prefix)
- * @returns Byte array
- */
 export function hexToBytes(hex: string): Uint8Array {
   const cleanHex = hex.startsWith('0x') ? hex.slice(2) : hex;
   const bytes = new Uint8Array(cleanHex.length / 2);
@@ -177,13 +143,6 @@ export function hexToBytes(hex: string): Uint8Array {
   return bytes;
 }
 
-/**
- * Convert Uint8Array to hex string.
- * 
- * @param bytes - Byte array
- * @param prefix - Whether to include 0x prefix (default: true)
- * @returns Hex string
- */
 export function bytesToHex(bytes: Uint8Array, prefix: boolean = true): string {
   const hex = Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))

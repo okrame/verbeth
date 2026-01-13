@@ -1,33 +1,22 @@
 // packages/sdk/src/ratchet/types.ts
 
 /**
- * Double Ratchet types and constants for Verbeth E2EE messaging.
- * 
- * Key design decisions:
- * - Sessions keyed by conversationId (derived from topics), NOT addresses
- * - Initial secret from ephemeral-only DH (no identity keys) for true forward secrecy
- * - Ed25519 signatures mandatory on all messages (DoS protection)
+ * Double Ratchet types and constants.
  */
 
-// =============================================================================
-// Constants
-// =============================================================================
-
 /**
- * Sanity cap per ratchet step - protects against malicious peers or corrupted state.
- * Auth-before-ratchet prevents external attackers; this caps internal state issues.
+ * Sanity cap per ratchet step, protects against malicious peers or corrupted state.
  */
 export const MAX_SKIP_PER_MESSAGE = 100_000;
 
 /**
- * Maximum stored skipped keys (memory/storage bound).
  * When exceeded, oldest keys are pruned.
  */
 export const MAX_STORED_SKIPPED_KEYS = 1000;
 
 /**
- * Skipped keys TTL - 24 hours is sufficient for reorg tolerance.
- * This is NOT message expiry; sequential messages don't use skipped keys.
+ * Skipped keys TTL (24 hours is sufficient for reorg tolerance).
+ * (this is not message expiry as sequential messages don't use skipped keys)
  */
 export const MAX_SKIPPED_KEYS_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -40,10 +29,6 @@ export const SYNC_BATCH_SIZE = 10_000;
  * Binary payload version byte.
  */
 export const RATCHET_VERSION_V1 = 0x01;
-
-// =============================================================================
-// Core Types
-// =============================================================================
 
 /**
  * Ratchet session state.
@@ -132,21 +117,13 @@ export interface MessageHeader {
   n: number;
 }
 
-// =============================================================================
-// Result Types
-// =============================================================================
-
 /**
  * Result of ratchetEncrypt - includes new session state for two-phase commit.
  */
 export interface EncryptResult {
-  /** Updated session state (caller must persist after tx confirms) */
   session: RatchetSession;
-  /** Message header */
   header: MessageHeader;
-  /** Encrypted payload (nonce + ciphertext) */
   ciphertext: Uint8Array;
-  /** Ed25519 signature over (header || ciphertext) */
   signature: Uint8Array;
 }
 
@@ -154,9 +131,7 @@ export interface EncryptResult {
  * Result of ratchetDecrypt.
  */
 export interface DecryptResult {
-  /** Updated session state (caller must persist) */
   session: RatchetSession;
-  /** Decrypted plaintext */
   plaintext: Uint8Array;
 }
 
@@ -164,48 +139,36 @@ export interface DecryptResult {
  * Parsed binary ratchet payload.
  */
 export interface ParsedRatchetPayload {
-  /** Protocol version */
   version: number;
-  /** Ed25519 signature (64 bytes) */
   signature: Uint8Array;
-  /** Message header */
   header: MessageHeader;
-  /** Encrypted payload */
   ciphertext: Uint8Array;
 }
 
-// =============================================================================
-// Initialization Parameters
-// =============================================================================
-
 /**
- * Parameters for initializing session as responder (Bob).
+ * Parameters for initializing session as responder.
  */
 export interface InitResponderParams {
   myAddress: string;
   contactAddress: string;
   /** Ephemeral secret used in HandshakeResponse (becomes dhMySecretKey) */
   myResponderEphemeralSecret: Uint8Array;
-  /** = responderEphemeralR on-chain */
   myResponderEphemeralPublic: Uint8Array;
-  /** Alice's ephemeral from Handshake event */
+  /** Initiator's ephemeral from Handshake event */
   theirHandshakeEphemeralPubKey: Uint8Array;
   topicOutbound: `0x${string}`;
   topicInbound: `0x${string}`;
 }
 
 /**
- * Parameters for initializing session as initiator (Alice).
+ * Parameters for initializing session as initiator.
  */
 export interface InitInitiatorParams {
   myAddress: string;
   contactAddress: string;
   /** Handshake ephemeral secret (must persist until response arrives) */
   myHandshakeEphemeralSecret: Uint8Array;
-  /** 
-   * Bob's ratchet ephemeral from INSIDE the decrypted HandshakeResponse payload.
-   * NOTE: This is DIFFERENT from the on-chain responderEphemeralR (which is only for tag).
-   */
+
   theirResponderEphemeralPubKey: Uint8Array;
   topicOutbound: `0x${string}`;
   topicInbound: `0x${string}`;

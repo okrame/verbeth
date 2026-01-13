@@ -6,17 +6,13 @@
  * Encrypts plaintext using the current sending chain, advances chain state,
  * and signs the message with Ed25519.
  * 
- * IMPORTANT: Returns a NEW session object. Caller must NOT persist until
- * the transaction is confirmed on-chain (two-phase commit pattern).
+ * Returns a new session object. Caller must not persist until
+ * the tx is confirmed on-chain (two-phase commit pattern).
  */
 
 import nacl from 'tweetnacl';
 import { RatchetSession, MessageHeader, EncryptResult } from './types.js';
 import { kdfChainKey } from './kdf.js';
-
-// =============================================================================
-// Header Encoding
-// =============================================================================
 
 /**
  * Encode message header as 40 bytes for signing.
@@ -30,19 +26,7 @@ export function encodeHeader(header: MessageHeader): Uint8Array {
   return buf;
 }
 
-// =============================================================================
-// Encryption
-// =============================================================================
-
-/**
- * Encrypt a message using the ratchet.
- * 
- * Returns updated session state (caller must persist after tx confirms) and
- * encrypted payload with signature.
- * 
- * Does NOT mutate the input session - returns a new session object.
- * This enables two-phase commit: only persist if tx succeeds.
- * 
+/** 
  * @param session - Current ratchet session state
  * @param plaintext - Message to encrypt
  * @param signingSecretKey - Ed25519 secret key for signing (64 bytes)
@@ -93,11 +77,10 @@ export function ratchetEncrypt(
     updatedAt: Date.now(),
   };
 
-  // 7. Wipe message key from memory (security hygiene)
+  // 7. Wipe message key from memory
   try {
     messageKey.fill(0);
   } catch {
-    // Some environments may not allow filling typed arrays
   }
 
   return {

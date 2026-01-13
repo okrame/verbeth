@@ -2,14 +2,9 @@
 
 /**
  * Ratchet Decryption with Skip Key Handling.
- * 
- * Handles:
  * - Normal sequential message decryption
  * - DH ratchet steps when sender's DH key changes
  * - Out-of-order messages via skipped keys
- * 
- * N.b: Caller must verify Ed25519 signature before calling this function.
- * This function assumes the message is authenticated.
  */
 
 import nacl from 'tweetnacl';
@@ -24,16 +19,8 @@ import {
 } from './types.js';
 import { kdfRootKey, kdfChainKey, dh, generateDHKeyPair } from './kdf.js';
 
-// =============================================================================
-// Main Decrypt Function
-// =============================================================================
-
 /**
  * Decrypt a message using the ratchet.
- * 
- * Handles DH ratchet steps and out-of-order messages (skip keys).
- * Returns updated session state and plaintext, or null if decryption fails.
- * 
  * @param session - Current ratchet session state
  * @param header - Parsed message header
  * @param ciphertext - Encrypted payload (nonce + secretbox output)
@@ -44,8 +31,7 @@ export function ratchetDecrypt(
   header: MessageHeader,
   ciphertext: Uint8Array
 ): DecryptResult | null {
-  // Sanity check: even authenticated messages shouldn't require insane skips
-  // This protects against malicious peers or corrupted state
+  // even authenticated messages shouldn't require insane skips
   const skipNeeded = Math.max(0, header.n - session.receivingMsgNumber);
   if (skipNeeded > MAX_SKIP_PER_MESSAGE || header.pn > MAX_SKIP_PER_MESSAGE) {
     console.error(
@@ -70,12 +56,10 @@ export function ratchetDecrypt(
 
   // 3. Check if we need to perform a DH ratchet step
   if (dhPubHex !== currentTheirDHHex) {
-    // Skip remaining messages on current receiving chain (if any)
     if (newSession.receivingChainKey) {
       newSession = skipMessages(newSession, newSession.receivingMsgNumber, header.pn);
     }
 
-    // Perform DH ratchet
     newSession = dhRatchetStep(newSession, header.dh);
   }
 
@@ -101,7 +85,6 @@ export function ratchetDecrypt(
   try {
     messageKey.fill(0);
   } catch {
-    // Some environments may not allow filling typed arrays
   }
 
   if (!plaintext) {
@@ -122,10 +105,6 @@ export function ratchetDecrypt(
   };
 }
 
-// =============================================================================
-// DH Ratchet Step
-// =============================================================================
-
 /**
  * Perform a DH ratchet step when receiving a message with a new DH public key.
  * 
@@ -135,17 +114,14 @@ export function ratchetDecrypt(
  * 3. Sending DH: derive new sending chain from DH(newSecret, theirNewPub)
  */
 function dhRatchetStep(session: RatchetSession, theirNewDHPub: Uint8Array): RatchetSession {
-  // Receiving DH: use our current secret with their new public
   const dhReceive = dh(session.dhMySecretKey, theirNewDHPub);
   const { rootKey: rootKey1, chainKey: receivingChainKey } = kdfRootKey(
     session.rootKey,
     dhReceive
   );
 
-  // Generate new DH keypair for sending
   const newDHKeyPair = generateDHKeyPair();
 
-  // Sending DH: use new secret with their new public
   const dhSend = dh(newDHKeyPair.secretKey, theirNewDHPub);
   const { rootKey: rootKey2, chainKey: sendingChainKey } = kdfRootKey(rootKey1, dhSend);
 
@@ -163,13 +139,8 @@ function dhRatchetStep(session: RatchetSession, theirNewDHPub: Uint8Array): Ratc
   };
 }
 
-// =============================================================================
-// Skip Key Management
-// =============================================================================
-
 /**
  * Skip messages by deriving and storing their keys for later out-of-order decryption.
- * 
  * Called when:
  * - header.n > receivingMsgNumber (messages skipped in current epoch)
  * - DH ratchet step with header.pn > 0 (messages from previous epoch)
@@ -188,22 +159,19 @@ function skipMessages(
   const dhPubHex = hexlify(session.dhTheirPublicKey);
   const now = Date.now();
 
-  // Derive and store skipped keys
   for (let i = start; i < until; i++) {
     const { chainKey: newChainKey, messageKey } = kdfChainKey(chainKey);
     skippedKeys.push({
       dhPubKeyHex: dhPubHex,
       msgNumber: i,
-      messageKey: new Uint8Array(messageKey), // Copy to avoid reference issues
+      messageKey: new Uint8Array(messageKey),
       createdAt: now,
     });
     chainKey = newChainKey;
   }
 
-  // Prune if exceeds storage limit (keep newest)
   let prunedKeys = skippedKeys;
   if (skippedKeys.length > MAX_STORED_SKIPPED_KEYS) {
-    // Sort by createdAt descending, keep newest
     prunedKeys = skippedKeys
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, MAX_STORED_SKIPPED_KEYS);
@@ -216,10 +184,7 @@ function skipMessages(
   };
 }
 
-/**
- * Try to decrypt using stored skipped keys.
- * Returns decrypt result if found, null otherwise.
- */
+
 function trySkippedKeys(
   session: RatchetSession,
   dhPubHex: string,
@@ -241,7 +206,6 @@ function trySkippedKeys(
     return null;
   }
 
-  // Remove used key from list
   const newSkippedKeys = [...session.skippedKeys];
   newSkippedKeys.splice(idx, 1);
 
@@ -249,7 +213,6 @@ function trySkippedKeys(
   try {
     skippedKey.messageKey.fill(0);
   } catch {
-    // Some environments may not allow filling typed arrays
   }
 
   return {
@@ -261,10 +224,6 @@ function trySkippedKeys(
     plaintext,
   };
 }
-
-// =============================================================================
-// Low-Level Decryption
-// =============================================================================
 
 /**
  * Decrypt ciphertext with message key using XSalsa20-Poly1305.
@@ -282,14 +241,7 @@ function decryptWithKey(ciphertext: Uint8Array, messageKey: Uint8Array): Uint8Ar
   return result || null;
 }
 
-// =============================================================================
-// Utility: Prune Expired Skipped Keys
-// =============================================================================
-
 /**
- * Remove skipped keys older than MAX_SKIPPED_KEYS_AGE_MS.
- * Should be called periodically (e.g., on session load or after decrypt).
- * 
  * @param session - Current session
  * @param maxAgeMs - Maximum age in milliseconds (default: 24 hours)
  * @returns Session with pruned skipped keys
@@ -308,7 +260,6 @@ export function pruneExpiredSkippedKeys(
       try {
         sk.messageKey.fill(0);
       } catch {
-        // typed array fill may not be supported
       }
     }
   }

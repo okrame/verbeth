@@ -2,13 +2,6 @@
 
 /**
  * Message Authentication for Ratchet Protocol.
- * 
- * Ed25519 signatures are mandatory on all ratchet messages.
- * This provides DoS protection: unauthenticated messages are rejected in O(1)
- * signature verification, preventing attackers from triggering expensive
- * ratchet operations.
- * 
- * CRITICAL: Always verify signature BEFORE any ratchet operations.
  */
 
 import nacl from 'tweetnacl';
@@ -19,7 +12,7 @@ import { MessageHeader } from './types.js';
 // =============================================================================
 
 /**
- * Verify message signature BEFORE any ratchet operations.
+ * Verify message signature before any ratchet operations.
  * This is the primary DoS protection layer.
  * 
  * The signature covers (header || ciphertext), where header is the 40-byte
@@ -59,7 +52,6 @@ export function verifyMessageSignature(
 
 /**
  * Encode header as 40 bytes for signature verification.
- * Must match the format used during signing in encrypt.ts.
  */
 function encodeHeaderForSigning(header: MessageHeader): Uint8Array {
   const buf = new Uint8Array(40);
