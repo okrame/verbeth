@@ -113,7 +113,7 @@ Bounds:
 
 ---
 
-## 2. State Loss & Session Reset
+## 2. State Loss & Recovery
 
 ### 2.1 The Forward Secrecy Tradeoff
 
@@ -124,58 +124,40 @@ The ratchet state is:
 - **Local-only**: Not stored on-chain or derivable from identity
 - **Critical**: Without it, decryption is impossible
 
-Topics are derived from `HKDF(DH(myIdentity, theirIdentity), salt)`. The salt comes from the handshake. Even if you re-derive identity, you need the salt (stored in contact) AND the ratchet state to decrypt.
+### 2.2 When State Loss Occurs
 
-### 2.3 Session Reset Protocol
+| Scenario | What's Lost | Recovery Path |
+|----------|-------------|---------------|
+| Browser IndexedDB cleared | Everything | Re-handshake all contacts |
+| New device, same identity | Everything | Re-handshake all contacts |
+| Corrupted database | Depends | Re-handshake affected contacts |
+| Export then Import | Nothing | Seamless (ratchet state preserved) |
 
-When local state is lost, the ONLY option is to establish a new session:
+### 2.3 Recovery: Just Re-Handshake
+
+No special "reset protocol" needed. The existing handshake flow handles recovery:
 
 ```
-1. User initiates new handshake to existing contact
-2. Include flag/context: "session reset request"
-3. Creates new session with NEW topics (new salt)
-4. Old session becomes `inactive_reset` (frozen, not deleted)
-5. Peer sees "Alice requests new session" notification
-6. Peer accepts → both parties have fresh session
-7. Old messages remain encrypted/unreadable
+Alice (lost state) → sendHandshake(bob) → Bob accepts → New session
 ```
 
-**UX**: "Session recovered - messages before [date] unavailable"
+- New ephemeral keys generate new salt → new topics
+- Old ratchet session orphaned in Bob's DB (harmless)
+- Both parties continue with fresh session
 
-### 2.4 Detection & User Notification
-
-The app should detect state loss and notify users:
-
-```typescript
-// On app startup after identity derivation
-async function checkSessionIntegrity(address: string): Promise<SessionHealthCheck> {
-  const contacts = await dbService.getAllContacts(address);
-  const issues: SessionIssue[] = [];
-  
-  for (const contact of contacts) {
-    if (contact.status === 'established' && contact.conversationId) {
-      const session = await dbService.getRatchetSessionByConversation(contact.conversationId);
-      
-      if (!session) {
-        issues.push({
-          contactAddress: contact.address,
-          type: 'missing_session',
-          message: 'Ratchet session not found - reset required'
-        });
-      }
-    }
-  }
-  
-  return { healthy: issues.length === 0, issues };
-}
-```
+**UX implication**: Alice must manually re-initiate contact with each peer. This is acceptable; cloud sync (future) would eliminate this friction.
 
 ---
 
 ## 3. Implementation Milestones
 
 ### Milestone 1: SDK Ratchet Core ✅ COMPLETED
+Pure crypto module, fully testable without blockchain/DB.
+
 ### Milestone 2: Handshake + Persistence ✅ COMPLETED
+Wire ratchet into handshake; sessions persist to IndexedDB.
+Ratchet key comes from decrypted payload, NOT on-chain `responderEphemeralR`.
+
 ### Milestone 3: Encrypted Messaging ✅ COMPLETED
 Full send/receive with session caching and batch processing.
 
@@ -197,93 +179,40 @@ Full send/receive with session caching and batch processing.
 - ✅ Batch incoming → session cache ensures sequential decryption
 - ✅ Invalid signature → rejected before ratchet work (DoS protection)
 
-### Milestone 4: Session Reset Protocol 🔄 IN PROGRESS
+### Milestone 4: Session Recovery UX
 
-**Status**: Design complete, implementation pending.
+**Status**: Existing handshake flow (probably) handles reset naturally.
 
-#### 4.1 Scenarios Requiring Reset
-
-| Trigger | Detection | Action |
-|---------|-----------|--------|
-| User clears IndexedDB | Missing session for established contact | Prompt: "Re-establish session with X?" |
-| New device login | No sessions exist, contacts may exist | Prompt: "Restore backup or reset sessions?" |
-| Corrupted ratchet state | Decryption fails repeatedly | Prompt: "Session corrupted, reset?" |
-| User-initiated | Manual action | "Reset session with X" |
-
-#### 4.2 Reset Flow Design
+#### 4.1 Why No Special Protocol Needed
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     ALICE (State Lost)                      │
-├─────────────────────────────────────────────────────────────┤
-│ 1. Detect: session missing for established contact          │
-│ 2. UI: "Session with Bob unavailable. Reset?"               │
-│ 3. User confirms                                            │
-│ 4. Mark old contact as "pending_reset"                      │
-│ 5. Send new handshake with reset flag                       │
-│    └─ plaintextPayload: { type: "session_reset", ... }      │
-│ 6. Wait for response                                        │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     BOB (State Intact)                      │
-├─────────────────────────────────────────────────────────────┤
-│ 1. Receive handshake with reset flag                        │
-│ 2. UI: "Alice requests session reset. Accept?"              │
-│    └─ Warning: "Old messages will remain encrypted"         │
-│ 3. User confirms                                            │
-│ 4. Mark old session as "inactive_superseded"                │
-│ 5. Accept handshake → create new session                    │
-│ 6. Old messages: keep but mark "archived"                   │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    BOTH PARTIES                             │
-├─────────────────────────────────────────────────────────────┤
-│ • New session active with new topics                        │
-│ • Old session frozen (read-only archive)                    │
-│ • UI shows: "Session reset on [date]"                       │
-│ • Old messages shown grayed: "Encrypted - session reset"    │
-└─────────────────────────────────────────────────────────────┘
+Alice (lost state) → sends new handshake → Bob accepts → new session created
 ```
 
-#### 4.3 Implementation Tasks
+What happens:
+1. Alice's contact record gets overwritten with `status: "handshake_sent"`
+2. New ephemeral keys → new salt → new topics
+3. Bob sees pending handshake, accepts it
+4. New ratchet session created, old one orphaned (but harmless)
 
-**SDK Changes**:
-```typescript
-// New type for handshake content
-interface HandshakeContent {
-  plaintextPayload: string;
-  identityProof: IdentityProof;
-  resetContext?: {
-    type: 'session_reset';
-    previousTopicOut?: `0x${string}`;  // For linking to old conversation
-    reason?: 'state_lost' | 'user_initiated' | 'corruption';
-  };
-}
-```
 
-**App Changes**:
+#### 4.2 What's Actually Missing (Nice-to-Have UX)
 
-| File | Changes |
-|------|---------|
-| `types.ts` | Add `SessionResetRequest` type |
-| `schema.ts` | Add index for finding reset-eligible sessions |
-| `DbService.ts` | Add `markSessionAsReset()`, `getSessionsNeedingReset()` |
-| `useMessageProcessor.ts` | Detect reset flag in incoming handshakes |
-| `useChatActions.ts` | Add `initiateSessionReset()` action |
-| `App.tsx` / UI | Reset UI, prompts, archived message display |
+| Enhancement | Description | Priority |
+|-------------|-------------|----------|
+| Startup health check | Detect "contacts exist but sessions missing" | Low |
+| Receiver hint | Bob sees "Alice (existing contact) requests new session" vs confusing duplicate | Medium |
+| Orphan cleanup | Periodically delete ratchet sessions with no matching contact | Low |
+| Chat boundary | Visual indicator "Session reset on [date]" | Low |
 
-#### 4.4 Edge Cases
+#### 4.3 Current Behavior (Acceptable but improvable)
 
-| Case | Handling |
-|------|----------|
-| Both parties lost state simultaneously | Both send reset → first one processed wins |
-| Reset during active conversation | Pending messages fail, resend after reset |
-| Malicious reset spam | Rate limit reset requests per contact |
-| Partial state loss (some sessions ok) | Per-contact reset, not global |
+| Scenario | What Happens | User Experience |
+|----------|--------------|-----------------|
+| Alice clears IndexedDB | Loses everything, must re-handshake all contacts | "Start fresh" - acceptable |
+| Alice on new device | No data, must re-handshake | Same as new user - acceptable |
+| Bob receives 2nd handshake from Alice | Sees new pending request | Slightly confusing but works |
+| Old ratchet session | Orphaned in DB | No functional impact |
 
 ---
 
@@ -345,12 +274,12 @@ ML-KEM hybrid for quantum resistance.
 - [x] Skipped keys for reorg tolerance (24h TTL)
 - [x] Batch message processing with shared session cache
 
-### Session Reset 🔄
-- [ ] Detect missing sessions for established contacts
-- [ ] Reset handshake with context flag
-- [ ] Peer notification and acceptance flow
-- [ ] Old session archival (frozen, not deleted)
-- [ ] UI for reset prompts and archived messages
+### Session Reset ⏳ DEFERRED (handled implicitly by existing handshake)
+- [x] New handshake to existing contact creates fresh session
+- [x] Old session orphaned (no functional impact)
+- [ ] *(Nice-to-have)* Detect missing sessions on startup
+- [ ] *(Nice-to-have)* UI hint for "existing contact requests new session"
+- [ ] *(Nice-to-have)* Cleanup orphaned sessions
 
 ---
 

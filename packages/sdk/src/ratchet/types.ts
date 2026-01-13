@@ -48,7 +48,7 @@ export const RATCHET_VERSION_V1 = 0x01;
 /**
  * Ratchet session state.
  * 
- * CRITICAL: This is stateful - must be persisted after every encrypt/decrypt.
+ * This is stateful - must be persisted after every encrypt/decrypt.
  * Session is identified by conversationId (derived from topics), enabling
  * correct handling of Safe addresses vs EOAs.
  */
@@ -104,10 +104,6 @@ export interface RatchetSession {
   // === Recovery ===
   /** Increments on session reset (internal bookkeeping only) */
   epoch: number;
-
-  // === Status ===
-  /** Session lifecycle status */
-  status: SessionStatus;
 }
 
 /**
@@ -123,15 +119,6 @@ export interface SkippedKey {
   /** Creation timestamp for TTL pruning */
   createdAt: number;
 }
-
-/**
- * Session lifecycle status.
- */
-export type SessionStatus =
-  | 'active'              // Normal operating state
-  | 'inactive_reset'      // I initiated reset, waiting for peer
-  | 'inactive_superseded' // Peer initiated reset, I accepted
-  | 'frozen';             // Read-only archive
 
 /**
  * Message header (40 bytes when encoded).

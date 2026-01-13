@@ -1,6 +1,5 @@
-import type { IdentityKeyPair, IdentityProof, RatchetSession as SDKRatchetSession, SessionStatus, SkippedKey  } from '@verbeth/sdk';
+import type { IdentityKeyPair, IdentityProof, RatchetSession as SDKRatchetSession, } from '@verbeth/sdk';
 import { keccak256, toUtf8Bytes, hexlify, getBytes } from 'ethers';
-export type { SessionStatus } from '@verbeth/sdk';
 
 /* ------------------------------- CONSTANTS -------------------------------- */
 export const LOGCHAIN_SINGLETON_ADDR =
@@ -29,38 +28,24 @@ export const EVENT_SIGNATURES = {
 
 /* ------------------------------- ENTITIES -------------------------------- */
 export interface Contact {
-  /** Contact's address (EOA or Safe) */
-  address: string;
-  /** Contact's emitter address (Safe in fast mode, same as address in classic mode) */
+  address: string; // Contact's address (EOA or Safe) */
   emitterAddress?: string;
-  /** Owner's address (the user viewing this contact) */
   ownerAddress: string;
-  /** Contact's display name */
   name?: string;
-  /** Contact's X25519 public key for encryption */
   identityPubKey?: Uint8Array;
-  /** Contact's Ed25519 public key for signature verification */
   signingPubKey?: Uint8Array;
-  /** Topic for outbound messages (owner → contact) */
   topicOutbound?: string;
-  /** Topic for inbound messages (contact → owner) */
   topicInbound?: string;
-  /** Contact status */
   status: "none" | "handshake_sent" | "established";
-  /** Last message preview */
   lastMessage?: string;
-  /** Last message timestamp */
   lastTimestamp?: number;
-  /** Unread message count */
   unreadCount?: number;
   note?: string;
 
-  /** Conversation ID for ratchet session lookup */
   conversationId?: string;
-  /** Previous conversation ID (after session reset) */
   previousConversationId?: string;
-  /** Initiator's ephemeral secret (stored until handshake response received) */
-  handshakeEphemeralSecret?: string; // hex
+  handshakeEphemeralSecret?: string; 
+  sessionResetAt?: number;
 }
 
 
@@ -82,6 +67,7 @@ export interface Message {
   type: 'text' | 'system';
   status: 'pending' | 'confirmed' | 'failed';
   verified?: boolean;
+  isLost?: boolean;
 }
 
 export interface PendingHandshake {
@@ -96,6 +82,8 @@ export interface PendingHandshake {
   timestamp: number;
   blockNumber: number;
   verified: boolean;
+  isExistingContact?: boolean;
+  previousConversationId?: string;
 }
 
 export type ExecutionMode = 'classic' | 'fast' | 'custom';
@@ -142,7 +130,6 @@ export interface StoredRatchetSession {
   createdAt: number;
   updatedAt: number;
   epoch: number;
-  status: SessionStatus;
 }
 
 export interface StoredSkippedKey {
@@ -227,6 +214,7 @@ export interface MessageProcessorResult {
   removePendingHandshake: (id: string) => void;
   updateContact: (contact: Contact) => void;
   processEvents: (events: ProcessedEvent[]) => Promise<void>;
+  markMessagesLost: (contactAddress: string, afterTimestamp: number) => Promise<number>;
 }
 
 
@@ -268,7 +256,6 @@ export function serializeRatchetSession(session: SDKRatchetSession): StoredRatch
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     epoch: session.epoch,
-    status: session.status,
   };
 }
 
@@ -304,6 +291,5 @@ export function deserializeRatchetSession(stored: StoredRatchetSession): SDKRatc
     createdAt: stored.createdAt,
     updatedAt: stored.updatedAt,
     epoch: stored.epoch,
-    status: stored.status,
   };
 }

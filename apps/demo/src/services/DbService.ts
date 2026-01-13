@@ -4,16 +4,16 @@ import { VerbEthDatabase } from "./schema.js";
 import type {
   StoredIdentity,
   Contact,
+  ContactStatus,
   Message,
   PendingHandshake,
-  StoredRatchetSession,
   PendingOutbound,
 } from "../types.js";
 import {
   serializeRatchetSession,
   deserializeRatchetSession,
 } from "../types.js";
-import type { RatchetSession, SessionStatus } from "@verbeth/sdk";
+import type { RatchetSession } from "@verbeth/sdk";
 import { pruneExpiredSkippedKeys } from "@verbeth/sdk";
 
 export class DbService {
@@ -460,20 +460,6 @@ export class DbService {
 }
 
   /**
-   * Update ratchet session status.
-   */
-  async updateRatchetSessionStatus(
-    conversationId: string,
-    status: SessionStatus
-  ): Promise<void> {
-    await this.db.ratchetSessions.update(conversationId, {
-      status,
-      updatedAt: Date.now(),
-    });
-    console.log(`📝 Updated session ${conversationId.slice(0, 10)}... status to: ${status}`);
-  }
-
-  /**
    * Delete ratchet session.
    */
   async deleteRatchetSession(conversationId: string): Promise<void> {
@@ -540,8 +526,6 @@ export class DbService {
    * Finalize pending outbound: just delete the pending record.
    * Called when on-chain confirmation is received.
    * 
-   * With the new architecture, session state is committed immediately during
-   * encryption, so confirmation just needs to clean up the pending record.
    */
   async finalizePendingOutbound(id: string): Promise<{ plaintext: string } | null> {
     const pending = await this.db.pendingOutbound.get(id);
@@ -549,8 +533,6 @@ export class DbService {
       console.warn(`⚠️ Pending outbound ${id} not found for finalization`);
       return null;
     }
-
-    // Just delete the pending record - session state was already committed
     await this.db.pendingOutbound.delete(id);
 
     console.log(`✅ Finalized pending outbound ${id.slice(0, 10)}...`);
@@ -586,33 +568,32 @@ export class DbService {
     return stale.length;
   }
 
-  /**
-   * Clear all ratchet data for a user (for reset/debug).
-   */
-  async clearRatchetData(myAddress: string): Promise<void> {
-    const normalizedAddress = this.normalizeAddress(myAddress);
+  async markMessagesAsLost(
+  ownerAddress: string,
+  contactAddress: string,
+  afterTimestamp: number
+): Promise<number> {
+  const normalizedOwner = this.normalizeAddress(ownerAddress);
+  const normalizedContact = this.normalizeAddress(contactAddress);
 
-    await this.db.transaction(
-      "rw",
-      [this.db.ratchetSessions, this.db.pendingOutbound],
-      async () => {
-        const sessions = await this.db.ratchetSessions
-          .where("myAddress")
-          .equals(normalizedAddress)
-          .toArray();
+  const messages = await this.db.messages
+    .where('ownerAddress')
+    .equals(normalizedOwner)
+    .filter(m => 
+      m.direction === 'outgoing' &&
+      m.recipient?.toLowerCase() === normalizedContact &&
+      m.timestamp > afterTimestamp &&
+      m.type !== 'system'
+    )
+    .toArray();
 
-        for (const s of sessions) {
-          await this.db.ratchetSessions.delete(s.conversationId);
-          await this.db.pendingOutbound
-            .where("conversationId")
-            .equals(s.conversationId)
-            .delete();
-        }
-      }
-    );
-
-    console.log(`🧹 Cleared all ratchet data for ${normalizedAddress.slice(0, 8)}...`);
+  for (const msg of messages) {
+    await this.db.messages.update(msg.id, { isLost: true });
   }
+
+  return messages.length;
+}
+
 
   /* -------------------------------- SETTINGS ------------------------------ */
   setSetting(name: string, value: any) {
@@ -736,6 +717,29 @@ export class DbService {
     //this.deduplicator.clear();
     console.log(`User data cleared for ${normalizedAddr.slice(0, 8)}...`);
   }
+/* ----------------------------- SESSION ----------------------------- */
+
+/**
+ * Check if a sender is an existing contact.
+ * Used during handshake processing for receiver hints.
+ */
+async isExistingContact(senderAddress: string, ownerAddress: string): Promise<{
+  exists: boolean;
+  previousStatus?: ContactStatus;
+  previousConversationId?: string;
+}> {
+  const contact = await this.getContact(senderAddress, ownerAddress);
+  
+  if (!contact) {
+    return { exists: false };
+  }
+  
+  return {
+    exists: true,
+    previousStatus: contact.status,
+    previousConversationId: contact.conversationId,
+  };
+}
 
   /* ---------------------------- BACKUP / IMPORT --------------------------- */
   async exportData() {

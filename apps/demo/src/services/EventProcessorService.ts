@@ -162,6 +162,9 @@ export async function processHandshakeEvent(
       } catch (e) {}
     }
 
+    const existingContact = await dbService.getContact(identityAddress, address);
+    const isExistingEstablished = existingContact?.status === 'established';
+
     const pendingHandshake: PendingHandshake = {
       id: log.transactionHash,
       ownerAddress: address,
@@ -174,7 +177,12 @@ export async function processHandshakeEvent(
       timestamp: Date.now(),
       blockNumber: log.blockNumber,
       verified: isVerified,
+      isExistingContact: isExistingEstablished,
     };
+
+    const messagePrefix = pendingHandshake.isExistingContact 
+      ? 'Session reset request received' 
+      : 'Request received';
 
     const systemMessage: Message = {
       id: generateTempMessageId(),
@@ -186,7 +194,7 @@ export async function processHandshakeEvent(
       blockTimestamp: Date.now(),
       blockNumber: log.blockNumber,
       direction: "incoming" as const,
-      decrypted: `Request received: "${handshakeContent.plaintextPayload}"`,
+      decrypted: `${messagePrefix}: "${handshakeContent.plaintextPayload}"`,
       read: true,
       nonce: 0,
       dedupKey: `handshake-received-${log.transactionHash}`,
@@ -200,8 +208,9 @@ export async function processHandshakeEvent(
     await dbService.savePendingHandshake(pendingHandshake);
     await dbService.saveMessage(systemMessage);
 
+    const logSuffix = isExistingEstablished ? ' (session reset)' : '';
     onLog(
-      `📨 Handshake received from ${identityAddress.slice(0, 8)}... ${
+      `📨 Handshake received from ${identityAddress.slice(0, 8)}...${logSuffix} ${
         isVerified ? "✅" : "⚠️"
       }: "${handshakeContent.plaintextPayload}"`
     );

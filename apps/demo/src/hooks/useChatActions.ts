@@ -1,11 +1,5 @@
 // src/hooks/useChatActions.ts
 
-/**
- * Chat actions hook with Double Ratchet integration and Message Queue.
- * 
- * UPDATED: Added session cache invalidation for when sessions are reset externally.
- */
-
 import { useCallback } from "react";
 import { hexlify } from "ethers";
 import {
@@ -32,6 +26,7 @@ interface UseChatActionsProps {
   setLoading: (loading: boolean) => void;
   setMessage: (message: string) => void;
   setRecipientAddress: (address: string) => void;
+  markMessagesLost: (contactAddress: string, afterTimestamp: number) => Promise<number>;
 }
 
 export const useChatActions = ({
@@ -46,6 +41,7 @@ export const useChatActions = ({
   setLoading,
   setMessage,
   setRecipientAddress,
+  markMessagesLost,
 }: UseChatActionsProps) => {
 
   const {
@@ -197,6 +193,12 @@ export const useChatActions = ({
         };
 
         await updateContact(newContact);
+        if (handshake.isExistingContact && handshake.timestamp) {
+            const lostCount = await markMessagesLost(handshake.sender, handshake.timestamp);
+            if (lostCount > 0) {
+              addLog(`⚠️ ${lostCount} messages marked as lost`);
+            }
+          }
         await removePendingHandshake(handshake.id);
         setSelectedContact(newContact);
 
@@ -316,11 +318,9 @@ export const useChatActions = ({
   );
 
   return {
-    // Existing actions
     sendHandshake,
     acceptHandshake,
     sendMessageToContact,
-    
     // Queue-related actions
     retryFailedMessage,
     cancelQueuedMessage,

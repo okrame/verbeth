@@ -1,13 +1,8 @@
 // src/hooks/useMessageProcessor.ts
 
 /**
- * Message Processor Hook.
- *
  * Manages messaging state (messages, contacts, pendingHandshakes) and
  * orchestrates event processing via EventProcessorService.
- *
- * The service handles decoding, verification, decryption, and persistence.
- * This hook just applies the results to React state.
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -31,7 +26,6 @@ import {
 interface UseMessageProcessorProps {
   readProvider: any;
   address: string | undefined;
-  /** Safe address in fast mode, EOA in classic mode. Used for outbound detection. */
   emitterAddress: string | undefined;
   identityKeyPair: IdentityKeyPair | null;
   identityContext: IdentityContext;
@@ -80,10 +74,8 @@ export const useMessageProcessor = ({
     async (events: ProcessedEvent[]) => {
       if (!address) return;
 
-      // Session cache for batch processing
       const batchSessionCache = new Map<string, RatchetSession>();
 
-      // Log batch info
       const messageEvents = events.filter((e) => e.eventType === "message");
       if (messageEvents.length > 1) {
         onLog(`📨 Processing batch of ${messageEvents.length} messages...`);
@@ -235,6 +227,34 @@ export const useMessageProcessor = ({
     setMessages((prev) => prev.filter((m) => m.id !== messageId));
   }, []);
 
+  const markMessagesLost = useCallback(
+  async (contactAddress: string, afterTimestamp: number): Promise<number> => {
+    if (!address) return 0;
+
+    const count = await dbService.markMessagesAsLost(address, contactAddress, afterTimestamp);
+
+    if (count > 0) {
+      const normalizedContact = contactAddress.toLowerCase();
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (
+            m.direction === 'outgoing' &&
+            m.recipient?.toLowerCase() === normalizedContact &&
+            m.timestamp > afterTimestamp &&
+            m.type !== 'system'
+          ) {
+            return { ...m, isLost: true };
+          }
+          return m;
+        })
+      );
+    }
+
+    return count;
+  },
+  [address]
+);
+
   const removePendingHandshake = useCallback(async (id: string) => {
     await dbService.deletePendingHandshake(id);
     setPendingHandshakes((prev) => prev.filter((h) => h.id !== id));
@@ -271,5 +291,6 @@ export const useMessageProcessor = ({
     removePendingHandshake,
     updateContact,
     processEvents,
+    markMessagesLost,
   };
 };

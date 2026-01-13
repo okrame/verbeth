@@ -414,7 +414,6 @@ describe("Double Ratchet", () => {
         createdAt: Date.now(),
         updatedAt: Date.now(),
         epoch: 0,
-        status: "active",
       };
 
       const pruned = pruneExpiredSkippedKeys(session, 50000); 

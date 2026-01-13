@@ -22,6 +22,8 @@ import { SessionSetupPrompt } from './components/SessionSetupPrompt.js';
 import { useChatActions } from './hooks/useChatActions.js';
 import { useSessionSetup } from './hooks/useSessionSetup.js';
 import { useInitIdentity } from './hooks/useInitIdentity.js';
+import { usePendingSessionReset } from './hooks/usePendingSessionReset.js';
+import { PinnedResetRequest } from './components/PinnedResetRequest.js';
 
 export default function App() {
   const { ethers: readProvider, viem: viemClient } = useRpcClients();
@@ -39,6 +41,9 @@ export default function App() {
   const [isActivityLogOpen, setIsActivityLogOpen] = useState(false);
   const [activityLogs, setActivityLogs] = useState<string>("");
   const [verbethClient, setVerbethClient] = useState<VerbethClient | null>(null);
+
+  const [healthBannerDismissed, setHealthBannerDismissed] = useState(false);
+  const [isResettingContacts, setIsResettingContacts] = useState(false);
 
   const logRef = useRef<HTMLTextAreaElement>(null);
   const chainId = Number(import.meta.env.VITE_CHAIN_ID);
@@ -124,19 +129,23 @@ export default function App() {
     pendingHandshakes,
     contacts,
     addMessage,
-    updateMessageStatus,  
-    removeMessage,        
+    updateMessageStatus,
+    removeMessage,
     removePendingHandshake,
     updateContact,
-    processEvents
+    processEvents,
+    markMessagesLost
   } = useMessageProcessor({
     readProvider,
     identityContext,
     address: address ?? undefined,
-    emitterAddress: emitterAddress ?? undefined, 
+    emitterAddress: emitterAddress ?? undefined,
     identityKeyPair,
     onLog: addLog
   });
+
+  const { hasPendingReset, pendingHandshake: pendingResetHandshake, limboAfterTimestamp } =
+    usePendingSessionReset(selectedContact, pendingHandshakes);
 
   const {
     isInitialLoading,
@@ -171,6 +180,7 @@ export default function App() {
     setLoading,
     setMessage,
     setRecipientAddress,
+    markMessagesLost,
   });
 
   useEffect(() => {
@@ -207,6 +217,7 @@ export default function App() {
         sender: h.sender,
         message: h.message,
         verified: h.verified,
+        isExistingContact: h.isExistingContact,
         onAccept: (msg: string) => acceptHandshake(h, msg),
         onReject: () => removePendingHandshake(h.id),
       }))
@@ -232,6 +243,8 @@ export default function App() {
     const isOutgoing = msg.direction === 'outgoing';
     const isFailed = msg.status === 'failed';
     const isPending = msg.status === 'pending';
+    const isLost = msg.isLost === true;
+    const isInLimbo = !isLost && hasPendingReset && isOutgoing && msg.type !== 'system' && limboAfterTimestamp && msg.timestamp > limboAfterTimestamp;
 
     return (
       <div
@@ -239,14 +252,13 @@ export default function App() {
         className={`max-w-[80%] ${isOutgoing ? 'ml-auto' : ''}`}
       >
         <div
-          className={`p-3 rounded-lg ${
-            isOutgoing
-              ? isFailed
-                ? 'bg-red-900/50 border border-red-700'
-                : 'bg-blue-600'
-              : 'bg-gray-700'
-          } ${msg.type === 'system' ? 'bg-gray-800 text-gray-400 italic' : ''} 
-          ${isPending ? 'opacity-70' : ''}`}
+          className={`p-3 rounded-lg ${isOutgoing
+            ? isFailed
+              ? 'bg-red-900/50 border border-red-700'
+              : 'bg-blue-600'
+            : 'bg-gray-700'
+            } ${msg.type === 'system' ? 'bg-gray-800 text-gray-400 italic' : ''} 
+           ${isPending || isInLimbo || isLost ? 'opacity-60' : ''}`}
         >
           <p className="text-sm flex items-center gap-1">
             {msg.type === "system" && msg.verified !== undefined && (
@@ -282,10 +294,12 @@ export default function App() {
               {new Date(msg.timestamp).toLocaleTimeString()}
             </span>
             {isOutgoing && (
-              <span className="text-xs" title={`Status: ${msg.status}`}>
-                {msg.status === 'confirmed' ? '✓✓' :
-                  msg.status === 'failed' ? '✗' :
-                    msg.status === 'pending' ? '✓' : '?'}
+              <span className="text-xs" title={isLost ? 'Undelivered' : `Status: ${msg.status}`}>
+                {isLost ? '✗' :
+                  isInLimbo ? '✓' :
+                    msg.status === 'confirmed' ? '✓✓' :
+                      msg.status === 'failed' ? '✗' :
+                        msg.status === 'pending' ? '✓' : '?'}
               </span>
             )}
           </div>
@@ -391,7 +405,7 @@ export default function App() {
                 sessionSignerBalance={sessionSignerBalance}
                 needsSessionSetup={needsSessionSetup}
                 isSafeDeployed={isSafeDeployed}
-                isModuleEnabled={isModuleEnabled} 
+                isModuleEnabled={isModuleEnabled}
                 onSetupSession={setupSession}
                 onRefreshBalance={refreshSessionBalance}
                 loading={loading}
@@ -401,7 +415,7 @@ export default function App() {
             {(needsIdentityCreation || needsModeSelection) ? (
               <IdentityCreation
                 loading={loading}
-                onCreateIdentity={createIdentity} 
+                onCreateIdentity={createIdentity}
                 address={address ?? ''}
                 signingStep={signingStep}
                 needsModeSelection={needsModeSelection}
@@ -510,6 +524,7 @@ export default function App() {
                             })
                             .sort((a, b) => a.timestamp - b.timestamp)
                             .map(renderMessage)}
+
                           {messages.filter(m => {
                             const currentAddress = address;
                             if (!currentAddress || !selectedContact?.address) return false;
@@ -519,11 +534,18 @@ export default function App() {
                               (selectedContact.topicOutbound && m.topic === selectedContact.topicOutbound) ||
                               (selectedContact.topicInbound && m.topic === selectedContact.topicInbound)
                             );
-                          }).length === 0 && (
+                          }).length === 0 && !hasPendingReset && (
                               <p className="text-gray-400 text-sm text-center py-8">
                                 No messages yet. {selectedContact.status === 'established' ? 'Start the conversation!' : 'Waiting for handshake completion.'}
                               </p>
                             )}
+
+                          {hasPendingReset && pendingResetHandshake && (
+                            <PinnedResetRequest
+                              handshake={pendingResetHandshake}
+                              onAccept={acceptHandshake}
+                            />
+                          )}
                         </div>
 
                         {/* Queue Status Indicator */}

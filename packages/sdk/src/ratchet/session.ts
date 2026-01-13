@@ -100,7 +100,6 @@ export function initSessionAsResponder(params: InitResponderParams): RatchetSess
     createdAt: now,
     updatedAt: now,
     epoch: 0,
-    status: 'active',
   };
 }
 
@@ -137,7 +136,6 @@ export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSess
     new Uint8Array(32), // Same initial salt
     sharedSecret
   );
-  // Note: bobsSendingChain is Bob's sending chain = Alice's receiving chain
 
   // Generate Alice's first DH keypair for sending
   const myDHKeyPair = generateDHKeyPair();
@@ -179,6 +177,5 @@ export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSess
     createdAt: now,
     updatedAt: now,
     epoch: 0,
-    status: 'active',
   };
 }
