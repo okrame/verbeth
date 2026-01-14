@@ -5,13 +5,13 @@
  * Initial shared secret is derived from ephemeral to ephemeral DH only.
  */
 
-import { keccak256, toUtf8Bytes } from 'ethers';
+import { keccak256, toUtf8Bytes, getBytes } from 'ethers';
 import { 
   RatchetSession, 
   InitResponderParams, 
-  InitInitiatorParams 
+  InitInitiatorParams,
 } from './types.js';
-import { kdfRootKey, dh, generateDHKeyPair } from './kdf.js';
+import { kdfRootKey, dh, generateDHKeyPair, deriveTopicFromDH } from './kdf.js';
 
 /**
  * Compute deterministic conversation ID from topics.
@@ -26,6 +26,8 @@ export function computeConversationId(topicA: string, topicB: string): string {
  * Called after receiving handshake, before/during sending response.
  * The responder must persist myResponderEphemeralSecret immediately.
  * This becomes dhMySecretKey and is required for all future ratchet operations.
+ * 
+ * Epoch 0: uses handshake-derived topics (no ratcheting yet).
  * 
  * @param params - Initialization parameters
  * @returns Initialized ratchet session
@@ -61,7 +63,6 @@ export function initSessionAsResponder(params: InitResponderParams): RatchetSess
     rootKey,
 
     // Reuse responder ephemeral as first DH ratchet key
-    // This is already on-chain as responderEphemeralR
     dhMySecretKey: myResponderEphemeralSecret,
     dhMyPublicKey: myResponderEphemeralPublic,
     dhTheirPublicKey: theirHandshakeEphemeralPubKey,
@@ -76,6 +77,13 @@ export function initSessionAsResponder(params: InitResponderParams): RatchetSess
     previousChainLength: 0,
     skippedKeys: [],
 
+    // Topic Ratcheting - Epoch 0: use handshake-derived topics
+    currentTopicOutbound: topicOutbound,
+    currentTopicInbound: topicInbound,
+    previousTopicInbound: undefined,
+    previousTopicExpiry: undefined,
+    topicEpoch: 0,
+
     createdAt: now,
     updatedAt: now,
     epoch: 0,
@@ -88,6 +96,8 @@ export function initSessionAsResponder(params: InitResponderParams): RatchetSess
  * NB: theirResponderEphemeralPubKey comes from inside the decrypted
  * HandshakeResponse payload, NOT from the on-chain responderEphemeralR field.
  * The on-chain R is only used for tag verification and is different for unlinkability.
+ * 
+ * Epoch 1: initiator already does first DH step, so topics are ratcheted immediately.
  * 
  * @param params - Initialization parameters
  * @returns Initialized ratchet session
@@ -104,46 +114,58 @@ export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSess
 
   const sharedSecret = dh(myHandshakeEphemeralSecret, theirResponderEphemeralPubKey);
 
-  // Derive same initial root key as hs responder
+  // Derive same initial root key as responder
   const { rootKey: initialRootKey, chainKey: bobsSendingChain } = kdfRootKey(
-    new Uint8Array(32), // Same initial salt
+    new Uint8Array(32),
     sharedSecret
   );
 
   // Generate first DH keypair for sending
   const myDHKeyPair = generateDHKeyPair();
 
-  // Perform sending ratchet step
   const dhSend = dh(myDHKeyPair.secretKey, theirResponderEphemeralPubKey);
   const { rootKey: finalRootKey, chainKey: sendingChainKey } = kdfRootKey(
     initialRootKey,
     dhSend
   );
 
+  // ✅ Deriva epoch 1 topics da dhSend
+  // Questo sarà uguale a dhReceive quando Bob fa il suo primo ratchet
+  const conversationId = computeConversationId(topicOutbound, topicInbound);
+  const saltBytes = getBytes(conversationId);
+  const epoch1TopicOut = deriveTopicFromDH(dhSend, 'outbound', saltBytes);
+  const epoch1TopicIn = deriveTopicFromDH(dhSend, 'inbound', saltBytes);
+
   const now = Date.now();
 
   return {
-    conversationId: computeConversationId(topicOutbound, topicInbound),
+    conversationId,
     topicOutbound,
     topicInbound,
     myAddress,
     contactAddress,
 
     rootKey: finalRootKey,
-
     dhMySecretKey: myDHKeyPair.secretKey,
     dhMyPublicKey: myDHKeyPair.publicKey,
-
     dhTheirPublicKey: theirResponderEphemeralPubKey,
 
     sendingChainKey,
     sendingMsgNumber: 0,
-
     receivingChainKey: bobsSendingChain,
     receivingMsgNumber: 0,
 
     previousChainLength: 0,
     skippedKeys: [],
+
+    // ✅ FIX: Inizia a epoch 0, ma pre-calcola epoch 1 topics
+    // E ascolta su ENTRAMBI i topic inbound
+    currentTopicOutbound: topicOutbound,
+    currentTopicInbound: topicInbound,
+    // Aggiungi questi nuovi campi per il "next" topic
+    nextTopicOutbound: epoch1TopicOut,
+    nextTopicInbound: epoch1TopicIn,
+    topicEpoch: 0,
 
     createdAt: now,
     updatedAt: now,

@@ -130,6 +130,15 @@ export interface StoredRatchetSession {
   createdAt: number;
   updatedAt: number;
   epoch: number;
+  
+  // === Topic Ratcheting ===
+  currentTopicOutbound: string;
+  currentTopicInbound: string;
+  nextTopicOutbound?: string;
+  nextTopicInbound?: string;
+  previousTopicInbound?: string;
+  previousTopicExpiry?: number;
+  topicEpoch: number;
 }
 
 export interface StoredSkippedKey {
@@ -232,8 +241,8 @@ export function serializeRatchetSession(session: SDKRatchetSession): StoredRatch
     conversationId: session.conversationId,
     topicOutbound: session.topicOutbound.toLowerCase() as `0x${string}`,
     topicInbound: session.topicInbound.toLowerCase() as `0x${string}`,
-    myAddress: session.myAddress,
-    contactAddress: session.contactAddress,
+    myAddress: session.myAddress.toLowerCase(),
+    contactAddress: session.contactAddress.toLowerCase(),
 
     rootKey: hexlify(session.rootKey),
     dhMySecretKey: hexlify(session.dhMySecretKey),
@@ -256,6 +265,13 @@ export function serializeRatchetSession(session: SDKRatchetSession): StoredRatch
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     epoch: session.epoch,
+    
+    // Topic Ratcheting
+    currentTopicOutbound: session.currentTopicOutbound.toLowerCase(),
+    currentTopicInbound: session.currentTopicInbound.toLowerCase(),
+    previousTopicInbound: session.previousTopicInbound?.toLowerCase(),
+    previousTopicExpiry: session.previousTopicExpiry,
+    topicEpoch: session.topicEpoch,
   };
 }
 
@@ -291,5 +307,12 @@ export function deserializeRatchetSession(stored: StoredRatchetSession): SDKRatc
     createdAt: stored.createdAt,
     updatedAt: stored.updatedAt,
     epoch: stored.epoch,
+    
+    // Topic Ratcheting
+    currentTopicOutbound: stored.currentTopicOutbound as `0x${string}`,
+    currentTopicInbound: stored.currentTopicInbound as `0x${string}`,
+    previousTopicInbound: stored.previousTopicInbound as `0x${string}` | undefined,
+    previousTopicExpiry: stored.previousTopicExpiry,
+    topicEpoch: stored.topicEpoch,
   };
 }

@@ -31,6 +31,11 @@ export const SYNC_BATCH_SIZE = 10_000;
 export const RATCHET_VERSION_V1 = 0x01;
 
 /**
+ * Topic transition window (5 minutes).
+ */
+export const TOPIC_TRANSITION_WINDOW_MS = 5 * 60 * 1000;
+
+/**
  * Ratchet session state.
  * 
  * This is stateful - must be persisted after every encrypt/decrypt.
@@ -41,9 +46,9 @@ export interface RatchetSession {
   // === Conversation Identity ===
   /** Primary key: keccak256(sort([topicOut, topicIn])) */
   conversationId: string;
-  /** My sending topic (bytes32 hex) */
+  /** Original handshake-derived outbound topic (immutable reference) */
   topicOutbound: `0x${string}`;
-  /** My receiving topic (bytes32 hex) */
+  /** Original handshake-derived inbound topic (immutable reference) */
   topicInbound: `0x${string}`;
   /** My EOA address (for convenience/lookup) */
   myAddress: string;
@@ -79,6 +84,15 @@ export interface RatchetSession {
   previousChainLength: number;
   /** Stored keys for out-of-order messages */
   skippedKeys: SkippedKey[];
+
+  // === Topic Ratcheting ===
+  currentTopicOutbound: `0x${string}`;
+  currentTopicInbound: `0x${string}`;
+  nextTopicOutbound?: `0x${string}`;
+  nextTopicInbound?: `0x${string}`;
+  previousTopicInbound?: `0x${string}`;
+  previousTopicExpiry?: number;
+  topicEpoch: number;
 
   // === Metadata ===
   /** Session creation timestamp */
@@ -125,6 +139,8 @@ export interface EncryptResult {
   header: MessageHeader;
   ciphertext: Uint8Array;
   signature: Uint8Array;
+  /** Current outbound topic to use for this message */
+  topic: `0x${string}`;
 }
 
 /**

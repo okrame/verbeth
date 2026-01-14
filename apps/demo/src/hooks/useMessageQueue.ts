@@ -143,11 +143,15 @@ export const useMessageQueue = ({
         const sessionBefore = currentSession;
 
         const plaintext = new TextEncoder().encode(message.plaintext);
-        const { session: nextSession, header, ciphertext, signature } = ratchetEncrypt(
+        
+        // ratchetEncrypt now returns topic in the result (ratcheted topic)
+        const encryptResult = ratchetEncrypt(
           sessionBefore,
           plaintext,
           verbethClient.identityKeyPairInstance.signingSecretKey
         );
+        
+        const { session: nextSession, header, ciphertext, signature, topic: ratchetedTopic } = encryptResult;
 
         // =====================================================================
         // Update BOTH in-memory cache AND DB immediately after encryption
@@ -163,7 +167,7 @@ export const useMessageQueue = ({
         sessionCacheRef.current.set(conversationId, nextSession);
         
         await dbService.saveRatchetSession(nextSession);
-        addLog(`💾 Session state committed (sendingMsgNumber=${nextSession.sendingMsgNumber})`);
+        addLog(`💾 Session state committed (sendingMsgNumber=${nextSession.sendingMsgNumber}, topicEpoch=${nextSession.topicEpoch})`);
 
         // Package binary payload
         const payload = packageRatchetPayload(signature, header, ciphertext);
@@ -173,7 +177,7 @@ export const useMessageQueue = ({
         const pending: PendingOutbound = {
           id: message.id,
           conversationId,
-          topic: sessionBefore.topicOutbound,
+          topic: ratchetedTopic, // Use ratcheted topic from EncryptResult
           payloadHex,
           plaintext: message.plaintext,
           sessionStateBefore: JSON.stringify(serializeRatchetSession(sessionBefore)),
@@ -190,9 +194,10 @@ export const useMessageQueue = ({
 
         await dbService.updatePendingOutboundStatus(message.id, "submitted");
 
+        // Use ratcheted topic from EncryptResult for on-chain message
         const tx = await verbethClient.executorInstance.sendMessage(
           payload,
-          sessionBefore.topicOutbound,
+          ratchetedTopic,
           timestamp,
           BigInt(nonce)
         );
@@ -204,9 +209,11 @@ export const useMessageQueue = ({
 
         addLog(`📤 Message sent: "${message.plaintext.slice(0, 30)}..." (tx: ${tx.hash.slice(0, 10)}..., n=${nonce})`);
 
-        // Update contact
+        // Update contact with current topic
         const updatedContact: Contact = {
           ...message.contact,
+          topicOutbound: nextSession.currentTopicOutbound,
+          topicInbound: nextSession.currentTopicInbound,
           lastMessage: message.plaintext,
           lastTimestamp: Date.now(),
         };

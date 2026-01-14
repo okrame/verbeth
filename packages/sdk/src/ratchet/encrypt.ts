@@ -30,7 +30,7 @@ export function encodeHeader(header: MessageHeader): Uint8Array {
  * @param session - Current ratchet session state
  * @param plaintext - Message to encrypt
  * @param signingSecretKey - Ed25519 secret key for signing (64 bytes)
- * @returns Encrypt result with new session state, header, ciphertext, and signature
+ * @returns Encrypt result with new session state, header, ciphertext, signature, and topic
  * @throws If session is not ready to send (no sending chain key)
  */
 export function ratchetEncrypt(
@@ -88,5 +88,6 @@ export function ratchetEncrypt(
     header,
     ciphertext: encryptedPayload,
     signature,
+    topic: session.currentTopicOutbound,
   };
 }

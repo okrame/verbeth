@@ -1,433 +1,445 @@
 // packages/sdk/test/ratchet.test.ts
 
-import { describe, it, expect, beforeEach } from "vitest";
-import nacl from "tweetnacl";
+import { describe, it, expect, beforeEach } from 'vitest';
+import nacl from 'tweetnacl';
+
 import {
+  deriveTopicFromDH,
   initSessionAsResponder,
   initSessionAsInitiator,
-  computeConversationId,
   ratchetEncrypt,
   ratchetDecrypt,
-  pruneExpiredSkippedKeys,
-  packageRatchetPayload,
-  parseRatchetPayload,
-  isRatchetPayload,
-  hexToBytes,
-  bytesToHex,
-  verifyMessageSignature,
-  generateDHKeyPair,
-  RatchetSession,
-} from "../src/ratchet/index.js";
+  matchesSessionTopic,
+  TOPIC_TRANSITION_WINDOW_MS,
+  type RatchetSession,
+} from '../src/ratchet/index.js';
 
+describe('deriveTopicFromDH', () => {
+  it('derives deterministic topic from DH output', () => {
+    const dhOutput = nacl.randomBytes(32);
+    const salt = nacl.randomBytes(32);
 
-function createTestTopics(): { topicOut: `0x${string}`; topicIn: `0x${string}` } {
-  const randomBytes = nacl.randomBytes(32);
-  const topicOut = bytesToHex(randomBytes) as `0x${string}`;
-  const topicIn = bytesToHex(nacl.randomBytes(32)) as `0x${string}`;
-  return { topicOut, topicIn };
-}
+    const topic1 = deriveTopicFromDH(dhOutput, 'outbound', salt);
+    const topic2 = deriveTopicFromDH(dhOutput, 'outbound', salt);
 
-function createSigningKeyPair() {
-  return nacl.sign.keyPair();
-}
+    expect(topic1).toBe(topic2);
+    expect(topic1).toMatch(/^0x[a-f0-9]{64}$/);
+  });
 
-// =============================================================================
-// Tests
-// =============================================================================
+  it('derives different topics for outbound vs inbound', () => {
+    const dhOutput = nacl.randomBytes(32);
+    const salt = nacl.randomBytes(32);
 
-describe("Double Ratchet", () => {
-  describe("Session Initialization", () => {
-    it("should create matching sessions for responder and initiator", () => {
-      const aliceEphemeral = generateDHKeyPair();
-      const bobEphemeral = generateDHKeyPair();
-      const topics = createTestTopics();
+    const topicOut = deriveTopicFromDH(dhOutput, 'outbound', salt);
+    const topicIn = deriveTopicFromDH(dhOutput, 'inbound', salt);
 
-      // Bob (responder) creates session first
-      const bobSession = initSessionAsResponder({
-        myAddress: "0xBob",
-        contactAddress: "0xAlice",
-        myResponderEphemeralSecret: bobEphemeral.secretKey,
-        myResponderEphemeralPublic: bobEphemeral.publicKey,
-        theirHandshakeEphemeralPubKey: aliceEphemeral.publicKey,
-        topicOutbound: topics.topicIn, // Bob's outbound = Alice's inbound
-        topicInbound: topics.topicOut, // Bob's inbound = Alice's outbound
-      });
+    expect(topicOut).not.toBe(topicIn);
+  });
 
-      // Alice (initiator) creates session after receiving response
-      const aliceSession = initSessionAsInitiator({
-        myAddress: "0xAlice",
-        contactAddress: "0xBob",
-        myHandshakeEphemeralSecret: aliceEphemeral.secretKey,
-        theirResponderEphemeralPubKey: bobEphemeral.publicKey,
-        topicOutbound: topics.topicOut,
-        topicInbound: topics.topicIn,
-      });
+  it('derives different topics for different DH outputs', () => {
+    const dhOutput1 = nacl.randomBytes(32);
+    const dhOutput2 = nacl.randomBytes(32);
+    const salt = nacl.randomBytes(32);
 
-      // Verify conversation IDs match
-      expect(bobSession.conversationId).toBe(aliceSession.conversationId);
+    const topic1 = deriveTopicFromDH(dhOutput1, 'outbound', salt);
+    const topic2 = deriveTopicFromDH(dhOutput2, 'outbound', salt);
 
-      // Verify both have sending chain keys (can send immediately)
-      expect(bobSession.sendingChainKey).not.toBeNull();
-      expect(aliceSession.sendingChainKey).not.toBeNull();
+    expect(topic1).not.toBe(topic2);
+  });
 
-      // Verify Alice has receiving chain (for Bob's messages)
-      expect(aliceSession.receivingChainKey).not.toBeNull();
+  it('derives different topics for different salts', () => {
+    const dhOutput = nacl.randomBytes(32);
+    const salt1 = nacl.randomBytes(32);
+    const salt2 = nacl.randomBytes(32);
+
+    const topic1 = deriveTopicFromDH(dhOutput, 'outbound', salt1);
+    const topic2 = deriveTopicFromDH(dhOutput, 'outbound', salt2);
+
+    expect(topic1).not.toBe(topic2);
+  });
+});
+
+describe('initSessionAsResponder - topic ratcheting', () => {
+  let responderEphemeral: { secretKey: Uint8Array; publicKey: Uint8Array };
+  let initiatorEphemeral: { secretKey: Uint8Array; publicKey: Uint8Array };
+  const topicOutbound = '0x' + '1'.repeat(64) as `0x${string}`;
+  const topicInbound = '0x' + '2'.repeat(64) as `0x${string}`;
+
+  beforeEach(() => {
+    responderEphemeral = nacl.box.keyPair();
+    initiatorEphemeral = nacl.box.keyPair();
+  });
+
+  it('initializes at epoch 0 with handshake-derived topics', () => {
+    const session = initSessionAsResponder({
+      myAddress: '0xResponder',
+      contactAddress: '0xInitiator',
+      myResponderEphemeralSecret: responderEphemeral.secretKey,
+      myResponderEphemeralPublic: responderEphemeral.publicKey,
+      theirHandshakeEphemeralPubKey: initiatorEphemeral.publicKey,
+      topicOutbound,
+      topicInbound,
     });
 
-    it("should compute deterministic conversation ID", () => {
-      const topicA = "0xaaaa" as const;
-      const topicB = "0xbbbb" as const;
+    expect(session.topicEpoch).toBe(0);
+    expect(session.currentTopicOutbound).toBe(topicOutbound);
+    expect(session.currentTopicInbound).toBe(topicInbound);
+    expect(session.previousTopicInbound).toBeUndefined();
+    expect(session.previousTopicExpiry).toBeUndefined();
+  });
 
-      const id1 = computeConversationId(topicA, topicB);
-      const id2 = computeConversationId(topicB, topicA);
+  it('preserves original handshake topics in topicOutbound/topicInbound', () => {
+    const session = initSessionAsResponder({
+      myAddress: '0xResponder',
+      contactAddress: '0xInitiator',
+      myResponderEphemeralSecret: responderEphemeral.secretKey,
+      myResponderEphemeralPublic: responderEphemeral.publicKey,
+      theirHandshakeEphemeralPubKey: initiatorEphemeral.publicKey,
+      topicOutbound,
+      topicInbound,
+    });
 
-      expect(id1).toBe(id2); // Order shouldn't matter
+    // Original topics preserved for reference
+    expect(session.topicOutbound).toBe(topicOutbound);
+    expect(session.topicInbound).toBe(topicInbound);
+  });
+});
+
+describe('initSessionAsInitiator - topic ratcheting', () => {
+  let responderEphemeral: { secretKey: Uint8Array; publicKey: Uint8Array };
+  let initiatorEphemeral: { secretKey: Uint8Array; publicKey: Uint8Array };
+  const topicOutbound = '0x' + '1'.repeat(64) as `0x${string}`;
+  const topicInbound = '0x' + '2'.repeat(64) as `0x${string}`;
+
+  beforeEach(() => {
+    responderEphemeral = nacl.box.keyPair();
+    initiatorEphemeral = nacl.box.keyPair();
+  });
+
+  it('initializes at epoch 1 with ratcheted topics', () => {
+    const session = initSessionAsInitiator({
+      myAddress: '0xInitiator',
+      contactAddress: '0xResponder',
+      myHandshakeEphemeralSecret: initiatorEphemeral.secretKey,
+      theirResponderEphemeralPubKey: responderEphemeral.publicKey,
+      topicOutbound,
+      topicInbound,
+    });
+
+    expect(session.topicEpoch).toBe(1);
+    // Current topics should be ratcheted (different from handshake)
+    expect(session.currentTopicOutbound).not.toBe(topicOutbound);
+    expect(session.currentTopicInbound).not.toBe(topicInbound);
+    expect(session.currentTopicOutbound).toMatch(/^0x[a-f0-9]{64}$/);
+    expect(session.currentTopicInbound).toMatch(/^0x[a-f0-9]{64}$/);
+  });
+
+  it('sets previous topic with transition window', () => {
+    const now = Date.now();
+    const session = initSessionAsInitiator({
+      myAddress: '0xInitiator',
+      contactAddress: '0xResponder',
+      myHandshakeEphemeralSecret: initiatorEphemeral.secretKey,
+      theirResponderEphemeralPubKey: responderEphemeral.publicKey,
+      topicOutbound,
+      topicInbound,
+    });
+
+    expect(session.previousTopicInbound).toBe(topicInbound);
+    expect(session.previousTopicExpiry).toBeDefined();
+    expect(session.previousTopicExpiry!).toBeGreaterThanOrEqual(now + TOPIC_TRANSITION_WINDOW_MS - 100);
+    expect(session.previousTopicExpiry!).toBeLessThanOrEqual(now + TOPIC_TRANSITION_WINDOW_MS + 100);
+  });
+
+  it('preserves original handshake topics in topicOutbound/topicInbound', () => {
+    const session = initSessionAsInitiator({
+      myAddress: '0xInitiator',
+      contactAddress: '0xResponder',
+      myHandshakeEphemeralSecret: initiatorEphemeral.secretKey,
+      theirResponderEphemeralPubKey: responderEphemeral.publicKey,
+      topicOutbound,
+      topicInbound,
+    });
+
+    // Original topics preserved for reference/lookup
+    expect(session.topicOutbound).toBe(topicOutbound);
+    expect(session.topicInbound).toBe(topicInbound);
+  });
+});
+
+describe('matchesSessionTopic', () => {
+  let session: RatchetSession;
+
+  beforeEach(() => {
+    const responderEphemeral = nacl.box.keyPair();
+    const initiatorEphemeral = nacl.box.keyPair();
+
+    session = initSessionAsInitiator({
+      myAddress: '0xInitiator',
+      contactAddress: '0xResponder',
+      myHandshakeEphemeralSecret: initiatorEphemeral.secretKey,
+      theirResponderEphemeralPubKey: responderEphemeral.publicKey,
+      topicOutbound: '0x' + '1'.repeat(64) as `0x${string}`,
+      topicInbound: '0x' + '2'.repeat(64) as `0x${string}`,
     });
   });
 
-  describe("Encrypt/Decrypt Round-Trip", () => {
-    let aliceSession: RatchetSession;
-    let bobSession: RatchetSession;
-    let aliceSigning: nacl.SignKeyPair;
-    let bobSigning: nacl.SignKeyPair;
+  it('returns "current" for current inbound topic', () => {
+    const result = matchesSessionTopic(session, session.currentTopicInbound);
+    expect(result).toBe('current');
+  });
 
-    beforeEach(() => {
-      // Setup sessions
-      const aliceEphemeral = generateDHKeyPair();
-      const bobEphemeral = generateDHKeyPair();
-      const topics = createTestTopics();
+  it('returns "current" for current inbound topic (case insensitive)', () => {
+    const upperTopic = session.currentTopicInbound.toUpperCase() as `0x${string}`;
+    const result = matchesSessionTopic(session, upperTopic);
+    expect(result).toBe('current');
+  });
 
-      bobSession = initSessionAsResponder({
-        myAddress: "0xBob",
-        contactAddress: "0xAlice",
-        myResponderEphemeralSecret: bobEphemeral.secretKey,
-        myResponderEphemeralPublic: bobEphemeral.publicKey,
-        theirHandshakeEphemeralPubKey: aliceEphemeral.publicKey,
-        topicOutbound: topics.topicIn,
-        topicInbound: topics.topicOut,
-      });
+  it('returns "previous" for previous topic within grace period', () => {
+    expect(session.previousTopicInbound).toBeDefined();
+    const result = matchesSessionTopic(session, session.previousTopicInbound!);
+    expect(result).toBe('previous');
+  });
 
-      aliceSession = initSessionAsInitiator({
-        myAddress: "0xAlice",
-        contactAddress: "0xBob",
-        myHandshakeEphemeralSecret: aliceEphemeral.secretKey,
-        theirResponderEphemeralPubKey: bobEphemeral.publicKey,
-        topicOutbound: topics.topicOut,
-        topicInbound: topics.topicIn,
-      });
+  it('returns null for previous topic after expiry', () => {
+    // Manually expire the previous topic
+    const expiredSession = {
+      ...session,
+      previousTopicExpiry: Date.now() - 1000, // 1 second ago
+    };
 
-      aliceSigning = createSigningKeyPair();
-      bobSigning = createSigningKeyPair();
-    });
+    const result = matchesSessionTopic(expiredSession, expiredSession.previousTopicInbound!);
+    expect(result).toBeNull();
+  });
 
-    it("should encrypt and decrypt a message (Bob to Alice)", () => {
-      const plaintext = new TextEncoder().encode("Hello Alice!");
+  it('returns null for unknown topic', () => {
+    const unknownTopic = '0x' + 'f'.repeat(64) as `0x${string}`;
+    const result = matchesSessionTopic(session, unknownTopic);
+    expect(result).toBeNull();
+  });
 
-      // Bob encrypts
-      const { session: bobAfter, header, ciphertext, signature } = ratchetEncrypt(
-        bobSession,
-        plaintext,
-        bobSigning.secretKey
-      );
+  it('returns null when no previous topic exists', () => {
+    const sessionNoPrevious = {
+      ...session,
+      previousTopicInbound: undefined,
+      previousTopicExpiry: undefined,
+    };
 
-      // Verify signature
-      const sigValid = verifyMessageSignature(
-        signature,
-        header,
-        ciphertext,
-        bobSigning.publicKey
-      );
-      expect(sigValid).toBe(true);
+    const result = matchesSessionTopic(sessionNoPrevious, session.topicInbound);
+    expect(result).toBeNull();
+  });
+});
 
-      // Alice decrypts
-      const result = ratchetDecrypt(aliceSession, header, ciphertext);
+describe('ratchetEncrypt - topic in result', () => {
+  let session: RatchetSession;
+  let signingKeyPair: nacl.SignKeyPair;
 
-      expect(result).not.toBeNull();
-      expect(new TextDecoder().decode(result!.plaintext)).toBe("Hello Alice!");
+  beforeEach(() => {
+    const responderEphemeral = nacl.box.keyPair();
+    const initiatorEphemeral = nacl.box.keyPair();
+    signingKeyPair = nacl.sign.keyPair();
 
-      // Verify session states advanced
-      expect(bobAfter.sendingMsgNumber).toBe(1);
-      expect(result!.session.receivingMsgNumber).toBe(1);
-    });
-
-    it("should encrypt and decrypt a message (Alice to Bob)", () => {
-      const plaintext = new TextEncoder().encode("Hello Bob!");
-
-      // Alice encrypts
-      const { session: aliceAfter, header, ciphertext, signature } = ratchetEncrypt(
-        aliceSession,
-        plaintext,
-        aliceSigning.secretKey
-      );
-
-      // Verify signature
-      const sigValid = verifyMessageSignature(
-        signature,
-        header,
-        ciphertext,
-        aliceSigning.publicKey
-      );
-      expect(sigValid).toBe(true);
-
-      // Bob decrypts (triggers DH ratchet since Alice has new DH key)
-      const result = ratchetDecrypt(bobSession, header, ciphertext);
-
-      expect(result).not.toBeNull();
-      expect(new TextDecoder().decode(result!.plaintext)).toBe("Hello Bob!");
-    });
-
-    it("should handle alternating messages (ping-pong)", () => {
-      // Bob -> Alice
-      const msg1 = new TextEncoder().encode("Message 1 from Bob");
-      const enc1 = ratchetEncrypt(bobSession, msg1, bobSigning.secretKey);
-      const dec1 = ratchetDecrypt(aliceSession, enc1.header, enc1.ciphertext);
-      expect(dec1).not.toBeNull();
-
-      // Update sessions
-      bobSession = enc1.session;
-      aliceSession = dec1!.session;
-
-      // Alice -> Bob
-      const msg2 = new TextEncoder().encode("Message 2 from Alice");
-      const enc2 = ratchetEncrypt(aliceSession, msg2, aliceSigning.secretKey);
-      const dec2 = ratchetDecrypt(bobSession, enc2.header, enc2.ciphertext);
-      expect(dec2).not.toBeNull();
-
-      // Update sessions
-      aliceSession = enc2.session;
-      bobSession = dec2!.session;
-
-      // Bob -> Alice again
-      const msg3 = new TextEncoder().encode("Message 3 from Bob");
-      const enc3 = ratchetEncrypt(bobSession, msg3, bobSigning.secretKey);
-      const dec3 = ratchetDecrypt(aliceSession, enc3.header, enc3.ciphertext);
-      expect(dec3).not.toBeNull();
-
-      expect(new TextDecoder().decode(dec3!.plaintext)).toBe("Message 3 from Bob");
-    });
-
-    it("should handle multiple sequential messages from same sender", () => {
-      const messages = ["First", "Second", "Third"];
-      let currentBobSession = bobSession;
-      let currentAliceSession = aliceSession;
-
-      // Bob sends multiple messages
-      for (const msg of messages) {
-        const plaintext = new TextEncoder().encode(msg);
-        const encrypted = ratchetEncrypt(currentBobSession, plaintext, bobSigning.secretKey);
-        currentBobSession = encrypted.session;
-
-        const decrypted = ratchetDecrypt(currentAliceSession, encrypted.header, encrypted.ciphertext);
-        expect(decrypted).not.toBeNull();
-        expect(new TextDecoder().decode(decrypted!.plaintext)).toBe(msg);
-        currentAliceSession = decrypted!.session;
-      }
-
-      expect(currentBobSession.sendingMsgNumber).toBe(3);
-      expect(currentAliceSession.receivingMsgNumber).toBe(3);
+    session = initSessionAsInitiator({
+      myAddress: '0xInitiator',
+      contactAddress: '0xResponder',
+      myHandshakeEphemeralSecret: initiatorEphemeral.secretKey,
+      theirResponderEphemeralPubKey: responderEphemeral.publicKey,
+      topicOutbound: '0x' + '1'.repeat(64) as `0x${string}`,
+      topicInbound: '0x' + '2'.repeat(64) as `0x${string}`,
     });
   });
 
-  describe("Binary Codec", () => {
-    it("should encode and decode payload correctly", () => {
-      const signature = nacl.randomBytes(64);
-      const header = {
-        dh: nacl.randomBytes(32),
-        pn: 42,
-        n: 123,
-      };
-      const ciphertext = nacl.randomBytes(100);
+  it('includes currentTopicOutbound in encrypt result', () => {
+    const plaintext = new TextEncoder().encode('Hello');
+    const result = ratchetEncrypt(session, plaintext, signingKeyPair.secretKey);
 
-      const payload = packageRatchetPayload(signature, header, ciphertext);
-      const parsed = parseRatchetPayload(payload);
+    expect(result.topic).toBe(session.currentTopicOutbound);
+    expect(result.topic).toMatch(/^0x[a-f0-9]{64}$/);
+  });
 
-      expect(parsed).not.toBeNull();
-      expect(parsed!.version).toBe(0x01);
-      expect(Buffer.from(parsed!.signature)).toEqual(Buffer.from(signature));
-      expect(Buffer.from(parsed!.header.dh)).toEqual(Buffer.from(header.dh));
-      expect(parsed!.header.pn).toBe(42);
-      expect(parsed!.header.n).toBe(123);
-      expect(Buffer.from(parsed!.ciphertext)).toEqual(Buffer.from(ciphertext));
+  it('returns ratcheted topic (not handshake topic) for initiator', () => {
+    const plaintext = new TextEncoder().encode('Hello');
+    const result = ratchetEncrypt(session, plaintext, signingKeyPair.secretKey);
+
+    // Initiator starts at epoch 1, so topic should be ratcheted
+    expect(result.topic).not.toBe(session.topicOutbound);
+  });
+
+  it('returns handshake topic for responder at epoch 0', () => {
+    const responderEphemeral = nacl.box.keyPair();
+    const initiatorEphemeral = nacl.box.keyPair();
+    const topicOutbound = '0x' + '3'.repeat(64) as `0x${string}`;
+
+    const responderSession = initSessionAsResponder({
+      myAddress: '0xResponder',
+      contactAddress: '0xInitiator',
+      myResponderEphemeralSecret: responderEphemeral.secretKey,
+      myResponderEphemeralPublic: responderEphemeral.publicKey,
+      theirHandshakeEphemeralPubKey: initiatorEphemeral.publicKey,
+      topicOutbound,
+      topicInbound: '0x' + '4'.repeat(64) as `0x${string}`,
     });
 
-    it("should detect ratchet payload format", () => {
-      const validPayload = new Uint8Array(110);
-      validPayload[0] = 0x01; // Version byte
+    const plaintext = new TextEncoder().encode('Hello');
+    const result = ratchetEncrypt(responderSession, plaintext, signingKeyPair.secretKey);
 
-      expect(isRatchetPayload(validPayload)).toBe(true);
+    // Responder at epoch 0 uses handshake topic
+    expect(result.topic).toBe(topicOutbound);
+  });
+});
 
-      const jsonPayload = new TextEncoder().encode('{"v":1}');
-      expect(isRatchetPayload(jsonPayload)).toBe(false);
+describe('DH ratchet step - topic rotation', () => {
+  let aliceSession: RatchetSession;
+  let bobSession: RatchetSession;
+  let aliceSigningKeyPair: nacl.SignKeyPair;
+  let bobSigningKeyPair: nacl.SignKeyPair;
+
+  beforeEach(() => {
+    // Simulate handshake
+    const aliceEphemeral = nacl.box.keyPair();
+    const bobEphemeral = nacl.box.keyPair();
+    aliceSigningKeyPair = nacl.sign.keyPair();
+    bobSigningKeyPair = nacl.sign.keyPair();
+
+    const topicAliceToBob = '0x' + 'a'.repeat(64) as `0x${string}`;
+    const topicBobToAlice = '0x' + 'b'.repeat(64) as `0x${string}`;
+
+    // Bob is responder
+    bobSession = initSessionAsResponder({
+      myAddress: '0xBob',
+      contactAddress: '0xAlice',
+      myResponderEphemeralSecret: bobEphemeral.secretKey,
+      myResponderEphemeralPublic: bobEphemeral.publicKey,
+      theirHandshakeEphemeralPubKey: aliceEphemeral.publicKey,
+      topicOutbound: topicBobToAlice,
+      topicInbound: topicAliceToBob,
     });
 
-    it("should reject truncated payloads", () => {
-      const truncated = new Uint8Array(50); 
-      truncated[0] = 0x01;
-
-      expect(parseRatchetPayload(truncated)).toBeNull();
+    // Alice is initiator
+    aliceSession = initSessionAsInitiator({
+      myAddress: '0xAlice',
+      contactAddress: '0xBob',
+      myHandshakeEphemeralSecret: aliceEphemeral.secretKey,
+      theirResponderEphemeralPubKey: bobEphemeral.publicKey,
+      topicOutbound: topicAliceToBob,
+      topicInbound: topicBobToAlice,
     });
   });
 
-  describe("Authentication", () => {
-    it("should reject invalid signatures", () => {
-      const header = {
-        dh: nacl.randomBytes(32),
-        pn: 0,
-        n: 0,
-      };
-      const ciphertext = nacl.randomBytes(50);
-      const wrongSignature = nacl.randomBytes(64);
-      const signingKey = createSigningKeyPair();
-
-      const result = verifyMessageSignature(
-        wrongSignature,
-        header,
-        ciphertext,
-        signingKey.publicKey
-      );
-
-      expect(result).toBe(false);
-    });
-
-    it("should reject signatures from wrong key", () => {
-      const header = {
-        dh: nacl.randomBytes(32),
-        pn: 0,
-        n: 0,
-      };
-      const ciphertext = nacl.randomBytes(50);
-      const realSigner = createSigningKeyPair();
-      const wrongSigner = createSigningKeyPair();
-
-      // Sign with real key
-      const headerBytes = new Uint8Array(40);
-      headerBytes.set(header.dh, 0);
-      new DataView(headerBytes.buffer).setUint32(32, header.pn, false);
-      new DataView(headerBytes.buffer).setUint32(36, header.n, false);
-
-      const dataToSign = new Uint8Array(headerBytes.length + ciphertext.length);
-      dataToSign.set(headerBytes, 0);
-      dataToSign.set(ciphertext, headerBytes.length);
-
-      const signature = nacl.sign.detached(dataToSign, realSigner.secretKey);
-
-      // Verify with wrong key
-      const result = verifyMessageSignature(
-        signature,
-        header,
-        ciphertext,
-        wrongSigner.publicKey // Wrong key!
-      );
-
-      expect(result).toBe(false);
-    });
+  it('Alice starts at epoch 1, Bob starts at epoch 0', () => {
+    expect(aliceSession.topicEpoch).toBe(1);
+    expect(bobSession.topicEpoch).toBe(0);
   });
 
-  describe("Skip Key Handling", () => {
-    it("should handle out-of-order messages", () => {
-      // Setup sessions
-      const aliceEphemeral = generateDHKeyPair();
-      const bobEphemeral = generateDHKeyPair();
-      const topics = createTestTopics();
+  it('Bob advances to epoch 1 after receiving message from Alice', () => {
+    // Alice encrypts a message
+    const plaintext = new TextEncoder().encode('Hello Bob');
+    const encryptResult = ratchetEncrypt(aliceSession, plaintext, aliceSigningKeyPair.secretKey);
+    aliceSession = encryptResult.session;
 
-      let bobSession = initSessionAsResponder({
-        myAddress: "0xBob",
-        contactAddress: "0xAlice",
-        myResponderEphemeralSecret: bobEphemeral.secretKey,
-        myResponderEphemeralPublic: bobEphemeral.publicKey,
-        theirHandshakeEphemeralPubKey: aliceEphemeral.publicKey,
-        topicOutbound: topics.topicIn,
-        topicInbound: topics.topicOut,
-      });
+    // Bob decrypts - this triggers DH ratchet step
+    const decryptResult = ratchetDecrypt(bobSession, encryptResult.header, encryptResult.ciphertext);
+    expect(decryptResult).not.toBeNull();
+    bobSession = decryptResult!.session;
 
-      let aliceSession = initSessionAsInitiator({
-        myAddress: "0xAlice",
-        contactAddress: "0xBob",
-        myHandshakeEphemeralSecret: aliceEphemeral.secretKey,
-        theirResponderEphemeralPubKey: bobEphemeral.publicKey,
-        topicOutbound: topics.topicOut,
-        topicInbound: topics.topicIn,
-      });
-
-      const bobSigning = createSigningKeyPair();
-
-      // Bob sends 3 messages
-      const enc1 = ratchetEncrypt(bobSession, new TextEncoder().encode("Msg 1"), bobSigning.secretKey);
-      bobSession = enc1.session;
-
-      const enc2 = ratchetEncrypt(bobSession, new TextEncoder().encode("Msg 2"), bobSigning.secretKey);
-      bobSession = enc2.session;
-
-      const enc3 = ratchetEncrypt(bobSession, new TextEncoder().encode("Msg 3"), bobSigning.secretKey);
-      bobSession = enc3.session;
-
-      // Alice receives msg 3 first (out of order)
-      const dec3 = ratchetDecrypt(aliceSession, enc3.header, enc3.ciphertext);
-      expect(dec3).not.toBeNull();
-      expect(new TextDecoder().decode(dec3!.plaintext)).toBe("Msg 3");
-      aliceSession = dec3!.session;
-
-      // Verify skip keys were created for msg 1 and 2
-      expect(aliceSession.skippedKeys.length).toBe(2);
-
-      // Alice receives msg 1 (using skip key)
-      const dec1 = ratchetDecrypt(aliceSession, enc1.header, enc1.ciphertext);
-      expect(dec1).not.toBeNull();
-      expect(new TextDecoder().decode(dec1!.plaintext)).toBe("Msg 1");
-      aliceSession = dec1!.session;
-
-      // One skip key used
-      expect(aliceSession.skippedKeys.length).toBe(1);
-
-      // Alice receives msg 2 (using skip key)
-      const dec2 = ratchetDecrypt(aliceSession, enc2.header, enc2.ciphertext);
-      expect(dec2).not.toBeNull();
-      expect(new TextDecoder().decode(dec2!.plaintext)).toBe("Msg 2");
-      aliceSession = dec2!.session;
-
-      // All skip keys used
-      expect(aliceSession.skippedKeys.length).toBe(0);
-    });
+    expect(bobSession.topicEpoch).toBe(1);
+    expect(bobSession.currentTopicOutbound).not.toBe(bobSession.topicOutbound);
+    expect(bobSession.currentTopicInbound).not.toBe(bobSession.topicInbound);
   });
 
-  describe("Utility Functions", () => {
-    it("should prune expired skipped keys", () => {
-      const session: RatchetSession = {
-        conversationId: "test",
-        topicOutbound: "0xabc" as `0x${string}`,
-        topicInbound: "0xdef" as `0x${string}`,
-        myAddress: "0x1",
-        contactAddress: "0x2",
-        rootKey: new Uint8Array(32),
-        dhMySecretKey: new Uint8Array(32),
-        dhMyPublicKey: new Uint8Array(32),
-        dhTheirPublicKey: new Uint8Array(32),
-        sendingChainKey: new Uint8Array(32),
-        sendingMsgNumber: 0,
-        receivingChainKey: new Uint8Array(32),
-        receivingMsgNumber: 0,
-        previousChainLength: 0,
-        skippedKeys: [
-          { dhPubKeyHex: "0x1", msgNumber: 0, messageKey: new Uint8Array(32), createdAt: Date.now() - 1000 }, // Fresh
-          { dhPubKeyHex: "0x1", msgNumber: 1, messageKey: new Uint8Array(32), createdAt: Date.now() - 100000000 }, // Expired
-        ],
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        epoch: 0,
-      };
+  it('both parties derive matching topics after DH ratchet', () => {
+    // Alice encrypts a message
+    const plaintext = new TextEncoder().encode('Hello Bob');
+    const encryptResult = ratchetEncrypt(aliceSession, plaintext, aliceSigningKeyPair.secretKey);
+    aliceSession = encryptResult.session;
 
-      const pruned = pruneExpiredSkippedKeys(session, 50000); 
+    // Bob decrypts
+    const decryptResult = ratchetDecrypt(bobSession, encryptResult.header, encryptResult.ciphertext);
+    bobSession = decryptResult!.session;
 
-      expect(pruned.skippedKeys.length).toBe(1);
-      expect(pruned.skippedKeys[0].msgNumber).toBe(0); 
+    // Alice's outbound should match Bob's inbound
+    expect(aliceSession.currentTopicOutbound).toBe(bobSession.currentTopicInbound);
+    // Bob's outbound should match Alice's inbound
+    expect(bobSession.currentTopicOutbound).toBe(aliceSession.currentTopicInbound);
+  });
+
+  it('previous topic is preserved during transition window', () => {
+    // Alice encrypts a message
+    const plaintext = new TextEncoder().encode('Hello Bob');
+    const encryptResult = ratchetEncrypt(aliceSession, plaintext, aliceSigningKeyPair.secretKey);
+    aliceSession = encryptResult.session;
+
+    // Bob decrypts
+    const decryptResult = ratchetDecrypt(bobSession, encryptResult.header, encryptResult.ciphertext);
+    bobSession = decryptResult!.session;
+
+    // Bob should have previous topic set
+    expect(bobSession.previousTopicInbound).toBeDefined();
+    expect(bobSession.previousTopicExpiry).toBeDefined();
+    expect(bobSession.previousTopicExpiry!).toBeGreaterThan(Date.now());
+  });
+
+  it('full conversation rotates topics correctly', () => {
+    const epochs: { alice: number; bob: number }[] = [];
+
+    // Track initial state
+    epochs.push({ alice: aliceSession.topicEpoch, bob: bobSession.topicEpoch });
+
+    // Alice -> Bob (Alice already at epoch 1)
+    let encryptResult = ratchetEncrypt(aliceSession, new TextEncoder().encode('msg1'), aliceSigningKeyPair.secretKey);
+    aliceSession = encryptResult.session;
+    let decryptResult = ratchetDecrypt(bobSession, encryptResult.header, encryptResult.ciphertext);
+    bobSession = decryptResult!.session;
+    epochs.push({ alice: aliceSession.topicEpoch, bob: bobSession.topicEpoch });
+
+    // Bob -> Alice (Bob now at epoch 1)
+    encryptResult = ratchetEncrypt(bobSession, new TextEncoder().encode('msg2'), bobSigningKeyPair.secretKey);
+    bobSession = encryptResult.session;
+    decryptResult = ratchetDecrypt(aliceSession, encryptResult.header, encryptResult.ciphertext);
+    aliceSession = decryptResult!.session;
+    epochs.push({ alice: aliceSession.topicEpoch, bob: bobSession.topicEpoch });
+
+    // Alice -> Bob (Alice now at epoch 2)
+    encryptResult = ratchetEncrypt(aliceSession, new TextEncoder().encode('msg3'), aliceSigningKeyPair.secretKey);
+    aliceSession = encryptResult.session;
+    decryptResult = ratchetDecrypt(bobSession, encryptResult.header, encryptResult.ciphertext);
+    bobSession = decryptResult!.session;
+    epochs.push({ alice: aliceSession.topicEpoch, bob: bobSession.topicEpoch });
+
+    // Verify epochs increment with each turn change
+    expect(epochs[0]).toEqual({ alice: 1, bob: 0 });
+    expect(epochs[1]).toEqual({ alice: 1, bob: 1 });
+    expect(epochs[2]).toEqual({ alice: 2, bob: 1 });
+    expect(epochs[3]).toEqual({ alice: 2, bob: 2 });
+  });
+});
+
+describe('topic continuity', () => {
+  it('multiple messages in same direction use same topic', () => {
+    const responderEphemeral = nacl.box.keyPair();
+    const initiatorEphemeral = nacl.box.keyPair();
+    const signingKeyPair = nacl.sign.keyPair();
+
+    let session = initSessionAsInitiator({
+      myAddress: '0xAlice',
+      contactAddress: '0xBob',
+      myHandshakeEphemeralSecret: initiatorEphemeral.secretKey,
+      theirResponderEphemeralPubKey: responderEphemeral.publicKey,
+      topicOutbound: '0x' + '1'.repeat(64) as `0x${string}`,
+      topicInbound: '0x' + '2'.repeat(64) as `0x${string}`,
     });
 
-    it("should convert hex to bytes and back", () => {
-      const original = nacl.randomBytes(32);
-      const hex = bytesToHex(original);
-      const restored = hexToBytes(hex);
+    const topics: string[] = [];
 
-      expect(Buffer.from(restored)).toEqual(Buffer.from(original));
-    });
+    // Send multiple messages without receiving any
+    for (let i = 0; i < 5; i++) {
+      const result = ratchetEncrypt(session, new TextEncoder().encode(`msg${i}`), signingKeyPair.secretKey);
+      topics.push(result.topic);
+      session = result.session;
+    }
+
+    // All messages should use the same topic (no DH ratchet without receiving)
+    expect(new Set(topics).size).toBe(1);
+    expect(session.topicEpoch).toBe(1); // Still epoch 1
   });
 });

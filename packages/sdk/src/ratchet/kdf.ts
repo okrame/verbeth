@@ -10,7 +10,9 @@
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
 import { hmac } from '@noble/hashes/hmac';
+import { keccak256 } from 'ethers';
 import nacl from 'tweetnacl';
+
 /**
  * @param rootKey - Current root key (32 bytes)
  * @param dhOutput - DH shared secret (32 bytes)
@@ -67,4 +69,23 @@ export function dh(
 export function generateDHKeyPair(): { secretKey: Uint8Array; publicKey: Uint8Array } {
   const kp = nacl.box.keyPair();
   return { secretKey: kp.secretKey, publicKey: kp.publicKey };
+}
+
+/**
+ * Derive topic from DH shared secret.
+ * Called after each DH ratchet step to rotate topics.
+ * 
+ * @param dhSharedSecret - DH output from ratchet step (32 bytes)
+ * @param direction - 'outbound' or 'inbound' for topic direction
+ * @param salt - Conversation ID bytes for domain separation
+ * @returns bytes32 topic as hex string
+ */
+export function deriveTopicFromDH(
+  dhSharedSecret: Uint8Array,
+  direction: 'outbound' | 'inbound',
+  salt: Uint8Array
+): `0x${string}` {
+  const info = `verbeth:topic-${direction}:v2`;
+  const okm = hkdf(sha256, dhSharedSecret, salt, info, 32);
+  return keccak256(okm) as `0x${string}`;
 }

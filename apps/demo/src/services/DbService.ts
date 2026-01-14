@@ -9,12 +9,7 @@ import type {
   PendingHandshake,
   PendingOutbound,
 } from "../types.js";
-import {
-  serializeRatchetSession,
-  deserializeRatchetSession,
-} from "../types.js";
 import type { RatchetSession } from "@verbeth/sdk";
-import { pruneExpiredSkippedKeys } from "@verbeth/sdk";
 import { RatchetDbService } from "./RatchetDbService.js";
 
 export class DbService {
@@ -446,10 +441,13 @@ export class DbService {
   ): Promise<RatchetSession | null> {
     return this.ratchet.getRatchetSessionByConversation(conversationId);
   }
-  getRatchetSessionByTopic(
-    topicInbound: string
+  getRatchetSessionByAnyInboundTopic(
+    topic: string
   ): Promise<RatchetSession | null> {
-    return this.ratchet.getRatchetSessionByTopic(topicInbound);
+    return this.ratchet.getRatchetSessionByAnyInboundTopic(topic);
+  }
+  getAllActiveInboundTopics(myAddress: string): Promise<string[]> {
+    return this.ratchet.getAllActiveInboundTopics(myAddress);
   }
   deleteRatchetSession(conversationId: string): Promise<void> {
     return this.ratchet.deleteRatchetSession(conversationId);

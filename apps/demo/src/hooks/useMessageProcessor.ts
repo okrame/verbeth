@@ -74,6 +74,7 @@ export const useMessageProcessor = ({
     async (events: ProcessedEvent[]) => {
       if (!address) return;
 
+      // Session cache keyed by conversationId (not topic) for topic ratcheting support
       const batchSessionCache = new Map<string, RatchetSession>();
 
       const messageEvents = events.filter((e) => e.eventType === "message");

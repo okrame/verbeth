@@ -37,13 +37,26 @@ export class VerbEthDatabase extends Dexie {
       settings: "name",
       
       // Ratchet session storage
-      // Primary key: conversationId
-      // Indexes: topicInbound (for incoming message lookup), topicOutbound, status
       ratchetSessions: "conversationId, topicInbound, topicOutbound, status, myAddress, contactAddress",
       
       // Pending outbound for two-phase commit
-      // Primary key: id
-      // Indexes: conversationId (for sequential blocking), txHash (for confirmation matching)
+      pendingOutbound: "id, conversationId, txHash, status, createdAt",
+    });
+
+    this.version(1).stores({
+      identity: "address",
+      contacts:
+        "[address+ownerAddress], ownerAddress, lastTimestamp, status, topicOutbound, topicInbound, emitterAddress, conversationId",
+      messages:
+        "id, ownerAddress, sender, recipient, topic, nonce, timestamp, blockTimestamp, read, status, [ownerAddress+sender+status], [ownerAddress+sender+topic+nonce+status]",
+      dedup: "key, messageId, txHash, blockNumber",
+      pendingHandshakes: "id, ownerAddress, sender, timestamp, verified, emitterAddress",
+      settings: "name",
+      
+      // Ratchet session storage - added currentTopicInbound and previousTopicInbound indexes
+      ratchetSessions: "conversationId, topicInbound, topicOutbound, currentTopicInbound, previousTopicInbound, myAddress, contactAddress",
+      
+      // Pending outbound for two-phase commit
       pendingOutbound: "id, conversationId, txHash, status, createdAt",
     });
   }

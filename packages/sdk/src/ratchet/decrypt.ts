@@ -5,10 +5,11 @@
  * - Normal sequential message decryption
  * - DH ratchet steps when sender's DH key changes
  * - Out-of-order messages via skipped keys
+ * - Topic ratcheting synchronized with DH ratchet
  */
 
 import nacl from 'tweetnacl';
-import { hexlify } from 'ethers';
+import { hexlify, getBytes } from 'ethers';
 import {
   RatchetSession,
   MessageHeader,
@@ -16,8 +17,9 @@ import {
   SkippedKey,
   MAX_SKIP_PER_MESSAGE,
   MAX_STORED_SKIPPED_KEYS,
+  TOPIC_TRANSITION_WINDOW_MS,
 } from './types.js';
-import { kdfRootKey, kdfChainKey, dh, generateDHKeyPair } from './kdf.js';
+import { kdfRootKey, kdfChainKey, dh, generateDHKeyPair, deriveTopicFromDH } from './kdf.js';
 
 /**
  * Decrypt a message using the ratchet.
@@ -108,12 +110,10 @@ export function ratchetDecrypt(
 /**
  * Perform a DH ratchet step when receiving a message with a new DH public key.
  * 
- * This advances both the receiving and sending chains:
- * 1. Receiving DH: derive new receiving chain from DH(mySecret, theirNewPub)
- * 2. Generate new DH keypair for sending
- * 3. Sending DH: derive new sending chain from DH(newSecret, theirNewPub)
+ * This advances both the receiving and sending chains and derives new ratcheted topics
  */
 function dhRatchetStep(session: RatchetSession, theirNewDHPub: Uint8Array): RatchetSession {
+  // Receiving DH is shared secret from my secret and their new public
   const dhReceive = dh(session.dhMySecretKey, theirNewDHPub);
   const { rootKey: rootKey1, chainKey: receivingChainKey } = kdfRootKey(
     session.rootKey,
@@ -124,6 +124,16 @@ function dhRatchetStep(session: RatchetSession, theirNewDHPub: Uint8Array): Ratc
 
   const dhSend = dh(newDHKeyPair.secretKey, theirNewDHPub);
   const { rootKey: rootKey2, chainKey: sendingChainKey } = kdfRootKey(rootKey1, dhSend);
+
+  // derive new topics from dhReceive
+  const saltBytes = getBytes(session.conversationId);
+  const newTopicOut = deriveTopicFromDH(dhReceive, 'outbound', saltBytes);
+  const newTopicIn = deriveTopicFromDH(dhReceive, 'inbound', saltBytes);
+
+
+  // Deriva i PROSSIMI topics da dhSend (che l'altra parte riceverà come dhReceive)
+  const nextTopicOut = deriveTopicFromDH(dhSend, 'outbound', saltBytes);
+  const nextTopicIn = deriveTopicFromDH(dhSend, 'inbound', saltBytes);
 
   return {
     ...session,
@@ -136,6 +146,15 @@ function dhRatchetStep(session: RatchetSession, theirNewDHPub: Uint8Array): Ratc
     sendingChainKey,
     sendingMsgNumber: 0,
     previousChainLength: session.sendingMsgNumber,
+
+    nextTopicOutbound: nextTopicOut,
+    nextTopicInbound: nextTopicIn,
+
+    currentTopicOutbound: newTopicOut,
+    currentTopicInbound: newTopicIn,
+    previousTopicInbound: session.currentTopicInbound,
+    previousTopicExpiry: Date.now() + TOPIC_TRANSITION_WINDOW_MS,
+    topicEpoch: session.topicEpoch + 1,
   };
 }
 
@@ -273,4 +292,33 @@ export function pruneExpiredSkippedKeys(
     skippedKeys: prunedKeys,
     updatedAt: now,
   };
+}
+
+/**
+ * Check if topic matches this session.
+ * Returns match type or null.
+ * 
+ * @param session - Ratchet session to check
+ * @param topic - Topic to match against
+ * @returns 'current' if matches current inbound, 'previous' if matches previous (within grace), null otherwise
+ */
+export function matchesSessionTopic(
+  session: RatchetSession,
+  topic: `0x${string}`
+): 'current' | 'previous' | null {
+  const t = topic.toLowerCase();
+
+  if (session.currentTopicInbound.toLowerCase() === t) {
+    return 'current';
+  }
+
+  if (
+    session.previousTopicInbound?.toLowerCase() === t &&
+    session.previousTopicExpiry &&
+    Date.now() < session.previousTopicExpiry
+  ) {
+    return 'previous';
+  }
+
+  return null;
 }

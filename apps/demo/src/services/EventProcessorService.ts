@@ -29,6 +29,7 @@ import {
 } from "@verbeth/sdk";
 
 import { dbService } from "./DbService.js";
+import { RatchetDbService } from "./RatchetDbService.js";
 import {
   Contact,
   Message,
@@ -162,8 +163,11 @@ export async function processHandshakeEvent(
       } catch (e) {}
     }
 
-    const existingContact = await dbService.getContact(identityAddress, address);
-    const isExistingEstablished = existingContact?.status === 'established';
+    const existingContact = await dbService.getContact(
+      identityAddress,
+      address
+    );
+    const isExistingEstablished = existingContact?.status === "established";
 
     const pendingHandshake: PendingHandshake = {
       id: log.transactionHash,
@@ -180,9 +184,9 @@ export async function processHandshakeEvent(
       isExistingContact: isExistingEstablished,
     };
 
-    const messagePrefix = pendingHandshake.isExistingContact 
-      ? 'Session reset request received' 
-      : 'Request received';
+    const messagePrefix = pendingHandshake.isExistingContact
+      ? "Session reset request received"
+      : "Request received";
 
     const systemMessage: Message = {
       id: generateTempMessageId(),
@@ -208,11 +212,14 @@ export async function processHandshakeEvent(
     await dbService.savePendingHandshake(pendingHandshake);
     await dbService.saveMessage(systemMessage);
 
-    const logSuffix = isExistingEstablished ? ' (session reset)' : '';
+    const logSuffix = isExistingEstablished ? " (session reset)" : "";
     onLog(
-      `📨 Handshake received from ${identityAddress.slice(0, 8)}...${logSuffix} ${
-        isVerified ? "✅" : "⚠️"
-      }: "${handshakeContent.plaintextPayload}"`
+      `📨 Handshake received from ${identityAddress.slice(
+        0,
+        8
+      )}...${logSuffix} ${isVerified ? "✅" : "⚠️"}: "${
+        handshakeContent.plaintextPayload
+      }"`
     );
 
     return { pendingHandshake, systemMessage };
@@ -324,7 +331,10 @@ export async function processHandshakeResponseEvent(
 
     if (!isValidTopics) {
       onLog(
-        `❌ Invalid duplex topics checksum for ${contact.address.slice(0, 8)}...`
+        `❌ Invalid duplex topics checksum for ${contact.address.slice(
+          0,
+          8
+        )}...`
       );
       return null;
     }
@@ -345,14 +355,15 @@ export async function processHandshakeResponseEvent(
       topicInbound,
     });
 
+    // Use ratcheted topics from session for contact storage
     const updatedContact: Contact = {
       ...contact,
       status: "established" as ContactStatus,
       identityPubKey,
       signingPubKey,
       handshakeEphemeralSecret: undefined,
-      topicOutbound,
-      topicInbound,
+      topicOutbound: ratchetSession.currentTopicOutbound,
+      topicInbound: ratchetSession.currentTopicInbound,
       conversationId: ratchetSession.conversationId,
       lastMessage: note || "Handshake accepted",
       lastTimestamp: Date.now(),
@@ -400,6 +411,10 @@ export async function processHandshakeResponseEvent(
 // Message Processing (Outgoing Confirmation + Incoming Decryption)
 // =============================================================================
 
+/**
+ * Process a message event.
+ * Session cache is keyed by conversationId (not topic) to handle topic ratcheting.
+ */
 export async function processMessageEvent(
   event: ProcessedEvent,
   address: string,
@@ -422,7 +437,8 @@ export async function processMessageEvent(
     const ciphertextHex = ciphertextBytes as string;
     const ciphertextRaw = hexToUint8Array(ciphertextHex);
     const emitter = emitterAddress || address;
-    const isOurMessage = emitter && sender.toLowerCase() === emitter.toLowerCase();
+    const isOurMessage =
+      emitter && sender.toLowerCase() === emitter.toLowerCase();
 
     if (!isOurMessage) {
       const already = await dbService.getByDedupKey(dedupKey);
@@ -460,7 +476,12 @@ export async function processMessageEvent(
         const finalized = await dbService.finalizePendingOutbound(pending.id);
 
         if (!finalized) {
-          onLog(`⚠️ Failed to finalize pending outbound ${pending.id.slice(0, 8)}...`);
+          onLog(
+            `⚠️ Failed to finalize pending outbound ${pending.id.slice(
+              0,
+              8
+            )}...`
+          );
           return null;
         }
 
@@ -497,26 +518,20 @@ export async function processMessageEvent(
 
       // No matching pending record - this shouldn't happen in normal flow
       onLog(
-        `⚠️ Outgoing message on-chain but no pending record found (tx: ${log.transactionHash.slice(0, 10)}...)`
+        `⚠️ Outgoing message on-chain but no pending record found (tx: ${log.transactionHash.slice(
+          0,
+          10
+        )}...)`
       );
       return null;
     }
 
     // =========================================================================
-    // INCOMING MESSAGE - Use ratchet session for decryption
+    // INCOMING MESSAGE - Use multi-topic lookup for ratchet session
     // =========================================================================
 
-    // Check session cache FIRST, then fall back to DB
-    let session = sessionCache.get(topic);
-
-    if (!session) {
-      session =
-        (await dbService.getRatchetSessionByTopic(topic)) || undefined;
-
-      if (session) {
-        sessionCache.set(topic, session);
-      }
-    }
+    // Multi-topic lookup: handles both current and previous (grace period) topics
+    const session = await dbService.getRatchetSessionByAnyInboundTopic(topic);
 
     if (!session) {
       onLog(
@@ -528,11 +543,54 @@ export async function processMessageEvent(
       return null;
     }
 
+    // Check session cache by conversationId (not topic, since topic can change)
+    let cachedSession = sessionCache.get(session.conversationId);
+    let workingSession = cachedSession || session;
+
+    // =========================================================================
+    // Promuovi next → current se riceviamo su nextTopicInbound
+    // =========================================================================
+    const topicLower = (topic as string).toLowerCase();
+    if (
+      workingSession.nextTopicInbound &&
+      topicLower === workingSession.nextTopicInbound.toLowerCase()
+    ) {
+      onLog(
+        `📈 Promoting next topics to current (epoch ${
+          workingSession.topicEpoch
+        } → ${workingSession.topicEpoch + 1})`
+      );
+
+      workingSession = {
+        ...workingSession,
+        // Salva current come previous (grace period)
+        previousTopicInbound: workingSession.currentTopicInbound,
+        previousTopicExpiry: Date.now() + 5 * 60 * 1000, // 5 min grace
+        // Promuovi next → current
+        currentTopicInbound: workingSession.nextTopicInbound,
+        currentTopicOutbound: workingSession.nextTopicOutbound!,
+        // Cancella next (verrà ricalcolato da dhRatchetStep)
+        nextTopicInbound: undefined,
+        nextTopicOutbound: undefined,
+        topicEpoch: workingSession.topicEpoch + 1,
+      };
+
+      // Aggiorna la cache con la sessione promossa
+      sessionCache.set(workingSession.conversationId, workingSession);
+    }
+    // =========================================================================
+
     // Find contact for signing key verification
-    const contact = await dbService.getContact(session.contactAddress, address);
+    const contact = await dbService.getContact(
+      workingSession.contactAddress,
+      address
+    );
     if (!contact?.signingPubKey) {
       onLog(
-        `✗ No signing key for contact ${session.contactAddress.slice(0, 8)}...`
+        `✗ No signing key for contact ${workingSession.contactAddress.slice(
+          0,
+          8
+        )}...`
       );
       return null;
     }
@@ -574,9 +632,9 @@ export async function processMessageEvent(
       return null;
     }
 
-    // decrypt with ratchet (signature verified)
+    // Decrypt with ratchet (signature verified)
     const decryptResult = ratchetDecrypt(
-      session,
+      workingSession,
       parsed.header,
       parsed.ciphertext
     );
@@ -588,8 +646,11 @@ export async function processMessageEvent(
       return null;
     }
 
-    // Update session cache IMMEDIATELY
-    sessionCache.set(topic, decryptResult.session);
+    // Update session cache by conversationId (topic may have changed due to DH ratchet)
+    sessionCache.set(
+      decryptResult.session.conversationId,
+      decryptResult.session
+    );
 
     const decryptedText = new TextDecoder().decode(decryptResult.plaintext);
 
@@ -612,8 +673,11 @@ export async function processMessageEvent(
       status: "confirmed",
     };
 
+    // Update contact with current topic (may have ratcheted)
     const updatedContact: Contact = {
       ...contact,
+      topicInbound: decryptResult.session.currentTopicInbound,
+      topicOutbound: decryptResult.session.currentTopicOutbound,
       lastMessage: decryptedText,
       lastTimestamp: Date.now(),
     };
@@ -649,13 +713,16 @@ export async function persistSessionCache(
 ): Promise<void> {
   if (sessionCache.size === 0) return;
 
-  for (const [topic, session] of sessionCache) {
+  for (const [conversationId, session] of sessionCache) {
     try {
       await dbService.saveRatchetSession(session);
-      onLog(`💾 Persisted session state for topic ${topic.slice(0, 10)}...`);
+      onLog(`💾 Persisted session state for ${conversationId.slice(0, 10)}...`);
     } catch (error) {
       onLog(
-        `✗ Failed to persist session for topic ${topic.slice(0, 10)}...: ${error}`
+        `✗ Failed to persist session for ${conversationId.slice(
+          0,
+          10
+        )}...: ${error}`
       );
     }
   }

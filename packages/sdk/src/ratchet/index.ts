@@ -1,11 +1,12 @@
 // packages/sdk/src/ratchet/index.ts
+
 export {
-  
   MAX_SKIP_PER_MESSAGE,
   MAX_STORED_SKIPPED_KEYS,
   MAX_SKIPPED_KEYS_AGE_MS,
   SYNC_BATCH_SIZE,
   RATCHET_VERSION_V1,
+  TOPIC_TRANSITION_WINDOW_MS,
   
   type RatchetSession,
   type SkippedKey,
@@ -24,6 +25,7 @@ export {
   kdfChainKey,
   dh,
   generateDHKeyPair,
+  deriveTopicFromDH,
 } from './kdf.js';
 
 export {
@@ -40,6 +42,7 @@ export {
 export {
   ratchetDecrypt,
   pruneExpiredSkippedKeys,
+  matchesSessionTopic,
 } from './decrypt.js';
 
 export {

@@ -299,68 +299,62 @@ export const useMessageListener = ({
         }
       }
 
-      const establishedContacts = contacts.filter(
-        (c) => c.status === "established"
-      );
-      if (establishedContacts.length > 0) {
-        // 1) INBOUND ONLY: listen exclusively to topics where we receive messages
-        const inboundTopics = establishedContacts
-          .map((c) => c.topicInbound)
-          .filter(Boolean);
+      // Get ALL active inbound topics (current + previous within grace period)
+      const activeTopics = await dbService.getAllActiveInboundTopics(address);
 
-        if (inboundTopics.length > 0) {
-          const messageFilterIn = {
-            address: LOGCHAIN_SINGLETON_ADDR,
-            topics: [EVENT_SIGNATURES.MessageSent, null, inboundTopics],
-          };
-          const inboundLogs = await safeGetLogs(
-            messageFilterIn,
-            fromBlock,
-            toBlock
-          );
+      if (activeTopics.length > 0) {
+        // Query messages on all active topics
+        const messageFilterIn = {
+          address: LOGCHAIN_SINGLETON_ADDR,
+          topics: [EVENT_SIGNATURES.MessageSent, null, activeTopics],
+        };
+        const inboundLogs = await safeGetLogs(
+          messageFilterIn,
+          fromBlock,
+          toBlock
+        );
 
-          for (const log of inboundLogs) {
-            const logKey = `${log.transactionHash}-${log.logIndex}`;
-            if (!processedLogs.current.has(logKey)) {
-              processedLogs.current.add(logKey);
-              allEvents.push({
-                logKey,
-                eventType: "message",
-                rawLog: log,
-                blockNumber: log.blockNumber,
-                timestamp: Date.now(),
-              });
-            }
+        for (const log of inboundLogs) {
+          const logKey = `${log.transactionHash}-${log.logIndex}`;
+          if (!processedLogs.current.has(logKey)) {
+            processedLogs.current.add(logKey);
+            allEvents.push({
+              logKey,
+              eventType: "message",
+              rawLog: log,
+              blockNumber: log.blockNumber,
+              timestamp: Date.now(),
+            });
           }
         }
+      }
 
-        // 2) OUTBOUND CONFIRMATION: use emitterAddress (Safe in fast mode, EOA in classic)
-        const emitter = emitterAddress || address;
-        if (emitter) {
-          const senderTopic =
-            "0x000000000000000000000000" + emitter.slice(2).toLowerCase();
-          const messageFilterOutConfirm = {
-            address: LOGCHAIN_SINGLETON_ADDR,
-            topics: [EVENT_SIGNATURES.MessageSent, senderTopic],
-          };
-          const outLogs = await safeGetLogs(
-            messageFilterOutConfirm,
-            fromBlock,
-            toBlock
-          );
+      // 2) OUTBOUND CONFIRMATION: use emitterAddress (Safe in fast mode, EOA in classic)
+      const emitter = emitterAddress || address;
+      if (emitter) {
+        const senderTopic =
+          "0x000000000000000000000000" + emitter.slice(2).toLowerCase();
+        const messageFilterOutConfirm = {
+          address: LOGCHAIN_SINGLETON_ADDR,
+          topics: [EVENT_SIGNATURES.MessageSent, senderTopic],
+        };
+        const outLogs = await safeGetLogs(
+          messageFilterOutConfirm,
+          fromBlock,
+          toBlock
+        );
 
-          for (const log of outLogs) {
-            const logKey = `${log.transactionHash}-${log.logIndex}`;
-            if (!processedLogs.current.has(logKey)) {
-              processedLogs.current.add(logKey);
-              allEvents.push({
-                logKey,
-                eventType: "message",
-                rawLog: log,
-                blockNumber: log.blockNumber,
-                timestamp: Date.now(),
-              });
-            }
+        for (const log of outLogs) {
+          const logKey = `${log.transactionHash}-${log.logIndex}`;
+          if (!processedLogs.current.has(logKey)) {
+            processedLogs.current.add(logKey);
+            allEvents.push({
+              logKey,
+              eventType: "message",
+              rawLog: log,
+              blockNumber: log.blockNumber,
+              timestamp: Date.now(),
+            });
           }
         }
       }

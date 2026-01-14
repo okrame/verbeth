@@ -2,9 +2,9 @@
 
 ## Overview
 
-This plan implements Signal-style Double Ratchet for bilateral forward secrecy. Compromising identity keys never allows decrypting past messages—not even message 0.
+This plan implements Signal-style Double Ratchet for bilateral forward secrecy and topic unlinkability. Compromising identity keys never allows decrypting past messages—not even message 0.
 
-**Scope**: Core Double Ratchet only. Topic ratcheting and post-quantum are separate future phases.
+**Scope**: Core Double Ratchet only. Post-quantum are separate future phases.
 
 ---
 
@@ -80,18 +80,6 @@ Lookup: `session where topicInbound === event.topic`
 ```
 
 ### 1.6 Binary Encoding
-
-```
-Offset │ Size │ Field
-───────┼──────┼─────────────────────────────
-0      │ 1    │ Version (0x01)
-1      │ 64   │ Ed25519 signature
-65     │ 32   │ DH ratchet public key
-97     │ 4    │ pn (uint32 BE)
-101    │ 4    │ n (uint32 BE)
-105    │ var  │ Ciphertext (nonce + AEAD)
-```
-
 Fixed overhead: ~105 bytes (vs ~200+ for JSON+base64).
 
 ### 1.7 Skipped Keys: Reorg Tolerance, Not Offline Catch-Up
@@ -149,71 +137,561 @@ Alice (lost state) → sendHandshake(bob) → Bob accepts → New session
 
 ---
 
-## 3. Implementation Milestones
+# DH-Synchronized Topic Ratcheting
 
-### Milestone 1: SDK Ratchet Core ✅ COMPLETED
-Pure crypto module, fully testable without blockchain/DB.
+Static topics enable long-term correlation of conversations by on-chain observers. Even with encrypted content, the repeated `topic` parameter in `MessageSent` events creates a linkable pattern.
 
-### Milestone 2: Handshake + Persistence ✅ COMPLETED
-Wire ratchet into handshake; sessions persist to IndexedDB.
-Ratchet key comes from decrypted payload, NOT on-chain `responderEphemeralR`.
+## Solution: DH-Synchronized Topic Ratcheting
 
-### Milestone 3: Encrypted Messaging ✅ COMPLETED
-Full send/receive with session caching and batch processing.
+Derive new topics whenever a DH ratchet step occurs. The DH public key in message headers provides natural synchronization—both parties know when to rotate topics without additional coordination.
 
-**Implementation Details**:
+## Key Insight
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| `useMessageQueue.ts` | ✅ | Sequential message processing with optimistic UI |
-| Session caching | ✅ | Per-conversation cache in `sessionCacheRef` |
-| Immediate session commit | ✅ | DB save before tx send (skip-key resilient) |
-| Batch incoming processing | ✅ | `processMessageLogWithCache()` with shared cache |
-| Auth-first decryption | ✅ | `verifyMessageSignature()` before `ratchetDecrypt()` |
-| Pending outbound tracking | ✅ | `PendingOutbound` table for tx confirmation matching |
-| Retry failed messages | ✅ | Re-encrypts with current state (burns new slot) |
+The existing Double Ratchet already:
+- Generates new DH keypairs on each turn (in `dhRatchetStep()`)
+- Tracks `dhMyPublicKey` and `dhTheirPublicKey`
+- Triggers on first message after receiving a new DH public key
 
-**Test Cases Verified**:
-- ✅ Send → pending created → confirmed → session committed
-- ✅ Send failure → session already advanced, skip key handles gap
-- ✅ Batch incoming → session cache ensures sequential decryption
-- ✅ Invalid signature → rejected before ratchet work (DoS protection)
+**Topic epochs = DH epochs.** When `dhTheirPublicKey` changes, derive new topics.
 
-### Milestone 4: Session Recovery UX
+---
 
-**Status**: Existing handshake flow (probably) handles reset naturally.
+## Topic Transition Window (5 minutes) — NOT a Wait Time
 
-#### 4.1 Why No Special Protocol Needed
+The transition window is a **grace period**, not a delay. Messages flow instantly with zero UX impact.
 
+**What it means:**
+- After a DH ratchet step, we listen on BOTH the old topic AND the new topic for 5 minutes
+- Messages sent/received immediately on the new topic
+- Old topic acceptance handles edge cases only
+
+**Why it's needed:**
+1. **In-flight messages** — A message encrypted before rotation may arrive after rotation
+2. **Timing skew** — Parties don't ratchet at the exact same millisecond
+3. **Block propagation** — On-chain message may be mined slightly out of order
+
+**Example timeline:**
 ```
-Alice (lost state) → sends new handshake → Bob accepts → new session created
+t=0:00  Alice sends msg#5, triggers DH ratchet → new topic T2
+t=0:01  Alice sends msg#6 on T2 ✓
+t=0:03  Bob receives msg#5, triggers his DH ratchet → derives same T2
+t=0:04  Bob receives msg#6 on T2 ✓
+t=0:05  Bob sends reply on T2 ✓
 ```
 
-What happens:
-1. Alice's contact record gets overwritten with `status: "handshake_sent"`
-2. New ephemeral keys → new salt → new topics
-3. Bob sees pending handshake, accepts it
-4. New ratchet session created, old one orphaned (but harmless)
+No waiting. The window just ensures we don't drop the rare out-of-order message.
 
+---
 
-#### 4.2 What's Actually Missing (Nice-to-Have UX)
+# Part 1: SDK Changes (`packages/sdk/`)
 
-| Enhancement | Description | Priority |
-|-------------|-------------|----------|
-| Startup health check | Detect "contacts exist but sessions missing" | Low |
-| Receiver hint | Bob sees "Alice (existing contact) requests new session" vs confusing duplicate | Medium |
-| Orphan cleanup | Periodically delete ratchet sessions with no matching contact | Low |
-| Chat boundary | Visual indicator "Session reset on [date]" | Low |
+## 1.1 Add `deriveTopicFromDH()` in `kdf.ts`
 
-#### 4.3 Current Behavior (Acceptable but improvable)
+```typescript
+// packages/sdk/src/ratchet/kdf.ts
 
-| Scenario | What Happens | User Experience |
-|----------|--------------|-----------------|
-| Alice clears IndexedDB | Loses everything, must re-handshake all contacts | "Start fresh" - acceptable |
-| Alice on new device | No data, must re-handshake | Same as new user - acceptable |
-| Bob receives 2nd handshake from Alice | Sees new pending request | Slightly confusing but works |
-| Old ratchet session | Orphaned in DB | No functional impact |
+import { keccak256 } from 'ethers';
 
+/**
+ * Derive topic from DH shared secret.
+ * Called after each DH ratchet step.
+ */
+export function deriveTopicFromDH(
+  dhSharedSecret: Uint8Array,
+  direction: 'outbound' | 'inbound',
+  salt: Uint8Array  // conversationId bytes
+): `0x${string}` {
+  const info = `verbeth:topic-${direction}:v2`;
+  const okm = hkdf(sha256, dhSharedSecret, salt, info, 32);
+  return keccak256(okm) as `0x${string}`;
+}
+```
+
+---
+
+## 1.2 Extend `RatchetSession` in `types.ts`
+
+```typescript
+// packages/sdk/src/ratchet/types.ts
+
+export const TOPIC_TRANSITION_WINDOW_MS = 5 * 60 * 1000;
+
+export interface RatchetSession {
+  // ... existing fields ...
+
+  // === Topic Ratcheting ===
+  /** Current outbound topic (ratcheted) */
+  currentTopicOutbound: `0x${string}`;
+  /** Current inbound topic (ratcheted) */
+  currentTopicInbound: `0x${string}`;
+  
+  /** Previous inbound topic (grace period) */
+  previousTopicInbound?: `0x${string}`;
+  /** When to stop accepting on previous topic */
+  previousTopicExpiry?: number;
+  
+  /** Topic epoch (increments with DH steps) */
+  topicEpoch: number;
+}
+```
+
+---
+
+## 1.3 Update `initSessionAsResponder()` in `session.ts`
+
+```typescript
+// packages/sdk/src/ratchet/session.ts
+
+export function initSessionAsResponder(params: InitResponderParams): RatchetSession {
+  // ... existing DH and chain key derivation ...
+
+  return {
+    // ... existing fields ...
+    
+    // Epoch 0: use handshake-derived topics
+    currentTopicOutbound: topicOutbound,
+    currentTopicInbound: topicInbound,
+    previousTopicInbound: undefined,
+    previousTopicExpiry: undefined,
+    topicEpoch: 0,
+  };
+}
+```
+
+---
+
+## 1.4 Update `initSessionAsInitiator()` in `session.ts`
+
+```typescript
+// packages/sdk/src/ratchet/session.ts
+
+export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSession {
+  // ... existing DH ratchet step (generates myDHKeyPair, computes dhSend) ...
+  
+  // Derive first ratcheted topics from dhSend
+  const saltBytes = getBytes(computeConversationId(topicOutbound, topicInbound));
+  const ratchetedTopicOut = deriveTopicFromDH(dhSend, 'outbound', saltBytes);
+  const ratchetedTopicIn = deriveTopicFromDH(dhSend, 'inbound', saltBytes);
+
+  return {
+    // ... existing fields ...
+    
+    // Epoch 1: initiator already did first DH step
+    currentTopicOutbound: ratchetedTopicOut,
+    currentTopicInbound: ratchetedTopicIn,
+    previousTopicInbound: topicInbound,
+    previousTopicExpiry: Date.now() + TOPIC_TRANSITION_WINDOW_MS,
+    topicEpoch: 1,
+  };
+}
+```
+
+---
+
+## 1.5 Update `dhRatchetStep()` in `decrypt.ts`
+
+```typescript
+// packages/sdk/src/ratchet/decrypt.ts
+
+function dhRatchetStep(session: RatchetSession, theirNewDHPub: Uint8Array): RatchetSession {
+  // ... existing: compute dhReceive, rootKey1, receivingChainKey ...
+  // ... existing: generate newDHKeyPair ...
+  // ... existing: compute dhSend, rootKey2, sendingChainKey ...
+  
+  // NEW: Derive ratcheted topics from dhSend
+  const saltBytes = getBytes(session.conversationId);
+  const newTopicOut = deriveTopicFromDH(dhSend, 'outbound', saltBytes);
+  const newTopicIn = deriveTopicFromDH(dhSend, 'inbound', saltBytes);
+
+  return {
+    ...session,
+    rootKey: rootKey2,
+    dhMySecretKey: newDHKeyPair.secretKey,
+    dhMyPublicKey: newDHKeyPair.publicKey,
+    dhTheirPublicKey: theirNewDHPub,
+    receivingChainKey,
+    receivingMsgNumber: 0,
+    sendingChainKey,
+    sendingMsgNumber: 0,
+    previousChainLength: session.sendingMsgNumber,
+    
+    // Topic ratcheting
+    currentTopicOutbound: newTopicOut,
+    currentTopicInbound: newTopicIn,
+    previousTopicInbound: session.currentTopicInbound,
+    previousTopicExpiry: Date.now() + TOPIC_TRANSITION_WINDOW_MS,
+    topicEpoch: session.topicEpoch + 1,
+  };
+}
+```
+
+---
+
+## 1.6 Add `matchesSessionTopic()` helper in `decrypt.ts`
+
+```typescript
+// packages/sdk/src/ratchet/decrypt.ts
+
+/**
+ * Check if topic matches this session.
+ * Returns match type or null.
+ */
+export function matchesSessionTopic(
+  session: RatchetSession, 
+  topic: `0x${string}`
+): 'current' | 'previous' | null {
+  const t = topic.toLowerCase();
+  
+  if (session.currentTopicInbound.toLowerCase() === t) {
+    return 'current';
+  }
+  
+  if (
+    session.previousTopicInbound?.toLowerCase() === t &&
+    session.previousTopicExpiry &&
+    Date.now() < session.previousTopicExpiry
+  ) {
+    return 'previous';
+  }
+  
+  return null;
+}
+```
+
+---
+
+## 1.7 Update `ratchetEncrypt()` in `encrypt.ts`
+
+```typescript
+// packages/sdk/src/ratchet/encrypt.ts
+
+export interface EncryptResult {
+  session: RatchetSession;
+  header: MessageHeader;
+  ciphertext: Uint8Array;
+  signature: Uint8Array;
+  topic: `0x${string}`;  // NEW
+}
+
+export function ratchetEncrypt(
+  session: RatchetSession,
+  plaintext: Uint8Array,
+  signingSecretKey: Uint8Array
+): EncryptResult {
+  // ... existing encryption ...
+
+  return {
+    session: newSession,
+    header,
+    ciphertext: encryptedPayload,
+    signature,
+    topic: session.currentTopicOutbound,  // NEW: return current topic
+  };
+}
+```
+
+---
+
+## 1.8 Export new functions in `index.ts`
+
+```typescript
+// packages/sdk/src/ratchet/index.ts
+
+export { 
+  // ... existing exports ...
+  deriveTopicFromDH,
+  matchesSessionTopic,
+  TOPIC_TRANSITION_WINDOW_MS,
+} from './kdf.js';
+```
+
+---
+
+# Part 2: App Layer Changes
+
+## 2.1 Update `StoredRatchetSession` in `types.ts`
+
+```typescript
+// src/types.ts
+
+export interface StoredRatchetSession {
+  // ... existing fields ...
+  
+  currentTopicOutbound: string;
+  currentTopicInbound: string;
+  previousTopicInbound?: string;
+  previousTopicExpiry?: number;
+  topicEpoch: number;
+}
+```
+
+---
+
+## 2.2 Update serialization in `types.ts`
+
+```typescript
+// src/types.ts
+
+export function serializeRatchetSession(session: RatchetSession): StoredRatchetSession {
+  return {
+    // ... existing ...
+    currentTopicOutbound: session.currentTopicOutbound,
+    currentTopicInbound: session.currentTopicInbound,
+    previousTopicInbound: session.previousTopicInbound,
+    previousTopicExpiry: session.previousTopicExpiry,
+    topicEpoch: session.topicEpoch,
+  };
+}
+
+export function deserializeRatchetSession(stored: StoredRatchetSession): RatchetSession {
+  return {
+    // ... existing ...
+    currentTopicOutbound: stored.currentTopicOutbound as `0x${string}`,
+    currentTopicInbound: stored.currentTopicInbound as `0x${string}`,
+    previousTopicInbound: stored.previousTopicInbound as `0x${string}` | undefined,
+    previousTopicExpiry: stored.previousTopicExpiry,
+    topicEpoch: stored.topicEpoch,
+  };
+}
+```
+
+---
+
+## 2.3 Update `schema.ts` — Add indexes
+
+```typescript
+// src/services/schema.ts
+
+this.version(2).stores({
+  // ... existing ...
+  ratchetSessions: 
+    "conversationId, topicInbound, topicOutbound, currentTopicInbound, previousTopicInbound, myAddress, contactAddress",
+});
+```
+
+---
+
+## 2.4 Update `RatchetDbService.ts` — Multi-topic lookup
+
+```typescript
+// src/services/RatchetDbService.ts
+
+/**
+ * Find session by any active inbound topic (current or previous).
+ */
+async getRatchetSessionByAnyInboundTopic(topic: string): Promise {
+  const topicLower = topic.toLowerCase();
+  
+  // Try current topic first
+  let stored = await this.db.ratchetSessions
+    .where("currentTopicInbound")
+    .equals(topicLower)
+    .first();
+    
+  if (stored) {
+    return deserializeRatchetSession(stored);
+  }
+  
+  // Try previous topic (check expiry in caller)
+  stored = await this.db.ratchetSessions
+    .where("previousTopicInbound")
+    .equals(topicLower)
+    .first();
+    
+  if (stored && stored.previousTopicExpiry && Date.now() < stored.previousTopicExpiry) {
+    return deserializeRatchetSession(stored);
+  }
+  
+  return null;
+}
+
+/**
+ * Get all active inbound topics for a user (for event filtering).
+ */
+async getAllActiveInboundTopics(myAddress: string): Promise {
+  const sessions = await this.db.ratchetSessions
+    .where("myAddress")
+    .equals(myAddress.toLowerCase())
+    .toArray();
+    
+  const topics: string[] = [];
+  const now = Date.now();
+  
+  for (const s of sessions) {
+    topics.push(s.currentTopicInbound);
+    if (s.previousTopicInbound && s.previousTopicExpiry && now < s.previousTopicExpiry) {
+      topics.push(s.previousTopicInbound);
+    }
+  }
+  
+  return [...new Set(topics)]; // dedupe
+}
+```
+
+---
+
+## 2.5 Update `EventProcessorService.ts` — Use multi-topic lookup
+
+```typescript
+// src/services/EventProcessorService.ts
+
+export async function processMessageEvent(
+  event: ProcessedEvent,
+  address: string,
+  emitterAddress: string | undefined,
+  sessionCache: Map,
+  onLog: (msg: string) => void
+): Promise {
+  // ... existing setup ...
+  
+  const topic = log.topics[2];
+  
+  // UPDATED: Check cache by topic, then fall back to multi-topic DB lookup
+  let session = sessionCache.get(topic);
+  
+  if (!session) {
+    session = await dbService.getRatchetSessionByAnyInboundTopic(topic) || undefined;
+    
+    if (session) {
+      sessionCache.set(topic, session);
+    }
+  }
+  
+  if (!session) {
+    onLog(`❓ Unknown topic: ${topic.slice(0, 10)}...`);
+    return null;
+  }
+  
+  // ... rest unchanged (signature verify, decrypt, etc.) ...
+}
+```
+
+---
+
+## 2.6 Update `useMessageListener.ts` — Query all active topics
+
+```typescript
+// src/hooks/useMessageListener.ts
+
+const scanBlockRange = async (fromBlock: number, toBlock: number): Promise => {
+  // ... existing handshake scanning ...
+  
+  // UPDATED: Get ALL active inbound topics for this user
+  const activeTopics = await dbService.getAllActiveInboundTopics(address);
+  
+  if (activeTopics.length > 0) {
+    // Query each topic (or batch if RPC supports OR filters)
+    for (const topic of activeTopics) {
+      const messageFilter = {
+        address: LOGCHAIN_SINGLETON_ADDR,
+        topics: [EVENT_SIGNATURES.MessageSent, null, topic],
+      };
+      const inboundLogs = await safeGetLogs(messageFilter, fromBlock, toBlock);
+      
+      for (const log of inboundLogs) {
+        const logKey = `${log.transactionHash}-${log.logIndex}`;
+        if (!processedLogs.current.has(logKey)) {
+          processedLogs.current.add(logKey);
+          allEvents.push({
+            logKey,
+            eventType: "message",
+            rawLog: log,
+            blockNumber: log.blockNumber,
+            timestamp: Date.now(),
+          });
+        }
+      }
+    }
+  }
+  
+  // .. existing outbound confirmation scanning (unchanged) ...
+};
+```
+
+---
+
+## 2.7 Update `useMessageQueue.ts` (or equivalent) — Use `EncryptResult.topic`
+
+```typescript
+// In your message queue / sending logic
+
+const sendMessage = async (session: RatchetSession, plaintext: string) => {
+  const encryptResult = ratchetEncrypt(
+    session,
+    new TextEncoder().encode(plaintext),
+    identityKeyPair.signingSecretKey
+  );
+  
+  const payload = packageRatchetPayload(
+    encryptResult.signature,
+    encryptResult.header,
+    encryptResult.ciphertext
+  );
+  
+  // UPDATED: Use topic from encrypt result, not session.topicOutbound
+  await executor.sendMessage(
+    payload,
+    encryptResult.topic,  // ← ratcheted topic
+    Date.now(),
+    nonce
+  );
+  
+  // Persist updated session
+  await dbService.saveRatchetSession(encryptResult.session);
+};
+```
+
+---
+
+## 2.8 Update `useChatActions.ts` — No direct changes needed
+
+The hook delegates to `useMessageQueue` which handles encryption. Ensure `useMessageQueue` passes through the `EncryptResult.topic` as shown above.
+
+---
+
+## 2.9 Update `useMessageProcessor.ts` — No direct changes needed
+
+The hook calls `processMessageEvent` from `EventProcessorService`, which now handles multi-topic lookup internally.
+
+---
+
+# Implementation Order
+
+| # | Layer | File(s) | Change |
+|---|-------|---------|--------|
+| 1 | SDK | `kdf.ts` | Add `deriveTopicFromDH()` |
+| 2 | SDK | `types.ts` | Extend `RatchetSession`, add constant |
+| 3 | SDK | `session.ts` | Update both `initSession*` functions |
+| 4 | SDK | `decrypt.ts` | Update `dhRatchetStep()`, add `matchesSessionTopic()` |
+| 5 | SDK | `encrypt.ts` | Return `topic` in `EncryptResult` |
+| 6 | SDK | `index.ts` | Export new functions |
+| 7 | App | `types.ts` | Update `StoredRatchetSession`, serialization |
+| 8 | App | `schema.ts` | Add `currentTopicInbound`, `previousTopicInbound` indexes |
+| 9 | App | `RatchetDbService.ts` | Add `getRatchetSessionByAnyInboundTopic()`, `getAllActiveInboundTopics()` |
+| 10 | App | `EventProcessorService.ts` | Use multi-topic lookup |
+| 11 | App | `useMessageListener.ts` | Query all active topics |
+| 12 | App | `useMessageQueue.ts` | Use `EncryptResult.topic` for sending |
+
+---
+
+# Testing Checklist
+
+- [ ] New session (epoch 0): messages use handshake topics
+- [ ] Initiator's first message: uses ratcheted topic (epoch 1)
+- [ ] Responder receives on ratcheted topic after their DH step
+- [ ] Both parties derive identical topics from same DH output
+- [ ] Message on previous topic (within window) decrypts successfully
+- [ ] Message on expired previous topic is rejected
+- [ ] On-chain: observe topic changes after each conversational turn
+
+---
+
+# Security Notes
+
+1. **Deterministic** — Both parties derive identical topics from `dhSend`
+2. **No extra metadata** — Epoch not transmitted; derived from DH state
+3. **Unlinkable** — After first DH step, new topic has no on-chain link to handshake
+4. **Grace period** — Prevents message loss without adding latency
 ---
 
 ## 4. Future Improvements

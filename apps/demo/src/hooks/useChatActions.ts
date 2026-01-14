@@ -179,14 +179,15 @@ export const useChatActions = ({
 
         await dbService.saveRatchetSession(ratchetSession);
 
+        // Use ratcheted topics from session for contact storage
         const newContact: Contact = {
           address: handshake.sender,
           ownerAddress: verbethClient.userAddress,
           status: "established",
           identityPubKey: handshake.identityPubKey,
           signingPubKey: handshake.signingPubKey,
-          topicOutbound,
-          topicInbound,
+          topicOutbound: ratchetSession.currentTopicOutbound,
+          topicInbound: ratchetSession.currentTopicInbound,
           conversationId: ratchetSession.conversationId,
           lastMessage: responseMessage,
           lastTimestamp: Date.now(),
@@ -204,7 +205,7 @@ export const useChatActions = ({
 
         const acceptanceMessage = {
           id: generateTempMessageId(),
-          topic: topicOutbound,
+          topic: ratchetSession.currentTopicOutbound,
           sender: verbethClient.userAddress,
           recipient: handshake.sender,
           ciphertext: "",

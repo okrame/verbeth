@@ -11,7 +11,7 @@ export class RatchetDbService {
 
   async saveRatchetSession(session: RatchetSession): Promise<void> {
     const stored = serializeRatchetSession(session);
-    console.log(`💾 Saving ratchet session: ${stored.conversationId.slice(0, 10)}... (sendingMsgNumber=${stored.sendingMsgNumber})`);
+    console.log(`💾 Saving ratchet session: ${stored.conversationId.slice(0, 10)}... (sendingMsgNumber=${stored.sendingMsgNumber}, topicEpoch=${stored.topicEpoch})`);
     await this.db.ratchetSessions.put(stored);
   }
 
@@ -29,22 +29,76 @@ export class RatchetDbService {
     return pruned;
   }
 
-  async getRatchetSessionByTopic(topicInbound: string): Promise<RatchetSession | null> {
-    const stored = await this.db.ratchetSessions
-      .where("topicInbound")
-      .equals(topicInbound.toLowerCase())
+  /**
+   * Find session by any active inbound topic (current or previous).
+   * Handles topic ratcheting grace period.
+   */
+  async getRatchetSessionByAnyInboundTopic(topic: string): Promise<RatchetSession | null> {
+    const topicLower = topic.toLowerCase();
+    
+    // Try current topic first
+    let stored = await this.db.ratchetSessions
+      .where("currentTopicInbound")
+      .equals(topicLower)
       .first();
-    if (!stored) return null;
-    
-    const session = deserializeRatchetSession(stored);
-    const pruned = pruneExpiredSkippedKeys(session);
-    
-    if (pruned.skippedKeys.length !== session.skippedKeys.length) {
-      await this.saveRatchetSession(pruned);
+      
+    if (stored) {
+      const session = deserializeRatchetSession(stored);
+      const pruned = pruneExpiredSkippedKeys(session);
+      if (pruned.skippedKeys.length !== session.skippedKeys.length) {
+        await this.saveRatchetSession(pruned);
+      }
+      return pruned;
     }
     
-    return pruned;
+    // Try previous topic (check expiry)
+    stored = await this.db.ratchetSessions
+      .where("previousTopicInbound")
+      .equals(topicLower)
+      .first();
+      
+    if (stored && stored.previousTopicExpiry && Date.now() < stored.previousTopicExpiry) {
+      const session = deserializeRatchetSession(stored);
+      const pruned = pruneExpiredSkippedKeys(session);
+      if (pruned.skippedKeys.length !== session.skippedKeys.length) {
+        await this.saveRatchetSession(pruned);
+      }
+      return pruned;
+    }
+    
+    return null;
   }
+
+  /**
+   * Get all active inbound topics for a user (for event filtering).
+   * Returns both current and non-expired previous topics.
+   */
+  async getAllActiveInboundTopics(myAddress: string): Promise<string[]> {
+  const sessions = await this.db.ratchetSessions
+    .where("myAddress")
+    .equals(myAddress.toLowerCase())
+    .toArray();
+    
+  const topics: string[] = [];
+  const now = Date.now();
+  
+  for (const s of sessions) {
+    // Current topic
+    if (s.currentTopicInbound) {
+      topics.push(s.currentTopicInbound);
+    }
+    // Next topic (pre-computed)
+    if (s.nextTopicInbound) {
+      topics.push(s.nextTopicInbound);
+    }
+    // Previous topic (grace period)
+    if (s.previousTopicInbound && s.previousTopicExpiry && now < s.previousTopicExpiry) {
+      topics.push(s.previousTopicInbound);
+    }
+  }
+  
+  return [...new Set(topics)];
+}
 
   async deleteRatchetSession(conversationId: string): Promise<void> {
     await this.db.ratchetSessions.delete(conversationId);
