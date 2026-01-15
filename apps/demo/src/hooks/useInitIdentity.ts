@@ -67,7 +67,7 @@ export function useInitIdentity({
   const [isModuleEnabled, setIsModuleEnabled] = useState(false);
   const [signingStep, setSigningStep] = useState<1 | 2 | null>(null);
 
-  // NEW: Execution mode state
+  // Execution mode state
   const [executionMode, setExecutionMode] = useState<ExecutionMode | null>(null);
   const [needsModeSelection, setNeedsModeSelection] = useState(false);
   const [emitterAddress, setEmitterAddress] = useState<string | null>(null);
@@ -75,7 +75,7 @@ export function useInitIdentity({
   const rpId = globalThis.location?.host ?? '';
   const identityContext = useMemo(() => ({ chainId, rpId }), [chainId, rpId]);
 
-  // NEW: Check if fast mode is available on this chain
+  // Check if fast mode is available on this chain
   const fastModeAvailable = useMemo(() => isHelperAvailable(chainId), [chainId]);
 
   const resetState = useCallback(() => {
@@ -110,7 +110,7 @@ export function useInitIdentity({
     if (storedIdentity && storedIdentity.sessionPrivateKey) {
       setIdentityKeyPair(storedIdentity.keyPair);
       setIdentityProof(storedIdentity.proof ?? null);
-      // NEW: Restore mode from storage
+      // Restore mode from storage
       setExecutionMode(storedIdentity.executionMode ?? 'fast'); // default to fast for legacy
       setEmitterAddress(storedIdentity.emitterAddress ?? null);
       setNeedsIdentityCreation(false);
@@ -120,7 +120,7 @@ export function useInitIdentity({
       setNeedsModeSelection(true);
       addLog(`Identity upgrade required`);
     } else {
-      // NEW: Need mode selection before identity creation
+      // Need mode selection before identity creation
       setNeedsModeSelection(true);
     }
   }, [addLog]);
@@ -188,7 +188,7 @@ export function useInitIdentity({
         sessionSigner: sessionAddr,
         target: LOGCHAIN_SINGLETON_ADDR,
       },
-      // NEW: Never use API for fast mode
+      // Never use API for fast mode
       useApiLookup: false,
     });
 
@@ -318,7 +318,7 @@ export function useInitIdentity({
         proof: proof,
         sessionPrivateKey: derivedKeys.sessionPrivateKey,
         sessionAddress: derivedKeys.sessionAddress,
-        // NEW: Store mode and emitter
+        // Store mode and emitter
         executionMode: selectedMode,
         emitterAddress: emitter,
       };
@@ -386,7 +386,7 @@ export function useInitIdentity({
     identityContext,
     signingStep,
 
-    // NEW: Mode state
+    // Mode state
     executionMode,
     needsModeSelection,
     emitterAddress,

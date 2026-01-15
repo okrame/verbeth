@@ -74,7 +74,7 @@ export default function App() {
     safeAddr,
     needsIdentityCreation,
     identityContext,
-    // Session state (owned by useInitIdentity)
+    // Session state
     sessionSignerAddr,
     needsSessionSetup,
     isSafeDeployed,
@@ -165,16 +165,16 @@ export default function App() {
     sendHandshake,
     acceptHandshake,
     sendMessageToContact,
-    retryFailedMessage,      // NEW: Retry action
-    cancelQueuedMessage,     // NEW: Cancel action
-    getContactQueueStatus,   // NEW: Queue status
+    retryFailedMessage,      
+    cancelQueuedMessage,     
+    getContactQueueStatus, 
   } = useChatActions({
     verbethClient,
     addLog,
     updateContact: async (contact: Contact) => { await updateContact(contact); },
     addMessage: async (message: any) => { await addMessage(message); },
-    updateMessageStatus,  // NEW: Pass to useChatActions
-    removeMessage,        // NEW: Pass to useChatActions
+    updateMessageStatus, 
+    removeMessage,       
     removePendingHandshake: async (id: string) => { await removePendingHandshake(id); },
     setSelectedContact,
     setLoading,
@@ -238,7 +238,6 @@ export default function App() {
     setShowHandshakeForm(!ready || !currentlyConnected || contacts.length === 0 || needsIdentityCreation);
   }, [ready, isConnected, contacts.length, needsIdentityCreation]);
 
-  // Helper to render message with status and retry/cancel actions
   const renderMessage = (msg: Message) => {
     const isOutgoing = msg.direction === 'outgoing';
     const isFailed = msg.status === 'failed';
@@ -365,7 +364,7 @@ export default function App() {
               World Post
             </h1>
             <div className="text-xs text-gray-400 pl-0.5 mt-1">
-              powered by the World Computer
+              powered by Verbeth
             </div>
           </div>
           {/* RIGHT: auth buttons - EOA only */}

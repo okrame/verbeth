@@ -29,7 +29,6 @@ import {
 } from "@verbeth/sdk";
 
 import { dbService } from "./DbService.js";
-import { RatchetDbService } from "./RatchetDbService.js";
 import {
   Contact,
   Message,
@@ -72,11 +71,8 @@ export interface HandshakeResponseResult {
 }
 
 export interface MessageResult {
-  /** New message to add */
   newMessage?: Message;
-  /** Message update: [originalId, partialUpdates] - will be merged with existing message */
   messageUpdate?: [string, Partial<Message>];
-  /** Contact to update */
   contactUpdate?: Contact;
 }
 
@@ -208,7 +204,6 @@ export async function processHandshakeEvent(
       verified: isVerified,
     };
 
-    // Persist to DB
     await dbService.savePendingHandshake(pendingHandshake);
     await dbService.saveMessage(systemMessage);
 
@@ -355,7 +350,6 @@ export async function processHandshakeResponseEvent(
       topicInbound,
     });
 
-    // Use ratcheted topics from session for contact storage
     const updatedContact: Contact = {
       ...contact,
       status: "established" as ContactStatus,
@@ -389,7 +383,6 @@ export async function processHandshakeResponseEvent(
       verified: true,
     };
 
-    // Persist to DB
     await dbService.saveRatchetSession(ratchetSession);
     await dbService.saveContact(updatedContact);
     await dbService.saveMessage(systemMessage);
@@ -472,7 +465,7 @@ export async function processMessageEvent(
       );
 
       if (pending && pending.status === "submitted") {
-        // Finalize: clean up the pending record (session already committed during encryption)
+        // clean up the pending record (session already committed during encryption)
         const finalized = await dbService.finalizePendingOutbound(pending.id);
 
         if (!finalized) {
@@ -516,7 +509,6 @@ export async function processMessageEvent(
         };
       }
 
-      // No matching pending record - this shouldn't happen in normal flow
       onLog(
         `⚠️ Outgoing message on-chain but no pending record found (tx: ${log.transactionHash.slice(
           0,
@@ -530,7 +522,7 @@ export async function processMessageEvent(
     // INCOMING MESSAGE - Use multi-topic lookup for ratchet session
     // =========================================================================
 
-    // Multi-topic lookup: handles both current and previous (grace period) topics
+    // multi-topic lookup: handles both current and previous (grace period) topics
     const session = await dbService.getRatchetSessionByAnyInboundTopic(topic);
 
     if (!session) {
@@ -547,9 +539,6 @@ export async function processMessageEvent(
     let cachedSession = sessionCache.get(session.conversationId);
     let workingSession = cachedSession || session;
 
-    // =========================================================================
-    // Promuovi next → current se riceviamo su nextTopicInbound
-    // =========================================================================
     const topicLower = (topic as string).toLowerCase();
     if (
       workingSession.nextTopicInbound &&
@@ -563,13 +552,13 @@ export async function processMessageEvent(
 
       workingSession = {
         ...workingSession,
-        // Salva current come previous (grace period)
+
         previousTopicInbound: workingSession.currentTopicInbound,
         previousTopicExpiry: Date.now() + 5 * 60 * 1000, // 5 min grace
-        // Promuovi next → current
+  
         currentTopicInbound: workingSession.nextTopicInbound,
         currentTopicOutbound: workingSession.nextTopicOutbound!,
-        // Cancella next (verrà ricalcolato da dhRatchetStep)
+        
         nextTopicInbound: undefined,
         nextTopicOutbound: undefined,
         topicEpoch: workingSession.topicEpoch + 1,

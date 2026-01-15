@@ -19,7 +19,7 @@ export class VerbEthDatabase extends Dexie {
   settings!: Table<AppSettings, string>;
   dedup!: Table<{ key: string; messageId: string; txHash: string; blockNumber: number }, string>;
   
-  // Ratchet tables
+  // ratchet tables
   ratchetSessions!: Table<StoredRatchetSession, string>;
   pendingOutbound!: Table<PendingOutbound, string>;
 
@@ -35,28 +35,7 @@ export class VerbEthDatabase extends Dexie {
       dedup: "key, messageId, txHash, blockNumber",
       pendingHandshakes: "id, ownerAddress, sender, timestamp, verified, emitterAddress",
       settings: "name",
-      
-      // Ratchet session storage
-      ratchetSessions: "conversationId, topicInbound, topicOutbound, status, myAddress, contactAddress",
-      
-      // Pending outbound for two-phase commit
-      pendingOutbound: "id, conversationId, txHash, status, createdAt",
-    });
-
-    this.version(1).stores({
-      identity: "address",
-      contacts:
-        "[address+ownerAddress], ownerAddress, lastTimestamp, status, topicOutbound, topicInbound, emitterAddress, conversationId",
-      messages:
-        "id, ownerAddress, sender, recipient, topic, nonce, timestamp, blockTimestamp, read, status, [ownerAddress+sender+status], [ownerAddress+sender+topic+nonce+status]",
-      dedup: "key, messageId, txHash, blockNumber",
-      pendingHandshakes: "id, ownerAddress, sender, timestamp, verified, emitterAddress",
-      settings: "name",
-      
-      // Ratchet session storage - added currentTopicInbound and previousTopicInbound indexes
-      ratchetSessions: "conversationId, topicInbound, topicOutbound, currentTopicInbound, previousTopicInbound, myAddress, contactAddress",
-      
-      // Pending outbound for two-phase commit
+      ratchetSessions: "conversationId, topicInbound, topicOutbound, currentTopicInbound, nextTopicInbound, previousTopicInbound, myAddress, contactAddress",
       pendingOutbound: "id, conversationId, txHash, status, createdAt",
     });
   }

@@ -98,7 +98,7 @@ export async function getOrCreateSafeForOwner(params: {
   sessionConfig: SessionConfig
   contractNetworks?: any
   /**
-   * NEW: Only set to true for "custom" mode (import existing Safe)
+   * Only set to true for "custom" mode (import existing Safe)
    * Default: false (deterministic VerbEth Safe only)
    */
   useApiLookup?: boolean

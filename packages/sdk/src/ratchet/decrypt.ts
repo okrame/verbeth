@@ -108,12 +108,14 @@ export function ratchetDecrypt(
 }
 
 /**
- * Perform a DH ratchet step when receiving a message with a new DH public key.
- * 
- * This advances both the receiving and sending chains and derives new ratcheted topics
+ * DH ratchet on receipt of a message that carries a new remote DH public key.
+ *
+ * Topic derivation is sender centric: `deriveTopicFromDH(x, 'outbound')` denotes the topic used
+ * by the party who *sent* the DH pubkey for their sending direction. Therefore, when we ratchet
+ * on receive, we swap labels for the topics derived from `dhReceive`.
  */
 function dhRatchetStep(session: RatchetSession, theirNewDHPub: Uint8Array): RatchetSession {
-  // Receiving DH is shared secret from my secret and their new public
+  // advance receiving chain (based on our current DH secret and their new DH pubkey)
   const dhReceive = dh(session.dhMySecretKey, theirNewDHPub);
   const { rootKey: rootKey1, chainKey: receivingChainKey } = kdfRootKey(
     session.rootKey,
@@ -125,13 +127,13 @@ function dhRatchetStep(session: RatchetSession, theirNewDHPub: Uint8Array): Ratc
   const dhSend = dh(newDHKeyPair.secretKey, theirNewDHPub);
   const { rootKey: rootKey2, chainKey: sendingChainKey } = kdfRootKey(rootKey1, dhSend);
 
-  // derive new topics from dhReceive
   const saltBytes = getBytes(session.conversationId);
-  const newTopicOut = deriveTopicFromDH(dhReceive, 'outbound', saltBytes);
-  const newTopicIn = deriveTopicFromDH(dhReceive, 'inbound', saltBytes);
+  
+  // Current topics (post ratchet) are swapped since we're the receiver of dhReceive
+  const newTopicOut = deriveTopicFromDH(dhReceive, 'inbound', saltBytes);  
+  const newTopicIn = deriveTopicFromDH(dhReceive, 'outbound', saltBytes); 
 
-
-  // Deriva i PROSSIMI topics da dhSend (che l'altra parte riceverà come dhReceive)
+  // Next topics (for our next DH pubkey): normal labels because we will be the sender.
   const nextTopicOut = deriveTopicFromDH(dhSend, 'outbound', saltBytes);
   const nextTopicIn = deriveTopicFromDH(dhSend, 'inbound', saltBytes);
 

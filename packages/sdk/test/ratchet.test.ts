@@ -116,7 +116,7 @@ describe('initSessionAsInitiator - topic ratcheting', () => {
     initiatorEphemeral = nacl.box.keyPair();
   });
 
-  it('initializes at epoch 1 with ratcheted topics', () => {
+  it('initializes at epoch 0 with handshake topics as current, pre-computes next topics', () => {
     const session = initSessionAsInitiator({
       myAddress: '0xInitiator',
       contactAddress: '0xResponder',
@@ -126,29 +126,16 @@ describe('initSessionAsInitiator - topic ratcheting', () => {
       topicInbound,
     });
 
-    expect(session.topicEpoch).toBe(1);
-    // Current topics should be ratcheted (different from handshake)
-    expect(session.currentTopicOutbound).not.toBe(topicOutbound);
-    expect(session.currentTopicInbound).not.toBe(topicInbound);
-    expect(session.currentTopicOutbound).toMatch(/^0x[a-f0-9]{64}$/);
-    expect(session.currentTopicInbound).toMatch(/^0x[a-f0-9]{64}$/);
-  });
-
-  it('sets previous topic with transition window', () => {
-    const now = Date.now();
-    const session = initSessionAsInitiator({
-      myAddress: '0xInitiator',
-      contactAddress: '0xResponder',
-      myHandshakeEphemeralSecret: initiatorEphemeral.secretKey,
-      theirResponderEphemeralPubKey: responderEphemeral.publicKey,
-      topicOutbound,
-      topicInbound,
-    });
-
-    expect(session.previousTopicInbound).toBe(topicInbound);
-    expect(session.previousTopicExpiry).toBeDefined();
-    expect(session.previousTopicExpiry!).toBeGreaterThanOrEqual(now + TOPIC_TRANSITION_WINDOW_MS - 100);
-    expect(session.previousTopicExpiry!).toBeLessThanOrEqual(now + TOPIC_TRANSITION_WINDOW_MS + 100);
+    // Initiator starts at epoch 0
+    expect(session.topicEpoch).toBe(0);
+    // Current topics are handshake-derived
+    expect(session.currentTopicOutbound).toBe(topicOutbound);
+    expect(session.currentTopicInbound).toBe(topicInbound);
+    // Next topics are pre-computed for when responder does DH ratchet
+    expect(session.nextTopicOutbound).toBeDefined();
+    expect(session.nextTopicInbound).toBeDefined();
+    expect(session.nextTopicOutbound).not.toBe(topicOutbound);
+    expect(session.nextTopicInbound).not.toBe(topicInbound);
   });
 
   it('preserves original handshake topics in topicOutbound/topicInbound', () => {
@@ -195,37 +182,9 @@ describe('matchesSessionTopic', () => {
     expect(result).toBe('current');
   });
 
-  it('returns "previous" for previous topic within grace period', () => {
-    expect(session.previousTopicInbound).toBeDefined();
-    const result = matchesSessionTopic(session, session.previousTopicInbound!);
-    expect(result).toBe('previous');
-  });
-
-  it('returns null for previous topic after expiry', () => {
-    // Manually expire the previous topic
-    const expiredSession = {
-      ...session,
-      previousTopicExpiry: Date.now() - 1000, // 1 second ago
-    };
-
-    const result = matchesSessionTopic(expiredSession, expiredSession.previousTopicInbound!);
-    expect(result).toBeNull();
-  });
-
   it('returns null for unknown topic', () => {
     const unknownTopic = '0x' + 'f'.repeat(64) as `0x${string}`;
     const result = matchesSessionTopic(session, unknownTopic);
-    expect(result).toBeNull();
-  });
-
-  it('returns null when no previous topic exists', () => {
-    const sessionNoPrevious = {
-      ...session,
-      previousTopicInbound: undefined,
-      previousTopicExpiry: undefined,
-    };
-
-    const result = matchesSessionTopic(sessionNoPrevious, session.topicInbound);
     expect(result).toBeNull();
   });
 });
@@ -255,14 +214,6 @@ describe('ratchetEncrypt - topic in result', () => {
 
     expect(result.topic).toBe(session.currentTopicOutbound);
     expect(result.topic).toMatch(/^0x[a-f0-9]{64}$/);
-  });
-
-  it('returns ratcheted topic (not handshake topic) for initiator', () => {
-    const plaintext = new TextEncoder().encode('Hello');
-    const result = ratchetEncrypt(session, plaintext, signingKeyPair.secretKey);
-
-    // Initiator starts at epoch 1, so topic should be ratcheted
-    expect(result.topic).not.toBe(session.topicOutbound);
   });
 
   it('returns handshake topic for responder at epoch 0', () => {
@@ -326,8 +277,8 @@ describe('DH ratchet step - topic rotation', () => {
     });
   });
 
-  it('Alice starts at epoch 1, Bob starts at epoch 0', () => {
-    expect(aliceSession.topicEpoch).toBe(1);
+  it('both parties start at epoch 0', () => {
+    expect(aliceSession.topicEpoch).toBe(0);
     expect(bobSession.topicEpoch).toBe(0);
   });
 
@@ -353,17 +304,17 @@ describe('DH ratchet step - topic rotation', () => {
     const encryptResult = ratchetEncrypt(aliceSession, plaintext, aliceSigningKeyPair.secretKey);
     aliceSession = encryptResult.session;
 
-    // Bob decrypts
+    // Bob decrypts (triggers his DH ratchet)
     const decryptResult = ratchetDecrypt(bobSession, encryptResult.header, encryptResult.ciphertext);
     bobSession = decryptResult!.session;
 
-    // Alice's outbound should match Bob's inbound
-    expect(aliceSession.currentTopicOutbound).toBe(bobSession.currentTopicInbound);
-    // Bob's outbound should match Alice's inbound
-    expect(bobSession.currentTopicOutbound).toBe(aliceSession.currentTopicInbound);
+    // Bob's new outbound should match Alice's pre-computed nextTopicInbound
+    expect(bobSession.currentTopicOutbound).toBe(aliceSession.nextTopicInbound);
+    // Bob's new inbound should match Alice's pre-computed nextTopicOutbound  
+    expect(bobSession.currentTopicInbound).toBe(aliceSession.nextTopicOutbound);
   });
 
-  it('previous topic is preserved during transition window', () => {
+  it('previous topic is preserved during transition window after DH ratchet', () => {
     // Alice encrypts a message
     const plaintext = new TextEncoder().encode('Hello Bob');
     const encryptResult = ratchetEncrypt(aliceSession, plaintext, aliceSigningKeyPair.secretKey);
@@ -373,7 +324,7 @@ describe('DH ratchet step - topic rotation', () => {
     const decryptResult = ratchetDecrypt(bobSession, encryptResult.header, encryptResult.ciphertext);
     bobSession = decryptResult!.session;
 
-    // Bob should have previous topic set
+    // Bob should have previous topic set (after DH ratchet, not at init)
     expect(bobSession.previousTopicInbound).toBeDefined();
     expect(bobSession.previousTopicExpiry).toBeDefined();
     expect(bobSession.previousTopicExpiry!).toBeGreaterThan(Date.now());
@@ -382,24 +333,24 @@ describe('DH ratchet step - topic rotation', () => {
   it('full conversation rotates topics correctly', () => {
     const epochs: { alice: number; bob: number }[] = [];
 
-    // Track initial state
+    // Track initial state - both at epoch 0
     epochs.push({ alice: aliceSession.topicEpoch, bob: bobSession.topicEpoch });
 
-    // Alice -> Bob (Alice already at epoch 1)
+    // Alice -> Bob (Alice at epoch 0, Bob will ratchet to 1)
     let encryptResult = ratchetEncrypt(aliceSession, new TextEncoder().encode('msg1'), aliceSigningKeyPair.secretKey);
     aliceSession = encryptResult.session;
     let decryptResult = ratchetDecrypt(bobSession, encryptResult.header, encryptResult.ciphertext);
     bobSession = decryptResult!.session;
     epochs.push({ alice: aliceSession.topicEpoch, bob: bobSession.topicEpoch });
 
-    // Bob -> Alice (Bob now at epoch 1)
+    // Bob -> Alice (Bob at epoch 1, Alice will ratchet to 1)
     encryptResult = ratchetEncrypt(bobSession, new TextEncoder().encode('msg2'), bobSigningKeyPair.secretKey);
     bobSession = encryptResult.session;
     decryptResult = ratchetDecrypt(aliceSession, encryptResult.header, encryptResult.ciphertext);
     aliceSession = decryptResult!.session;
     epochs.push({ alice: aliceSession.topicEpoch, bob: bobSession.topicEpoch });
 
-    // Alice -> Bob (Alice now at epoch 2)
+    // Alice -> Bob (Alice at epoch 1, Bob will ratchet to 2)
     encryptResult = ratchetEncrypt(aliceSession, new TextEncoder().encode('msg3'), aliceSigningKeyPair.secretKey);
     aliceSession = encryptResult.session;
     decryptResult = ratchetDecrypt(bobSession, encryptResult.header, encryptResult.ciphertext);
@@ -407,10 +358,10 @@ describe('DH ratchet step - topic rotation', () => {
     epochs.push({ alice: aliceSession.topicEpoch, bob: bobSession.topicEpoch });
 
     // Verify epochs increment with each turn change
-    expect(epochs[0]).toEqual({ alice: 1, bob: 0 });
-    expect(epochs[1]).toEqual({ alice: 1, bob: 1 });
-    expect(epochs[2]).toEqual({ alice: 2, bob: 1 });
-    expect(epochs[3]).toEqual({ alice: 2, bob: 2 });
+    expect(epochs[0]).toEqual({ alice: 0, bob: 0 });
+    expect(epochs[1]).toEqual({ alice: 0, bob: 1 });
+    expect(epochs[2]).toEqual({ alice: 1, bob: 1 });
+    expect(epochs[3]).toEqual({ alice: 1, bob: 2 });
   });
 });
 
@@ -440,6 +391,6 @@ describe('topic continuity', () => {
 
     // All messages should use the same topic (no DH ratchet without receiving)
     expect(new Set(topics).size).toBe(1);
-    expect(session.topicEpoch).toBe(1); // Still epoch 1
+    expect(session.topicEpoch).toBe(0); // Still epoch 0
   });
 });

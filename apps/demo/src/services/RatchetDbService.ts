@@ -30,19 +30,35 @@ export class RatchetDbService {
   }
 
   /**
-   * Find session by any active inbound topic (current or previous).
-   * Handles topic ratcheting grace period.
+   * Find session by any active inbound topic (current, next, or previous).
+   * Handles topic ratcheting grace period and pre-computed next topics.
    */
   async getRatchetSessionByAnyInboundTopic(topic: string): Promise<RatchetSession | null> {
     const topicLower = topic.toLowerCase();
     
-    // Try current topic first
+    // try current topic first
     let stored = await this.db.ratchetSessions
       .where("currentTopicInbound")
       .equals(topicLower)
       .first();
       
     if (stored) {
+      const session = deserializeRatchetSession(stored);
+      const pruned = pruneExpiredSkippedKeys(session);
+      if (pruned.skippedKeys.length !== session.skippedKeys.length) {
+        await this.saveRatchetSession(pruned);
+      }
+      return pruned;
+    }
+    
+    // try next topic (pre-computed for incoming DH ratchet)
+    stored = await this.db.ratchetSessions
+      .where("nextTopicInbound")
+      .equals(topicLower)
+      .first();
+      
+    if (stored) {
+      console.log(`🔄 Found session via nextTopicInbound for topic ${topicLower.slice(0, 10)}...`);
       const session = deserializeRatchetSession(stored);
       const pruned = pruneExpiredSkippedKeys(session);
       if (pruned.skippedKeys.length !== session.skippedKeys.length) {
@@ -71,34 +87,34 @@ export class RatchetDbService {
 
   /**
    * Get all active inbound topics for a user (for event filtering).
-   * Returns both current and non-expired previous topics.
+   * Returns current, next, and non-expired previous topics.
    */
   async getAllActiveInboundTopics(myAddress: string): Promise<string[]> {
-  const sessions = await this.db.ratchetSessions
-    .where("myAddress")
-    .equals(myAddress.toLowerCase())
-    .toArray();
+    const sessions = await this.db.ratchetSessions
+      .where("myAddress")
+      .equals(myAddress.toLowerCase())
+      .toArray();
+      
+    const topics: string[] = [];
+    const now = Date.now();
     
-  const topics: string[] = [];
-  const now = Date.now();
-  
-  for (const s of sessions) {
-    // Current topic
-    if (s.currentTopicInbound) {
-      topics.push(s.currentTopicInbound);
+    for (const s of sessions) {
+      // Current topic
+      if (s.currentTopicInbound) {
+        topics.push(s.currentTopicInbound);
+      }
+      // Next topic (pre-computed for incoming DH ratchet)
+      if (s.nextTopicInbound) {
+        topics.push(s.nextTopicInbound);
+      }
+      // Previous topic (grace period)
+      if (s.previousTopicInbound && s.previousTopicExpiry && now < s.previousTopicExpiry) {
+        topics.push(s.previousTopicInbound);
+      }
     }
-    // Next topic (pre-computed)
-    if (s.nextTopicInbound) {
-      topics.push(s.nextTopicInbound);
-    }
-    // Previous topic (grace period)
-    if (s.previousTopicInbound && s.previousTopicExpiry && now < s.previousTopicExpiry) {
-      topics.push(s.previousTopicInbound);
-    }
+    
+    return [...new Set(topics)];
   }
-  
-  return [...new Set(topics)];
-}
 
   async deleteRatchetSession(conversationId: string): Promise<void> {
     await this.db.ratchetSessions.delete(conversationId);

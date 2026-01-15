@@ -89,22 +89,11 @@ export interface PendingHandshake {
 export type ExecutionMode = 'classic' | 'fast' | 'custom';
 
 export interface StoredIdentity {
-  /** EOA address */
   address: string;
-  /** VerbEth identity key pair (X25519 + Ed25519) */
   keyPair: IdentityKeyPair;
-  /** Timestamp when identity was derived */
   derivedAt: number;
-  /** Binding proof (ties keys to Safe address) */
   proof?: IdentityProof;
-  /**
-   * Hex-encoded secp256k1 private key for session signer.
-   * Derived deterministically from the same seed signature as identity keys.
-   */
-  sessionPrivateKey?: string;
-  /**
-   * Ethereum address of the session signer.
-   */
+  sessionPrivateKey?: string; // Derived deterministically from the same seed signature as identity keys.
   sessionAddress?: string;
   executionMode?: ExecutionMode;
   emitterAddress?: string; // EOA for classic, Safe for fast/custom
@@ -269,6 +258,8 @@ export function serializeRatchetSession(session: SDKRatchetSession): StoredRatch
     // Topic Ratcheting
     currentTopicOutbound: session.currentTopicOutbound.toLowerCase(),
     currentTopicInbound: session.currentTopicInbound.toLowerCase(),
+    nextTopicOutbound: session.nextTopicOutbound?.toLowerCase(),
+    nextTopicInbound: session.nextTopicInbound?.toLowerCase(),
     previousTopicInbound: session.previousTopicInbound?.toLowerCase(),
     previousTopicExpiry: session.previousTopicExpiry,
     topicEpoch: session.topicEpoch,
@@ -311,6 +302,8 @@ export function deserializeRatchetSession(stored: StoredRatchetSession): SDKRatc
     // Topic Ratcheting
     currentTopicOutbound: stored.currentTopicOutbound as `0x${string}`,
     currentTopicInbound: stored.currentTopicInbound as `0x${string}`,
+    nextTopicOutbound: stored.nextTopicOutbound as `0x${string}` | undefined,
+    nextTopicInbound: stored.nextTopicInbound as `0x${string}` | undefined,
     previousTopicInbound: stored.previousTopicInbound as `0x${string}` | undefined,
     previousTopicExpiry: stored.previousTopicExpiry,
     topicEpoch: stored.topicEpoch,

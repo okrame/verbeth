@@ -27,7 +27,7 @@ export function computeConversationId(topicA: string, topicB: string): string {
  * The responder must persist myResponderEphemeralSecret immediately.
  * This becomes dhMySecretKey and is required for all future ratchet operations.
  * 
- * Epoch 0: uses handshake-derived topics (no ratcheting yet).
+ * Responder starts at epoch 0 (handshake topics).
  * 
  * @param params - Initialization parameters
  * @returns Initialized ratchet session
@@ -93,11 +93,9 @@ export function initSessionAsResponder(params: InitResponderParams): RatchetSess
 /**
  * Called after receiving and validating handshake response.
  * 
- * NB: theirResponderEphemeralPubKey comes from inside the decrypted
- * HandshakeResponse payload, NOT from the on-chain responderEphemeralR field.
- * The on-chain R is only used for tag verification and is different for unlinkability.
- * 
- * Epoch 1: initiator already does first DH step, so topics are ratcheted immediately.
+ * Initiator precomputes epoch 1 topics from its first post handshake DH step.
+ * Outbound should use epoch 1 as soon as we introduce a new DH pubkey.
+ * Inbound stays on epoch 0 until the responder ratchets.
  * 
  * @param params - Initialization parameters
  * @returns Initialized ratchet session
@@ -129,8 +127,6 @@ export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSess
     dhSend
   );
 
-  // ✅ Deriva epoch 1 topics da dhSend
-  // Questo sarà uguale a dhReceive quando Bob fa il suo primo ratchet
   const conversationId = computeConversationId(topicOutbound, topicInbound);
   const saltBytes = getBytes(conversationId);
   const epoch1TopicOut = deriveTopicFromDH(dhSend, 'outbound', saltBytes);
@@ -158,11 +154,9 @@ export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSess
     previousChainLength: 0,
     skippedKeys: [],
 
-    // ✅ FIX: Inizia a epoch 0, ma pre-calcola epoch 1 topics
-    // E ascolta su ENTRAMBI i topic inbound
     currentTopicOutbound: topicOutbound,
     currentTopicInbound: topicInbound,
-    // Aggiungi questi nuovi campi per il "next" topic
+
     nextTopicOutbound: epoch1TopicOut,
     nextTopicInbound: epoch1TopicIn,
     topicEpoch: 0,

@@ -29,11 +29,11 @@ import {
 
 
 export type QueuedMessageStatus = 
-  | "queued"      // In queue, waiting for previous to complete
-  | "sending"     // Currently being sent
-  | "pending"     // Tx submitted, waiting for confirmation
-  | "confirmed"   // On-chain confirmed
-  | "failed";     // Failed, can retry
+  | "queued"     
+  | "sending"     
+  | "pending"    
+  | "confirmed"   
+  | "failed";    
 
 export interface QueuedMessage {
   id: string;
@@ -154,14 +154,8 @@ export const useMessageQueue = ({
         const { session: nextSession, header, ciphertext, signature, topic: ratchetedTopic } = encryptResult;
 
         // =====================================================================
-        // Update BOTH in-memory cache AND DB immediately after encryption
-        // I.e., we commit the session state BEFORE sending the tx
-        // 
-        // Why this is safe:
-        // 1. If tx succeeds: receiver gets message, session states are in sync
-        // 2. If tx fails: the ratchet "slot" is burned, but receiver's skip-key
-        //    mechanism will handle the gap when they receive subsequent messages
-        // 3. This matches how Signal handles message failures
+        // Update both in-memory cache and DB immediately after encryption
+        // I.e., we commit the session state before sending the tx
         // =====================================================================
         currentSession = nextSession;
         sessionCacheRef.current.set(conversationId, nextSession);
@@ -169,11 +163,10 @@ export const useMessageQueue = ({
         await dbService.saveRatchetSession(nextSession);
         addLog(`💾 Session state committed (sendingMsgNumber=${nextSession.sendingMsgNumber}, topicEpoch=${nextSession.topicEpoch})`);
 
-        // Package binary payload
         const payload = packageRatchetPayload(signature, header, ciphertext);
         const payloadHex = hexlify(payload);
 
-        // Create pending record for confirmation matching (simplified - no session state)
+        // Create pending record for confirmation matching
         const pending: PendingOutbound = {
           id: message.id,
           conversationId,
@@ -190,11 +183,10 @@ export const useMessageQueue = ({
 
         // Send transaction
         const timestamp = Math.floor(Date.now() / 1000);
-        const nonce = nextSession.sendingMsgNumber - 1; // The message number we just used
+        const nonce = nextSession.sendingMsgNumber - 1;
 
         await dbService.updatePendingOutboundStatus(message.id, "submitted");
 
-        // Use ratcheted topic from EncryptResult for on-chain message
         const tx = await verbethClient.executorInstance.sendMessage(
           payload,
           ratchetedTopic,
@@ -230,10 +222,8 @@ export const useMessageQueue = ({
         message.error = errorMessage;
 
         // =====================================================================
-        // On failure, we do NOT roll back session state
-        // The ratchet slot is "burned" - the encryption already advanced the
-        // chain. If we rolled back, we'd reuse the same key which is a security
-        // violation. Instead, we let the slot be skipped - the receiver will
+        // On failure, we do not roll back session state
+        // Instead, we let the slot be skipped, and the receiver will
         // handle this via their skip-key mechanism.
         //
         // This is intentional and matches Signal's behavior.
@@ -341,7 +331,7 @@ export const useMessageQueue = ({
   /**
    * Retry a failed message.
    * 
-   * IMPORTANT: The original ratchet slot was burned. Retry creates a NEW
+   * The original ratchet slot was burned. Retry creates a new
    * encryption with the current (advanced) session state. This means the
    * message number will be different from the original attempt.
    */
