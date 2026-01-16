@@ -1,19 +1,23 @@
 // src/hooks/useMessageProcessor.ts
 
 /**
+ * Message Processor Hook.
+ * 
  * Manages messaging state (messages, contacts, pendingHandshakes) and
  * orchestrates event processing via EventProcessorService.
+ * 
+ * SIMPLIFIED: Event processing now uses VerbethClient which handles
+ * session management internally.
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { type IdentityContext, type IdentityKeyPair, type RatchetSession } from "@verbeth/sdk";
+import type { IdentityContext, IdentityKeyPair, VerbethClient } from "@verbeth/sdk";
 
 import { dbService } from "../services/DbService.js";
 import {
   processHandshakeEvent,
   processHandshakeResponseEvent,
   processMessageEvent,
-  persistSessionCache,
 } from "../services/EventProcessorService.js";
 import {
   Contact,
@@ -29,6 +33,7 @@ interface UseMessageProcessorProps {
   emitterAddress: string | undefined;
   identityKeyPair: IdentityKeyPair | null;
   identityContext: IdentityContext;
+  verbethClient: VerbethClient | null;
   onLog: (message: string) => void;
 }
 
@@ -38,12 +43,17 @@ export const useMessageProcessor = ({
   emitterAddress,
   identityKeyPair,
   identityContext,
+  verbethClient,
   onLog,
 }: UseMessageProcessorProps): MessageProcessorResult => {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [pendingHandshakes, setPendingHandshakes] = useState<PendingHandshake[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
+
+  // ===========================================================================
+  // Load Data from Database
+  // ===========================================================================
 
   const loadFromDatabase = useCallback(async () => {
     if (!address) return;
@@ -68,14 +78,12 @@ export const useMessageProcessor = ({
   }, [address, onLog]);
 
   // ===========================================================================
-  // Event Processing Orchestration
+  // Event Processing - SIMPLIFIED
   // ===========================================================================
+
   const processEvents = useCallback(
     async (events: ProcessedEvent[]) => {
       if (!address) return;
-
-      // Session cache keyed by conversationId (not topic) for topic ratcheting support
-      const batchSessionCache = new Map<string, RatchetSession>();
 
       const messageEvents = events.filter((e) => e.eventType === "message");
       if (messageEvents.length > 1) {
@@ -97,7 +105,6 @@ export const useMessageProcessor = ({
             );
 
             if (result) {
-              // Update React state
               setPendingHandshakes((prev) => {
                 const existing = prev.find((h) => h.id === result.pendingHandshake.id);
                 if (existing) return prev;
@@ -127,7 +134,6 @@ export const useMessageProcessor = ({
             );
 
             if (result) {
-              // Update React state
               setContacts((prev) =>
                 prev.map((c) =>
                   c.address.toLowerCase() === result.updatedContact.address.toLowerCase()
@@ -141,19 +147,23 @@ export const useMessageProcessor = ({
           }
 
           // -----------------------------------------------------------------
-          // MESSAGE
+          // MESSAGE - Uses VerbethClient for decryption
           // -----------------------------------------------------------------
           case "message": {
+            if (!verbethClient) {
+              onLog(`❌ Cannot process message: VerbethClient not configured`);
+              break;
+            }
+
             const result = await processMessageEvent(
               event,
               address,
               emitterAddress,
-              batchSessionCache,
+              verbethClient,
               onLog
             );
 
             if (result) {
-              // Apply state updates
               if (result.newMessage) {
                 setMessages((prev) => {
                   const existing = prev.find((m) => m.id === result.newMessage!.id);
@@ -184,10 +194,9 @@ export const useMessageProcessor = ({
         }
       }
 
-      // Persist all updated sessions to DB after batch completes
-      await persistSessionCache(batchSessionCache, onLog);
+      // Note: No need to persist session cache anymore - SDK handles it internally
     },
-    [address, readProvider, identityKeyPair, identityContext, emitterAddress, onLog]
+    [address, readProvider, identityKeyPair, identityContext, emitterAddress, verbethClient, onLog]
   );
 
   // ===========================================================================
@@ -229,32 +238,32 @@ export const useMessageProcessor = ({
   }, []);
 
   const markMessagesLost = useCallback(
-  async (contactAddress: string, afterTimestamp: number): Promise<number> => {
-    if (!address) return 0;
+    async (contactAddress: string, afterTimestamp: number): Promise<number> => {
+      if (!address) return 0;
 
-    const count = await dbService.markMessagesAsLost(address, contactAddress, afterTimestamp);
+      const count = await dbService.markMessagesAsLost(address, contactAddress, afterTimestamp);
 
-    if (count > 0) {
-      const normalizedContact = contactAddress.toLowerCase();
-      setMessages((prev) =>
-        prev.map((m) => {
-          if (
-            m.direction === 'outgoing' &&
-            m.recipient?.toLowerCase() === normalizedContact &&
-            m.timestamp > afterTimestamp &&
-            m.type !== 'system'
-          ) {
-            return { ...m, isLost: true };
-          }
-          return m;
-        })
-      );
-    }
+      if (count > 0) {
+        const normalizedContact = contactAddress.toLowerCase();
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (
+              m.direction === 'outgoing' &&
+              m.recipient?.toLowerCase() === normalizedContact &&
+              m.timestamp > afterTimestamp &&
+              m.type !== 'system'
+            ) {
+              return { ...m, isLost: true };
+            }
+            return m;
+          })
+        );
+      }
 
-    return count;
-  },
-  [address]
-);
+      return count;
+    },
+    [address]
+  );
 
   const removePendingHandshake = useCallback(async (id: string) => {
     await dbService.deletePendingHandshake(id);
@@ -272,6 +281,10 @@ export const useMessageProcessor = ({
     },
     [address]
   );
+
+  // ===========================================================================
+  // Effects
+  // ===========================================================================
 
   useEffect(() => {
     if (address) {

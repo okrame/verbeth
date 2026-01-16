@@ -6,8 +6,8 @@
  * Encrypts plaintext using the current sending chain, advances chain state,
  * and signs the message with Ed25519.
  * 
- * Returns a new session object. Caller must not persist until
- * the tx is confirmed on-chain (two-phase commit pattern).
+ * Returns a new session object. Caller must persist session state
+ * immediately for forward secrecy (before tx submission).
  */
 
 import nacl from 'tweetnacl';
@@ -26,7 +26,9 @@ export function encodeHeader(header: MessageHeader): Uint8Array {
   return buf;
 }
 
-/** 
+/**
+ * Encrypt a message using the ratchet.
+ * 
  * @param session - Current ratchet session state
  * @param plaintext - Message to encrypt
  * @param signingSecretKey - Ed25519 secret key for signing (64 bytes)

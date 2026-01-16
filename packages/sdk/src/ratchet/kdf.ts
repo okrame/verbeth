@@ -14,6 +14,8 @@ import { keccak256 } from 'ethers';
 import nacl from 'tweetnacl';
 
 /**
+ * Derive new root key and chain key from DH output.
+ * 
  * @param rootKey - Current root key (32 bytes)
  * @param dhOutput - DH shared secret (32 bytes)
  * @returns New root key and chain key
@@ -30,6 +32,8 @@ export function kdfRootKey(
 }
 
 /**
+ * Derive message key and advance chain key.
+ * 
  * @param chainKey - Current chain key (32 bytes)
  * @returns New chain key and message key for encryption/decryption
  */

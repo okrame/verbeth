@@ -1,3 +1,5 @@
+// packages/sdk/src/index.ts
+
 export * from './crypto.js';
 export * from './payload.js';
 export * from './send.js';
@@ -8,8 +10,6 @@ export * from './identity.js';
 export * from './executor.js';
 
 export { decryptMessage as decryptLog } from './crypto.js';
-
-export { getNextNonce } from './utils/nonce.js';
 
 export {
   encodeUnifiedPubKeys,
@@ -46,15 +46,30 @@ export {
   ExecutorFactory
 } from './executor.js';
 
+
+export { getNextNonce } from './utils/nonce.js';
 export { SafeSessionSigner } from "./utils/safeSessionSigner.js";
 export type { SafeSessionSignerOptions } from "./utils/safeSessionSigner.js";
 
-// high-level client API 
-export { VerbethClient } from './client/index.js';
+export { VerbethClient, SessionManager, PendingManager } from './client/index.js';
+
 export type { 
   VerbethClientConfig,
   HandshakeResult,
-  HandshakeResponseResult 
+  HandshakeResponseResult,
+  
+  SessionStore,
+  PendingStore,
+  
+  PreparedMessage,
+  DecryptedMessage,
+  PendingMessage,
+  PendingStatus,
+  
+  SendResult,
+  ConfirmResult,
+  
+  SerializedSessionInfo,
 } from './client/index.js';
 
 export * from './ratchet/index.js';

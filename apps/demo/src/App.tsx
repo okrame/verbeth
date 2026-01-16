@@ -24,6 +24,8 @@ import { useSessionSetup } from './hooks/useSessionSetup.js';
 import { useInitIdentity } from './hooks/useInitIdentity.js';
 import { usePendingSessionReset } from './hooks/usePendingSessionReset.js';
 import { PinnedResetRequest } from './components/PinnedResetRequest.js';
+// NEW: Import storage adapter configuration
+import { configureClientStorage } from './services/StorageAdapters.js';
 
 export default function App() {
   const { ethers: readProvider, viem: viemClient } = useRpcClients();
@@ -124,6 +126,30 @@ export default function App() {
     executionMode,
   });
 
+  // ===========================================================================
+  // UPDATED: Create and configure VerbethClient with storage adapters
+  // ===========================================================================
+  useEffect(() => {
+    const currentAddress = address;
+
+    if (executor && identityKeyPair && identityProof && identitySigner && currentAddress) {
+      const client = new VerbethClient({
+        executor,
+        identityKeyPair,
+        identityProof,
+        signer: identitySigner,
+        address: currentAddress,
+      });
+      
+      configureClientStorage(client);
+      
+      setVerbethClient(client);
+      addLog(`VerbethClient initialized for ${currentAddress.slice(0, 8)}...`);
+    } else {
+      setVerbethClient(null);
+    }
+  }, [executor, identityKeyPair, identityProof, identitySigner, address, addLog]);
+
   const {
     messages,
     pendingHandshakes,
@@ -141,9 +167,9 @@ export default function App() {
     address: address ?? undefined,
     emitterAddress: emitterAddress ?? undefined,
     identityKeyPair,
+    verbethClient,  // NEW: Pass the configured client
     onLog: addLog
   });
-
   const { hasPendingReset, pendingHandshake: pendingResetHandshake, limboAfterTimestamp } =
     usePendingSessionReset(selectedContact, pendingHandshakes);
 
@@ -182,24 +208,6 @@ export default function App() {
     setRecipientAddress,
     markMessagesLost,
   });
-
-  useEffect(() => {
-    const currentAddress = address;
-
-    if (executor && identityKeyPair && identityProof && identitySigner && currentAddress) {
-      const client = new VerbethClient({
-        executor,
-        identityKeyPair,
-        identityProof,
-        signer: identitySigner,
-        address: currentAddress,
-      });
-      setVerbethClient(client);
-      addLog(`VerbethClient initialized for ${currentAddress.slice(0, 8)}...`);
-    } else {
-      setVerbethClient(null);
-    }
-  }, [executor, identityKeyPair, identityProof, identitySigner, address, addLog]);
 
   // sync handshakeToasts
   useEffect(() => {

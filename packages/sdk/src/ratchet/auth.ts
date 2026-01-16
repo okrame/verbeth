@@ -52,6 +52,7 @@ export function verifyMessageSignature(
 
 /**
  * Encode header as 40 bytes for signature verification.
+ * Format: dh (32) + pn (4, BE) + n (4, BE)
  */
 function encodeHeaderForSigning(header: MessageHeader): Uint8Array {
   const buf = new Uint8Array(40);
@@ -62,7 +63,7 @@ function encodeHeaderForSigning(header: MessageHeader): Uint8Array {
 }
 
 // =============================================================================
-// Signature Creation (for completeness - also in encrypt.ts)
+// Signature Creation
 // =============================================================================
 
 /**

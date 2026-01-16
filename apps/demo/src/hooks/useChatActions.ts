@@ -1,5 +1,15 @@
 // src/hooks/useChatActions.ts
 
+/**
+ * Chat Actions Hook.
+ * 
+ * Provides high-level chat actions:
+ * - sendHandshake / acceptHandshake
+ * - sendMessageToContact
+ * - Retry/cancel failed messages
+ * - Queue status management
+ */
+
 import { useCallback } from "react";
 import { hexlify } from "ethers";
 import {
@@ -59,6 +69,10 @@ export const useChatActions = ({
     removeMessage,
     updateContact,
   });
+
+  // ===========================================================================
+  // Handshake Operations
+  // ===========================================================================
 
   /**
    * Send a handshake to initiate contact.
@@ -124,9 +138,7 @@ export const useChatActions = ({
       } catch (error) {
         console.error("Failed to send handshake:", error);
         addLog(
-          `✗ Failed to send handshake: ${
-            error instanceof Error ? error.message : "Unknown error"
-          }`
+          `✗ Failed to send handshake: ${error instanceof Error ? error.message : "Unknown error"}`
         );
       } finally {
         setLoading(false);
@@ -144,7 +156,10 @@ export const useChatActions = ({
     ]
   );
 
-
+  /**
+   * Accept a handshake from another user.
+   * Creates ratchet session and establishes contact.
+   */
   const acceptHandshake = useCallback(
     async (handshake: any, responseMessage: string) => {
       if (!verbethClient) {
@@ -177,9 +192,9 @@ export const useChatActions = ({
           topicInbound,
         });
 
+        // Save session - SDK will pick it up via SessionStore adapter
         await dbService.saveRatchetSession(ratchetSession);
 
-        // Use ratcheted topics from session for contact storage
         const newContact: Contact = {
           address: handshake.sender,
           ownerAddress: verbethClient.userAddress,
@@ -194,12 +209,15 @@ export const useChatActions = ({
         };
 
         await updateContact(newContact);
+
+        // Mark messages as lost if this is a session reset
         if (handshake.isExistingContact && handshake.timestamp) {
-            const lostCount = await markMessagesLost(handshake.sender, handshake.timestamp);
-            if (lostCount > 0) {
-              addLog(`⚠️ ${lostCount} messages marked as lost`);
-            }
+          const lostCount = await markMessagesLost(handshake.sender, handshake.timestamp);
+          if (lostCount > 0) {
+            addLog(`⚠️ ${lostCount} messages marked as lost`);
           }
+        }
+
         await removePendingHandshake(handshake.id);
         setSelectedContact(newContact);
 
@@ -230,9 +248,7 @@ export const useChatActions = ({
       } catch (error) {
         console.error("Failed to accept handshake:", error);
         addLog(
-          `✗ Failed to accept handshake: ${
-            error instanceof Error ? error.message : "Unknown error"
-          }`
+          `✗ Failed to accept handshake: ${error instanceof Error ? error.message : "Unknown error"}`
         );
       }
     },
@@ -243,9 +259,18 @@ export const useChatActions = ({
       removePendingHandshake,
       addMessage,
       setSelectedContact,
+      markMessagesLost,
     ]
   );
 
+  // ===========================================================================
+  // Message Operations
+  // ===========================================================================
+
+  /**
+   * Send a message to a contact.
+   * Uses the message queue for sequential processing.
+   */
   const sendMessageToContact = useCallback(
     async (contact: Contact, messageText: string) => {
       if (!verbethClient) {
@@ -267,8 +292,10 @@ export const useChatActions = ({
     [verbethClient, addLog, queueMessage, setMessage]
   );
 
-
-  // here the message number will be different from the original attempt.
+  /**
+   * Retry a failed message.
+   * Note: The message number will be different from the original attempt.
+   */
   const retryFailedMessage = useCallback(
     async (messageId: string) => {
       const success = await retryMessage(messageId);

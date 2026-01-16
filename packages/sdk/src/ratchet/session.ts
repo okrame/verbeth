@@ -2,7 +2,11 @@
 
 /**
  * Ratchet Session Initialization.
- * Initial shared secret is derived from ephemeral to ephemeral DH only.
+ * 
+ * Provides functions to initialize ratchet sessions for both
+ * initiator (Alice) and responder (Bob) roles.
+ * 
+ * Initial shared secret is derived from ephemeral-to-ephemeral DH only.
  */
 
 import { keccak256, toUtf8Bytes, getBytes } from 'ethers';
@@ -16,6 +20,10 @@ import { kdfRootKey, dh, generateDHKeyPair, deriveTopicFromDH } from './kdf.js';
 /**
  * Compute deterministic conversation ID from topics.
  * Sorting ensures both parties derive the same ID regardless of perspective.
+ * 
+ * @param topicA - First topic
+ * @param topicB - Second topic
+ * @returns Unique conversation identifier
  */
 export function computeConversationId(topicA: string, topicB: string): string {
   const sorted = [topicA.toLowerCase(), topicB.toLowerCase()].sort();
@@ -23,6 +31,8 @@ export function computeConversationId(topicA: string, topicB: string): string {
 }
 
 /**
+ * Initialize session as responder (Bob).
+ * 
  * Called after receiving handshake, before/during sending response.
  * The responder must persist myResponderEphemeralSecret immediately.
  * This becomes dhMySecretKey and is required for all future ratchet operations.
@@ -70,7 +80,7 @@ export function initSessionAsResponder(params: InitResponderParams): RatchetSess
     sendingChainKey,
     sendingMsgNumber: 0,
 
-    // Receiving chain not yet established
+    // Receiving chain not yet established (Alice sends first post-handshake)
     receivingChainKey: null,
     receivingMsgNumber: 0,
 
@@ -91,9 +101,11 @@ export function initSessionAsResponder(params: InitResponderParams): RatchetSess
 }
 
 /**
+ * Initialize session as initiator (Alice).
+ * 
  * Called after receiving and validating handshake response.
  * 
- * Initiator precomputes epoch 1 topics from its first post handshake DH step.
+ * Initiator precomputes epoch 1 topics from its first post-handshake DH step.
  * Outbound should use epoch 1 as soon as we introduce a new DH pubkey.
  * Inbound stays on epoch 0 until the responder ratchets.
  * 
@@ -118,7 +130,7 @@ export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSess
     sharedSecret
   );
 
-  // Generate first DH keypair for sending
+  // Generate first DH keypair for sending (Alice performs first DH ratchet)
   const myDHKeyPair = generateDHKeyPair();
 
   const dhSend = dh(myDHKeyPair.secretKey, theirResponderEphemeralPubKey);
@@ -129,6 +141,8 @@ export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSess
 
   const conversationId = computeConversationId(topicOutbound, topicInbound);
   const saltBytes = getBytes(conversationId);
+  
+  // Pre-compute epoch 1 topics (for when our first message is sent)
   const epoch1TopicOut = deriveTopicFromDH(dhSend, 'outbound', saltBytes);
   const epoch1TopicIn = deriveTopicFromDH(dhSend, 'inbound', saltBytes);
 
@@ -148,15 +162,19 @@ export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSess
 
     sendingChainKey,
     sendingMsgNumber: 0,
+    
+    // Alice can receive Bob's messages immediately
     receivingChainKey: bobsSendingChain,
     receivingMsgNumber: 0,
 
     previousChainLength: 0,
     skippedKeys: [],
 
+    // Start with handshake topics
     currentTopicOutbound: topicOutbound,
     currentTopicInbound: topicInbound,
 
+    // Pre-computed next topics (will be promoted when we send)
     nextTopicOutbound: epoch1TopicOut,
     nextTopicInbound: epoch1TopicIn,
     topicEpoch: 0,

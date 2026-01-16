@@ -3,37 +3,28 @@
 /**
  * Message Queue Hook for Sequential Processing with Optimistic UI.
  * 
- * 1. Session state is cached per conversation and persists across processQueue calls
- * 2. After encryption, session state is immediately saved to DB (not waiting for confirmation)
- * 3. Failed messages don't corrupt session state - the ratchet slot is "burned"
- * 4. Confirmations now just clean up pending records, not commit session state
+ * Uses VerbethClient's two-phase commit pattern:
+ * 1. prepareMessage() - get ID and encrypted payload
+ * 2. Submit tx manually
+ * 3. confirmTx() on chain confirmation
  * 
+ * The key insight: we use prepareMessage()'s ID for BOTH the optimistic
+ * message AND the pending record, so confirmTx() can find the right message.
  */
 
 import { useCallback, useRef, useEffect } from "react";
 import { hexlify } from "ethers";
-import {
-  VerbethClient,
-  ratchetEncrypt,
-  packageRatchetPayload,
-  RatchetSession,
-} from "@verbeth/sdk";
+import type { VerbethClient } from "@verbeth/sdk";
+import { Contact, Message } from "../types.js";
 import { dbService } from "../services/DbService.js";
-import {
-  Contact,
-  Message,
-  PendingOutbound,
-  generateTempMessageId,
-  serializeRatchetSession,
-} from "../types.js";
 
 
 export type QueuedMessageStatus = 
-  | "queued"     
-  | "sending"     
-  | "pending"    
-  | "confirmed"   
-  | "failed";    
+  | "queued"     // In queue, waiting to be sent
+  | "sending"    // Currently being encrypted/submitted
+  | "pending"    // Submitted, awaiting confirmation
+  | "confirmed"  // Confirmed on-chain
+  | "failed";    // Failed to send
 
 export interface QueuedMessage {
   id: string;
@@ -60,6 +51,9 @@ interface UseMessageQueueProps {
   updateContact: (contact: Contact) => Promise<void>;
 }
 
+// =============================================================================
+// Hook Implementation
+// =============================================================================
 
 export const useMessageQueue = ({
   verbethClient,
@@ -71,13 +65,7 @@ export const useMessageQueue = ({
 }: UseMessageQueueProps) => {
 
   const queuesRef = useRef<Map<string, ConversationQueue>>(new Map());
-  
-  // persistent session cache across processQueue invocations
-  // This ensures we never lose track of the latest session state
-  const sessionCacheRef = useRef<Map<string, RatchetSession>>(new Map());
-  
   const failedMessagesRef = useRef<Map<string, QueuedMessage>>(new Map());
-  // Track mounted state to prevent updates after unmount
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -88,7 +76,7 @@ export const useMessageQueue = ({
   }, []);
 
   // ===========================================================================
-  // Queue Processor
+  // Queue Processor - Uses prepareMessage() for ID-first approach
   // ===========================================================================
 
   const processQueue = useCallback(async (conversationId: string) => {
@@ -99,159 +87,137 @@ export const useMessageQueue = ({
 
     queue.isProcessing = true;
 
-    // Check session cache first, only fall back to DB if not cached
-    // This ensures we always use the most recently advanced session state
-    let currentSession: RatchetSession | null = sessionCacheRef.current.get(conversationId) ?? null;
-    
-    if (!currentSession) {
-      try {
-        currentSession = await dbService.getRatchetSessionByConversation(conversationId);
-        if (currentSession) {
-          sessionCacheRef.current.set(conversationId, currentSession);
-          addLog(`📂 Loaded session from DB for ${conversationId.slice(0, 10)}...`);
-        }
-      } catch (error) {
-        addLog(`✗ Failed to load ratchet session for ${conversationId.slice(0, 10)}...`);
-        queue.isProcessing = false;
-        return;
-      }
-    }
-
-    if (!currentSession) {
-      addLog(`✗ No ratchet session found for ${conversationId.slice(0, 10)}...`);
-      queue.isProcessing = false;
-      return;
-    }
-
     while (queue.messages.length > 0 && mountedRef.current) {
-      const message = queue.messages[0];
+      const queuedMsg = queue.messages[0];
       
-      if (message.status === "confirmed" || message.status === "pending") {
+      // Skip already processed messages
+      if (queuedMsg.status === "confirmed" || queuedMsg.status === "pending") {
         queue.messages.shift();
         continue;
       }
 
-      if (message.status === "failed") {
+      if (queuedMsg.status === "failed") {
         queue.messages.shift();
         continue;
       }
 
       try {
-        message.status = "sending";
+        queuedMsg.status = "sending";
         
-        // use the cached in-memory session state
-        const sessionBefore = currentSession;
-
-        const plaintext = new TextEncoder().encode(message.plaintext);
-        
-        // ratchetEncrypt now returns topic in the result (ratcheted topic)
-        const encryptResult = ratchetEncrypt(
-          sessionBefore,
-          plaintext,
-          verbethClient.identityKeyPairInstance.signingSecretKey
-        );
-        
-        const { session: nextSession, header, ciphertext, signature, topic: ratchetedTopic } = encryptResult;
-
         // =====================================================================
-        // Update both in-memory cache and DB immediately after encryption
-        // I.e., we commit the session state before sending the tx
+        // Step 1: Prepare message - this gives us the ID and encrypted payload
+        // Session is committed immediately for forward secrecy
         // =====================================================================
-        currentSession = nextSession;
-        sessionCacheRef.current.set(conversationId, nextSession);
-        
-        await dbService.saveRatchetSession(nextSession);
-        addLog(`💾 Session state committed (sendingMsgNumber=${nextSession.sendingMsgNumber}, topicEpoch=${nextSession.topicEpoch})`);
-
-        const payload = packageRatchetPayload(signature, header, ciphertext);
-        const payloadHex = hexlify(payload);
-
-        // Create pending record for confirmation matching
-        const pending: PendingOutbound = {
-          id: message.id,
+        const prepared = await verbethClient.prepareMessage(
           conversationId,
-          topic: ratchetedTopic, // Use ratcheted topic from EncryptResult
-          payloadHex,
-          plaintext: message.plaintext,
-          sessionStateBefore: JSON.stringify(serializeRatchetSession(sessionBefore)),
-          sessionStateAfter: JSON.stringify(serializeRatchetSession(nextSession)),
-          createdAt: message.createdAt,
-          txHash: null,
-          status: "preparing",
-        };
-        await dbService.savePendingOutbound(pending);
-
-        // Send transaction
-        const timestamp = Math.floor(Date.now() / 1000);
-        const nonce = nextSession.sendingMsgNumber - 1;
-
-        await dbService.updatePendingOutboundStatus(message.id, "submitted");
-
-        const tx = await verbethClient.executorInstance.sendMessage(
-          payload,
-          ratchetedTopic,
-          timestamp,
-          BigInt(nonce)
+          queuedMsg.plaintext
         );
 
-        // Update with txHash
-        message.txHash = tx.hash;
-        message.status = "pending";
-        await dbService.updatePendingOutboundStatus(message.id, "submitted", tx.hash);
-
-        addLog(`📤 Message sent: "${message.plaintext.slice(0, 30)}..." (tx: ${tx.hash.slice(0, 10)}..., n=${nonce})`);
-
-        // Update contact with current topic
-        const updatedContact: Contact = {
-          ...message.contact,
-          topicOutbound: nextSession.currentTopicOutbound,
-          topicInbound: nextSession.currentTopicInbound,
-          lastMessage: message.plaintext,
-          lastTimestamp: Date.now(),
+        // =====================================================================
+        // Step 2: Create optimistic message with the SAME ID as prepared
+        // This is the key fix - both share prepared.id
+        // =====================================================================
+        const optimisticMessage: Message = {
+          id: prepared.id,  // USE THE PREPARED ID!
+          topic: prepared.topic,
+          sender: verbethClient.userAddress,
+          recipient: queuedMsg.contact.address,
+          ciphertext: "",
+          timestamp: prepared.createdAt,
+          blockTimestamp: prepared.createdAt,
+          blockNumber: 0,
+          direction: "outgoing",
+          decrypted: queuedMsg.plaintext,
+          read: true,
+          nonce: prepared.messageNumber,
+          dedupKey: `pending-${prepared.id}`,
+          type: "text",
+          ownerAddress: verbethClient.userAddress,
+          status: "pending",
         };
-        await updateContact(updatedContact);
 
-        // Remove from queue (confirmation will be handled by useMessageProcessor)
+        await addMessage(optimisticMessage);
+
+        // =====================================================================
+        // Step 3: Create pending record (SDK's PendingStore via StorageAdapter)
+        // =====================================================================
+        await dbService.savePendingOutbound({
+          id: prepared.id,
+          conversationId,
+          topic: prepared.topic,
+          payloadHex: hexlify(prepared.payload),
+          plaintext: queuedMsg.plaintext,
+          sessionStateBefore: JSON.stringify({ epoch: prepared.sessionBefore.topicEpoch }),
+          sessionStateAfter: JSON.stringify({ epoch: prepared.sessionAfter.topicEpoch }),
+          createdAt: prepared.createdAt,
+          txHash: null,
+          status: 'preparing',
+        });
+
+        // =====================================================================
+        // Step 4: Submit transaction
+        // =====================================================================
+        const timestamp = Math.floor(Date.now() / 1000);
+        const tx = await verbethClient.executorInstance.sendMessage(
+          prepared.payload,
+          prepared.topic,
+          timestamp,
+          BigInt(prepared.messageNumber)
+        );
+
+        // =====================================================================
+        // Step 5: Update pending with txHash
+        // =====================================================================
+        await dbService.updatePendingOutboundStatus(prepared.id, 'submitted', tx.hash);
+
+        // Update our tracking
+        queuedMsg.id = prepared.id;
+        queuedMsg.txHash = tx.hash;
+        queuedMsg.status = "pending";
+
+        addLog(
+          `📤 Message sent: "${queuedMsg.plaintext.slice(0, 30)}..." (tx: ${tx.hash.slice(0, 10)}..., n=${prepared.messageNumber})`
+        );
+
+        // Update contact with current topic (may have ratcheted)
+        const session = await verbethClient.getSession(conversationId);
+        if (session) {
+          const updatedContact: Contact = {
+            ...queuedMsg.contact,
+            topicOutbound: session.currentTopicOutbound,
+            topicInbound: session.currentTopicInbound,
+            lastMessage: queuedMsg.plaintext,
+            lastTimestamp: Date.now(),
+          };
+          await updateContact(updatedContact);
+        }
+
+        // Remove from queue (confirmation will be handled by event processor)
         queue.messages.shift();
 
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
         
         // Mark as failed
-        message.status = "failed";
-        message.error = errorMessage;
+        queuedMsg.status = "failed";
+        queuedMsg.error = errorMessage;
 
-        // =====================================================================
-        // On failure, we do not roll back session state
-        // Instead, we let the slot be skipped, and the receiver will
-        // handle this via their skip-key mechanism.
-        //
-        // This is intentional and matches Signal's behavior.
-        // =====================================================================
+        // Note: Ratchet slot may already be burned (session was committed in prepareMessage)
 
-        
-        try {
-          await dbService.deletePendingOutbound(message.id);
-        } catch {
-        }
+        await updateMessageStatus(queuedMsg.id, "failed", errorMessage);
 
-        await updateMessageStatus(message.id, "failed", errorMessage);
-
-        addLog(`✗ Failed to send (slot burned): "${message.plaintext.slice(0, 20)}..." - ${errorMessage}`);
+        addLog(`✗ Failed to send: "${queuedMsg.plaintext.slice(0, 20)}..." - ${errorMessage}`);
 
         // Store failed message for retry/cancel
-        failedMessagesRef.current.set(message.id, { ...message });
+        failedMessagesRef.current.set(queuedMsg.id, { ...queuedMsg });
 
         // Remove from active queue
         queue.messages.shift();
-
-        // Continue processing remaining messages with the advanced session state
-        // (currentSession is already updated, which is correct)
       }
     }
 
     queue.isProcessing = false;
-  }, [verbethClient, addLog, updateContact, updateMessageStatus]);
+  }, [verbethClient, addLog, addMessage, updateContact, updateMessageStatus]);
 
   // ===========================================================================
   // Public API
@@ -259,7 +225,8 @@ export const useMessageQueue = ({
 
   /**
    * Queue a message for sending.
-   * Shows optimistically in UI immediately, processes sequentially.
+   * Note: The actual optimistic message is created in processQueue after prepareMessage
+   * so we can use the correct ID.
    */
   const queueMessage = useCallback(async (
     contact: Contact,
@@ -275,12 +242,14 @@ export const useMessageQueue = ({
       return null;
     }
 
-    const messageId = generateTempMessageId();
     const conversationId = contact.conversationId;
+    
+    // Use a temporary ID for queue tracking only (will be replaced with prepared.id)
+    const tempId = `queue-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-    // Create queued message
+    // Create queued message (optimistic UI created later with correct ID)
     const queuedMessage: QueuedMessage = {
-      id: messageId,
+      id: tempId,
       conversationId,
       contact,
       plaintext: messageText,
@@ -298,45 +267,18 @@ export const useMessageQueue = ({
     // Add to queue
     queue.messages.push(queuedMessage);
 
-    // Show optimistic UI message immediately
-    const optimisticMessage: Message = {
-      id: messageId,
-      topic: contact.topicOutbound || "",
-      sender: verbethClient.userAddress,
-      recipient: contact.address,
-      ciphertext: "",
-      timestamp: Date.now(),
-      blockTimestamp: Date.now(),
-      blockNumber: 0,
-      direction: "outgoing",
-      decrypted: messageText,
-      read: true,
-      nonce: 0,
-      dedupKey: `pending-${messageId}`,
-      type: "text",
-      ownerAddress: verbethClient.userAddress,
-      status: "pending",
-    };
-
-    await addMessage(optimisticMessage);
-
     addLog(`📝 Message queued: "${messageText.slice(0, 30)}..."`);
 
     // Trigger queue processing (non-blocking)
     setTimeout(() => processQueue(conversationId), 0);
 
-    return messageId;
-  }, [verbethClient, addLog, addMessage, processQueue]);
+    return tempId;
+  }, [verbethClient, addLog, processQueue]);
 
   /**
    * Retry a failed message.
-   * 
-   * The original ratchet slot was burned. Retry creates a new
-   * encryption with the current (advanced) session state. This means the
-   * message number will be different from the original attempt.
    */
   const retryMessage = useCallback(async (messageId: string): Promise<boolean> => {
-    // Check the failed messages map first
     const failedMessage = failedMessagesRef.current.get(messageId);
     
     if (failedMessage) {
@@ -345,7 +287,11 @@ export const useMessageQueue = ({
       // Remove from failed messages map
       failedMessagesRef.current.delete(messageId);
       
-      // Reset status for retry
+      // Delete the old failed message from DB
+      await removeMessage(messageId);
+      
+      // Reset status for retry (will get new ID in processQueue)
+      failedMessage.id = `queue-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       failedMessage.status = "queued";
       failedMessage.error = undefined;
       failedMessage.createdAt = Date.now();
@@ -360,47 +306,17 @@ export const useMessageQueue = ({
       // Add to end of queue
       queue.messages.push(failedMessage);
       
-      // Update UI status back to pending
-      await updateMessageStatus(messageId, "pending");
-      
-      addLog(`🔄 Retrying message (new slot): "${failedMessage.plaintext.slice(0, 30)}..."`);
+      addLog(`🔄 Retrying message: "${failedMessage.plaintext.slice(0, 30)}..."`);
       
       // Trigger processing
       setTimeout(() => processQueue(conversationId), 0);
       
       return true;
     }
-    
-    // Fallback: check if still in active queue (shouldn't happen normally)
-    for (const [conversationId, queue] of queuesRef.current.entries()) {
-      const messageIndex = queue.messages.findIndex(
-        m => m.id === messageId && m.status === "failed"
-      );
-      
-      if (messageIndex !== -1) {
-        const message = queue.messages[messageIndex];
-        
-        message.status = "queued";
-        message.error = undefined;
-        message.createdAt = Date.now();
-
-        // Move to end of queue
-        queue.messages.splice(messageIndex, 1);
-        queue.messages.push(message);
-
-        await updateMessageStatus(messageId, "pending");
-        
-        addLog(`🔄 Retrying message: "${message.plaintext.slice(0, 30)}..."`);
-
-        setTimeout(() => processQueue(conversationId), 0);
-        
-        return true;
-      }
-    }
 
     addLog(`✗ Could not find message ${messageId} to retry`);
     return false;
-  }, [addLog, updateMessageStatus, processQueue]);
+  }, [addLog, removeMessage, processQueue]);
 
   /**
    * Cancel/delete a failed or queued message.
@@ -461,12 +377,11 @@ export const useMessageQueue = ({
 
   /**
    * Invalidate cached session for a conversation.
-   * Call this when session is reset or updated externally.
    */
   const invalidateSessionCache = useCallback((conversationId: string) => {
-    sessionCacheRef.current.delete(conversationId);
+    verbethClient?.invalidateSessionCache(conversationId);
     addLog(`🔄 Session cache invalidated for ${conversationId.slice(0, 10)}...`);
-  }, [addLog]);
+  }, [verbethClient, addLog]);
 
   /**
    * Clear all queues (e.g., on logout).
@@ -474,8 +389,8 @@ export const useMessageQueue = ({
   const clearAllQueues = useCallback(() => {
     queuesRef.current.clear();
     failedMessagesRef.current.clear();
-    sessionCacheRef.current.clear();
-  }, []);
+    verbethClient?.clearSessionCache();
+  }, [verbethClient]);
 
   return {
     queueMessage,

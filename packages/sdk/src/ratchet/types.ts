@@ -30,9 +30,7 @@ export const SYNC_BATCH_SIZE = 10_000;
  */
 export const RATCHET_VERSION_V1 = 0x01;
 
-/**
- * Topic transition window (5 minutes).
- */
+// Previous topic remains valid for this duration after promotion.
 export const TOPIC_TRANSITION_WINDOW_MS = 5 * 60 * 1000;
 
 /**
@@ -86,12 +84,19 @@ export interface RatchetSession {
   skippedKeys: SkippedKey[];
 
   // === Topic Ratcheting ===
+  /** Current outbound topic (may differ from original after ratcheting) */
   currentTopicOutbound: `0x${string}`;
+  /** Current inbound topic (may differ from original after ratcheting) */
   currentTopicInbound: `0x${string}`;
+  /** Pre-computed next outbound topic (for our next DH ratchet) */
   nextTopicOutbound?: `0x${string}`;
+  /** Pre-computed next inbound topic (for their next DH ratchet) */
   nextTopicInbound?: `0x${string}`;
+  /** Previous inbound topic (grace period for late messages) */
   previousTopicInbound?: `0x${string}`;
+  /** Expiry timestamp for previous topic */
   previousTopicExpiry?: number;
+  /** Topic epoch counter */
   topicEpoch: number;
 
   // === Metadata ===
@@ -135,11 +140,11 @@ export interface MessageHeader {
  * Result of ratchetEncrypt - includes new session state for two-phase commit.
  */
 export interface EncryptResult {
+  /** Updated session state (MUST be persisted) */
   session: RatchetSession;
   header: MessageHeader;
   ciphertext: Uint8Array;
   signature: Uint8Array;
-  /** Current outbound topic to use for this message */
   topic: `0x${string}`;
 }
 
@@ -147,6 +152,7 @@ export interface EncryptResult {
  * Result of ratchetDecrypt.
  */
 export interface DecryptResult {
+  /** Updated session state (MUST be persisted) */
   session: RatchetSession;
   plaintext: Uint8Array;
 }
@@ -184,7 +190,7 @@ export interface InitInitiatorParams {
   contactAddress: string;
   /** Handshake ephemeral secret (must persist until response arrives) */
   myHandshakeEphemeralSecret: Uint8Array;
-
+  /** Responder's ephemeral from HandshakeResponse (inside encrypted payload) */
   theirResponderEphemeralPubKey: Uint8Array;
   topicOutbound: `0x${string}`;
   topicInbound: `0x${string}`;

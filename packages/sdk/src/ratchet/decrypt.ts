@@ -2,6 +2,8 @@
 
 /**
  * Ratchet Decryption with Skip Key Handling.
+ * 
+ * Handles:
  * - Normal sequential message decryption
  * - DH ratchet steps when sender's DH key changes
  * - Out-of-order messages via skipped keys
@@ -23,6 +25,7 @@ import { kdfRootKey, kdfChainKey, dh, generateDHKeyPair, deriveTopicFromDH } fro
 
 /**
  * Decrypt a message using the ratchet.
+ * 
  * @param session - Current ratchet session state
  * @param header - Parsed message header
  * @param ciphertext - Encrypted payload (nonce + secretbox output)
@@ -33,7 +36,7 @@ export function ratchetDecrypt(
   header: MessageHeader,
   ciphertext: Uint8Array
 ): DecryptResult | null {
-  // even authenticated messages shouldn't require insane skips
+  // Sanity check: even authenticated messages shouldn't require insane skips
   const skipNeeded = Math.max(0, header.n - session.receivingMsgNumber);
   if (skipNeeded > MAX_SKIP_PER_MESSAGE || header.pn > MAX_SKIP_PER_MESSAGE) {
     console.error(
@@ -58,10 +61,12 @@ export function ratchetDecrypt(
 
   // 3. Check if we need to perform a DH ratchet step
   if (dhPubHex !== currentTheirDHHex) {
+    // Skip any remaining messages from previous receiving chain
     if (newSession.receivingChainKey) {
       newSession = skipMessages(newSession, newSession.receivingMsgNumber, header.pn);
     }
 
+    // Perform DH ratchet step
     newSession = dhRatchetStep(newSession, header.dh);
   }
 
@@ -87,6 +92,7 @@ export function ratchetDecrypt(
   try {
     messageKey.fill(0);
   } catch {
+    // Ignore if fill fails
   }
 
   if (!plaintext) {
@@ -108,32 +114,34 @@ export function ratchetDecrypt(
 }
 
 /**
- * DH ratchet on receipt of a message that carries a new remote DH public key.
+ * DH ratchet step on receipt of a message with a new remote DH public key.
  *
- * Topic derivation is sender centric: `deriveTopicFromDH(x, 'outbound')` denotes the topic used
- * by the party who *sent* the DH pubkey for their sending direction. Therefore, when we ratchet
- * on receive, we swap labels for the topics derived from `dhReceive`.
+ * Topic derivation is sender-centric: `deriveTopicFromDH(x, 'outbound')` denotes 
+ * the topic used by the party who *sent* the DH pubkey for their sending direction.
+ * Therefore, when we ratchet on receive, we swap labels for topics derived from `dhReceive`.
  */
 function dhRatchetStep(session: RatchetSession, theirNewDHPub: Uint8Array): RatchetSession {
-  // advance receiving chain (based on our current DH secret and their new DH pubkey)
+  // Advance receiving chain (based on our current DH secret and their new DH pubkey)
   const dhReceive = dh(session.dhMySecretKey, theirNewDHPub);
   const { rootKey: rootKey1, chainKey: receivingChainKey } = kdfRootKey(
     session.rootKey,
     dhReceive
   );
 
+  // Generate new DH keypair for our next sending chain
   const newDHKeyPair = generateDHKeyPair();
 
+  // Advance sending chain
   const dhSend = dh(newDHKeyPair.secretKey, theirNewDHPub);
   const { rootKey: rootKey2, chainKey: sendingChainKey } = kdfRootKey(rootKey1, dhSend);
 
   const saltBytes = getBytes(session.conversationId);
   
-  // Current topics (post ratchet) are swapped since we're the receiver of dhReceive
+  // Current topics (post ratchet) - swapped since we're the receiver
   const newTopicOut = deriveTopicFromDH(dhReceive, 'inbound', saltBytes);  
   const newTopicIn = deriveTopicFromDH(dhReceive, 'outbound', saltBytes); 
 
-  // Next topics (for our next DH pubkey): normal labels because we will be the sender.
+  // Next topics (for our next DH pubkey) - normal labels because we will be the sender
   const nextTopicOut = deriveTopicFromDH(dhSend, 'outbound', saltBytes);
   const nextTopicIn = deriveTopicFromDH(dhSend, 'inbound', saltBytes);
 
@@ -151,7 +159,6 @@ function dhRatchetStep(session: RatchetSession, theirNewDHPub: Uint8Array): Ratc
 
     nextTopicOutbound: nextTopicOut,
     nextTopicInbound: nextTopicIn,
-
     currentTopicOutbound: newTopicOut,
     currentTopicInbound: newTopicIn,
     previousTopicInbound: session.currentTopicInbound,
@@ -162,6 +169,7 @@ function dhRatchetStep(session: RatchetSession, theirNewDHPub: Uint8Array): Ratc
 
 /**
  * Skip messages by deriving and storing their keys for later out-of-order decryption.
+ * 
  * Called when:
  * - header.n > receivingMsgNumber (messages skipped in current epoch)
  * - DH ratchet step with header.pn > 0 (messages from previous epoch)
@@ -191,6 +199,7 @@ function skipMessages(
     chainKey = newChainKey;
   }
 
+  // Prune if we have too many skipped keys
   let prunedKeys = skippedKeys;
   if (skippedKeys.length > MAX_STORED_SKIPPED_KEYS) {
     prunedKeys = skippedKeys
@@ -263,6 +272,8 @@ function decryptWithKey(ciphertext: Uint8Array, messageKey: Uint8Array): Uint8Ar
 }
 
 /**
+ * Prune expired skipped keys from session.
+ * 
  * @param session - Current session
  * @param maxAgeMs - Maximum age in milliseconds (default: 24 hours)
  * @returns Session with pruned skipped keys
@@ -276,6 +287,7 @@ export function pruneExpiredSkippedKeys(
 
   const prunedKeys = session.skippedKeys.filter((sk) => sk.createdAt > cutoff);
 
+  // Wipe expired keys
   for (const sk of session.skippedKeys) {
     if (sk.createdAt <= cutoff) {
       try {
@@ -286,7 +298,7 @@ export function pruneExpiredSkippedKeys(
   }
 
   if (prunedKeys.length === session.skippedKeys.length) {
-    return session; 
+    return session; // No change
   }
 
   return {

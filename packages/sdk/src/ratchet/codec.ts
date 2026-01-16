@@ -3,6 +3,7 @@
 /**
  * Binary Codec for Ratchet Messages.
  * 
+ * Wire format:
  * ┌─────────────────────────────────────────────────────────────┐
  * │ Offset │ Size │ Field                                       │
  * ├────────┼──────┼─────────────────────────────────────────────┤
@@ -13,13 +14,18 @@
  * │ 101    │ 4    │ n (uint32 BE) - message number              │
  * │ 105    │ var  │ Ciphertext (nonce + AEAD output)            │
  * └─────────────────────────────────────────────────────────────┘
+ * 
+ * Total minimum: 105 bytes + ciphertext
  */
 
 import { MessageHeader, ParsedRatchetPayload, RATCHET_VERSION_V1 } from './types.js';
 
+/** Minimum payload length: version(1) + sig(64) + dh(32) + pn(4) + n(4) */
 const MIN_PAYLOAD_LENGTH = 1 + 64 + 32 + 4 + 4; // 105 bytes
 
 /**
+ * Package ratchet message components into binary format.
+ * 
  * @param signature - Ed25519 signature (64 bytes)
  * @param header - Message header (dh, pn, n)
  * @param ciphertext - Encrypted payload (nonce + secretbox output)
@@ -108,6 +114,7 @@ export function parseRatchetPayload(payload: Uint8Array): ParsedRatchetPayload |
 }
 
 /**
+ * Check if payload is in ratchet format.
  * Used to distinguish ratchet messages from legacy JSON format.
  * 
  * @param payload - Raw payload bytes
