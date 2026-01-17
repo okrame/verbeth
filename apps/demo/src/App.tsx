@@ -369,10 +369,10 @@ export default function App() {
           {/* LEFT: title */}
           <div className="flex flex-col items-start">
             <h1 className="text-2xl sm:text-4xl font-extrabold leading-tight">
-              World Post
+              Verbeth
             </h1>
             <div className="text-xs text-gray-400 pl-0.5 mt-1">
-              powered by Verbeth
+              powered by the world computer
             </div>
           </div>
           {/* RIGHT: auth buttons - EOA only */}

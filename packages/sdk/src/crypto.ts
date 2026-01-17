@@ -1,19 +1,22 @@
 // packages/sdk/src/crypto.ts
+// CLEANED VERSION - duplexTopics and legacy functions removed
 
 /**
  * Cryptographic utilities for Verbeth.
  * 
  * This module handles:
  * - Handshake encryption/decryption (NaCl box - one-time exchange)
- * - Topic derivation (HKDF + Keccak)
  * - Tag computation for handshake responses
  * 
  * NOTE: Post-handshake message encryption uses the ratchet module.
  * See `ratchet/encrypt.ts` and `ratchet/decrypt.ts` for Double Ratchet.
+ * 
+ * NOTE: Topic derivation is now handled entirely by the ratchet module.
+ * See `ratchet/kdf.ts` for `deriveTopicFromDH`.
  */
 
 import nacl from 'tweetnacl';
-import { keccak256, toUtf8Bytes, dataSlice } from 'ethers';
+import { keccak256, toUtf8Bytes } from 'ethers';
 import { sha256 } from '@noble/hashes/sha2';
 import { hkdf } from '@noble/hashes/hkdf';
 import { 
@@ -83,55 +86,6 @@ export function decryptStructuredPayload<T>(
 }
 
 // =============================================================================
-// Legacy Message Encryption (for backward compatibility / log decryption)
-// =============================================================================
-
-/**
- * Encrypts a message using NaCl box.
- * 
- * @deprecated For new messages, use ratchetEncrypt() from the ratchet module.
- * This function is kept for backward compatibility with legacy logs.
- */
-export function encryptMessage(
-  message: string,
-  recipientPublicKey: Uint8Array,
-  ephemeralSecretKey: Uint8Array,
-  ephemeralPublicKey: Uint8Array,
-  staticSigningSecretKey?: Uint8Array,
-  staticSigningPublicKey?: Uint8Array
-): string {
-  const payload: MessagePayload = { content: message };
-  return encryptStructuredPayload(
-    payload,
-    recipientPublicKey,
-    ephemeralSecretKey,
-    ephemeralPublicKey,
-    staticSigningSecretKey,
-    staticSigningPublicKey
-  );
-}
-
-/**
- * Decrypts a message using NaCl box.
- * 
- * @deprecated For new messages, use ratchetDecrypt() from the ratchet module.
- * This function is kept for backward compatibility with legacy logs.
- */
-export function decryptMessage(
-  payloadJson: string,
-  recipientSecretKey: Uint8Array,
-  staticSigningPublicKey?: Uint8Array
-): string | null {
-  const result = decryptStructuredPayload(
-    payloadJson,
-    recipientSecretKey,
-    (obj) => obj as MessagePayload,
-    staticSigningPublicKey
-  );
-  return result ? result.content : null;
-}
-
-// =============================================================================
 // Handshake Response Decryption
 // =============================================================================
 
@@ -154,11 +108,7 @@ export function decryptHandshakeResponse(
         ephemeralPubKey: Uint8Array.from(Buffer.from(obj.ephemeralPubKey, 'base64')),
         note: obj.note,
         identityProof: obj.identityProof,
-        topicInfo: obj.topicInfo ? {
-          out: obj.topicInfo.out,
-          in: obj.topicInfo.in,
-          chk: obj.topicInfo.chk
-        } : undefined
+        // topicInfo removed - no longer needed
       };
     }
   );
@@ -227,66 +177,13 @@ export function computeTagFromInitiator(
 }
 
 // =============================================================================
-// Topic Derivation
+// REMOVED FUNCTIONS:
 // =============================================================================
-
-/**
- * Derives a bytes32 topic from the shared secret via HKDF(SHA256) + Keccak-256.
- * - info: domain separation (e.g., "verbeth:topic-out:v1")
- * - salt: recommended to use a tag as salt (stable and shareable)
- */
-function deriveTopic(
-  shared: Uint8Array,
-  info: string,
-  salt?: Uint8Array
-): `0x${string}` {
-  const okm = hkdf(sha256, shared, salt ?? new Uint8Array(0), new TextEncoder().encode(info), 32);
-  return keccak256(okm) as `0x${string}`;
-}
-
-/**
- * Derives long-term shared secret from identity keys.
- */
-export function deriveLongTermShared(
-  myIdentitySecretKey: Uint8Array,
-  theirIdentityPublicKey: Uint8Array
-): Uint8Array {
-  return nacl.scalarMult(myIdentitySecretKey, theirIdentityPublicKey);
-}
-
-/**
- * Directional duplex topics (Initiator-Responder, Responder-Initiator).
- * Recommended salt: tag (bytes)
- */
-export function deriveDuplexTopics(
-  myIdentitySecretKey: Uint8Array,
-  theirIdentityPublicKey: Uint8Array,
-  salt?: Uint8Array
-): { topicOut: `0x${string}`; topicIn: `0x${string}`; checksum: `0x${string}` } {
-  const shared = deriveLongTermShared(myIdentitySecretKey, theirIdentityPublicKey);
-  const topicOut = deriveTopic(shared, "verbeth:topic-out:v1", salt);
-  const topicIn  = deriveTopic(shared, "verbeth:topic-in:v1",  salt);
-  const chkFull = keccak256(Buffer.concat([
-    toUtf8Bytes("verbeth:topic-chk:v1"),
-    Buffer.from(topicOut.slice(2), 'hex'),
-    Buffer.from(topicIn.slice(2),  'hex'),
-  ]));
-  const checksum = dataSlice(chkFull as `0x${string}`, 8) as `0x${string}`;
-  return { topicOut, topicIn, checksum };
-}
-
-/**
- * Verifies duplex topics checksum.
- */
-export function verifyDuplexTopicsChecksum(
-  topicOut: `0x${string}`,
-  topicIn: `0x${string}`,
-  checksum: `0x${string}`
-): boolean {
-  const chkFull = keccak256(Buffer.concat([
-    toUtf8Bytes("verbeth:topic-chk:v1"),
-    Buffer.from(topicOut.slice(2), 'hex'),
-    Buffer.from(topicIn.slice(2),  'hex'),
-  ]));
-  return dataSlice(chkFull as `0x${string}`, 8) === checksum;
-}
+// 
+// deriveLongTermShared() - was used for duplexTopics, now use ratchet/kdf.ts dh()
+// deriveDuplexTopics() - replaced by deriveTopicFromDH() in ratchet/kdf.ts
+// verifyDuplexTopicsChecksum() - no longer needed, topics derive from DH
+// encryptMessage() - deprecated, use ratchetEncrypt() from ratchet module
+// decryptMessage() - deprecated, use ratchetDecrypt() from ratchet module
+//
+// =============================================================================

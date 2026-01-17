@@ -1,7 +1,11 @@
 // packages/sdk/src/verify.ts
+// CLEANED VERSION - duplexTopics verification removed
+
 import { JsonRpcProvider, getBytes, hexlify, getAddress } from "ethers";
-import { decryptAndExtractHandshakeKeys, computeTagFromInitiator, verifyDuplexTopicsChecksum, deriveDuplexTopics } from "./crypto.js";
-import { HandshakeLog, HandshakeResponseLog, IdentityProof, TopicInfoWire, DuplexTopics, IdentityContext } from "./types.js";
+import { decryptAndExtractHandshakeKeys, computeTagFromInitiator } from "./crypto.js";
+// REMOVED: verifyDuplexTopicsChecksum, deriveDuplexTopics imports
+import { HandshakeLog, HandshakeResponseLog, IdentityProof, IdentityContext } from "./types.js";
+// REMOVED: TopicInfoWire, DuplexTopics from imports
 import { parseHandshakePayload, parseHandshakeKeys } from "./payload.js";
 import {
   Rpcish,
@@ -44,14 +48,6 @@ export async function verifyHandshakeIdentity(
       console.error("Failed to parse unified pubKeys from handshake event");
       return false;
     }
-
-    // // 6492 awareness
-    // const dp: any = content.identityProof;
-    // const sigPrimary: string = dp.signature;
-    // const sig6492: string | undefined = dp.signature6492 ?? dp.erc6492;
-    // const uses6492 = hasERC6492Suffix(sigPrimary) || !!sig6492;
-
-    // const isContract1271 = await isSmartContract1271(handshakeEvent.sender, provider);
 
     return await verifyIdentityProof(
       content.identityProof,
@@ -98,17 +94,11 @@ export async function verifyHandshakeResponseIdentity(
       return false;
     }
 
-    // 6492 awareness
     const dpAny: any = extractedResponse.identityProof;
     if (!dpAny) {
       console.error("Missing identityProof in handshake response payload");
       return false;
     }
-    // const sigPrimary: string = dpAny.signature;
-    // const sig6492: string | undefined = dpAny.signature6492 ?? dpAny.erc6492;
-    // const uses6492 = hasERC6492Suffix(sigPrimary) || !!sig6492;
-
-    // const isContract1271 = await isSmartContract1271(responseEvent.responder,provider);
 
     const expectedKeys = {
       identityPubKey: extractedResponse.identityPubKey,
@@ -204,7 +194,6 @@ export async function verifyIdentityProof(
     }
 
     // anti replay cross chain or cross dapp:
-    // if ctx.* is provided, require it to be present in the signed message and match.
     if (typeof ctx?.chainId === "number") {
       if (typeof parsed.chainId !== "number" || parsed.chainId !== ctx.chainId) {
         console.error("ChainId mismatch");
@@ -311,35 +300,11 @@ export async function verifyAndExtractHandshakeResponseKeys(
   };
 }
 
-/**
- * Verify and derive duplex topics from a long-term DH secret.
- * - Accepts either `tag` (inResponseTo) or a raw salt as KDF input.
- * - Recomputes topicOut/topicIn deterministically from the identity DH.
- * - If topicInfo is provided (from HSR), also verify the checksum.
- * - Used by the initiator after decrypting a HandshakeResponse to confirm responder’s topics.
- */
-export function verifyDerivedDuplexTopics({
-  myIdentitySecretKey,
-  theirIdentityPubKey,     
-  tag,            
-  salt,                     
-  topicInfo
-}: {
-  myIdentitySecretKey: Uint8Array;
-  theirIdentityPubKey: Uint8Array;
-  tag?: `0x${string}`;
-  salt?: Uint8Array;
-  topicInfo?: TopicInfoWire;
-}): { topics: DuplexTopics; ok?: boolean } {
-  const s = salt ?? (tag ? getBytes(tag) : undefined);
-  if (!s) throw new Error("Provide either salt or inResponseTo");
-
-  const { topicOut, topicIn, checksum } = deriveDuplexTopics(
-    myIdentitySecretKey,
-    theirIdentityPubKey,
-    s
-  );
-
-  const ok = topicInfo ? verifyDuplexTopicsChecksum(topicOut, topicIn, topicInfo.chk) : undefined;
-  return { topics: { topicOut, topicIn }, ok };
-}
+// =============================================================================
+// REMOVED FUNCTIONS:
+// =============================================================================
+// 
+// verifyDerivedDuplexTopics() - removed, no longer using identity-based topics
+//                               Topics now derive from ephemeral DH in ratchet/kdf.ts
+//
+// =============================================================================

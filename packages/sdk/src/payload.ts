@@ -1,5 +1,8 @@
 // packages/sdk/src/payload.ts
-import { IdentityProof, TopicInfoWire } from './types.js'; 
+// CLEANED VERSION - TopicInfoWire removed
+
+import { IdentityProof } from './types.js'; 
+// REMOVED: TopicInfoWire import
 
 
 export interface EncryptedPayload {
@@ -158,12 +161,18 @@ export interface HandshakePayload {
   plaintextPayload: string;
 }
 
+/**
+ * HandshakeResponseContent - CLEANED
+ * 
+ * REMOVED: topicInfo field - topics are now derived from ephemeral DH
+ * in the caller (VerbethClient.acceptHandshake and EventProcessorService)
+ */
 export interface HandshakeResponseContent {
   unifiedPubKeys: Uint8Array;      // 65 bytes: version + X25519 + Ed25519
   ephemeralPubKey: Uint8Array;
   note?: string;
   identityProof: IdentityProof;
-  topicInfo?: TopicInfoWire; 
+  // REMOVED: topicInfo?: TopicInfoWire;
 }
 
 export function encodeHandshakePayload(payload: HandshakePayload): Uint8Array {
@@ -184,20 +193,26 @@ export function decodeHandshakePayload(encoded: Uint8Array): HandshakePayload {
   };
 }
 
+/**
+ * Encodes HandshakeResponseContent - CLEANED
+ * 
+ * REMOVED: topicInfo encoding - no longer included in handshake response
+ */
 export function encodeHandshakeResponseContent(content: HandshakeResponseContent): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({
     unifiedPubKeys: Buffer.from(content.unifiedPubKeys).toString('base64'),
     ephemeralPubKey: Buffer.from(content.ephemeralPubKey).toString('base64'),
     note: content.note,
-    identityProof: content.identityProof,  
-    topicInfo: content.topicInfo ? {
-        out: content.topicInfo.out,
-        in: content.topicInfo.in,
-        chk: content.topicInfo.chk
-      } : undefined
-    }));
-  }
+    identityProof: content.identityProof,
+    // REMOVED: topicInfo encoding
+  }));
+}
 
+/**
+ * Decodes HandshakeResponseContent - CLEANED
+ * 
+ * REMOVED: topicInfo decoding - no longer expected in handshake response
+ */
 export function decodeHandshakeResponseContent(encoded: Uint8Array): HandshakeResponseContent {
   const json = new TextDecoder().decode(encoded);
   const obj = JSON.parse(json);
@@ -211,11 +226,7 @@ export function decodeHandshakeResponseContent(encoded: Uint8Array): HandshakeRe
     ephemeralPubKey: Uint8Array.from(Buffer.from(obj.ephemeralPubKey, 'base64')),
     note: obj.note,
     identityProof: obj.identityProof,
-    topicInfo: obj.topicInfo ? {
-      out: obj.topicInfo.out,
-      in: obj.topicInfo.in,
-      chk: obj.topicInfo.chk
-    } : undefined
+    // REMOVED: topicInfo decoding
   };
 }
 
@@ -236,7 +247,9 @@ export function createHandshakePayload(
 }
 
 /**
- * Creates HandshakeResponseContent from separate identity keys
+ * Creates HandshakeResponseContent from separate identity keys - CLEANED
+ * 
+ * REMOVED: topicInfo parameter - topics are now derived from ephemeral DH
  */
 export function createHandshakeResponseContent(
   identityPubKey: Uint8Array,
@@ -244,7 +257,7 @@ export function createHandshakeResponseContent(
   ephemeralPubKey: Uint8Array,
   note?: string,
   identityProof?: IdentityProof,
-  topicInfo?: TopicInfoWire 
+  // REMOVED: topicInfo?: TopicInfoWire parameter
 ): HandshakeResponseContent {
   if (!identityProof) {
     throw new Error("Identity proof is now mandatory for handshake responses");
@@ -255,7 +268,7 @@ export function createHandshakeResponseContent(
     ephemeralPubKey,
     note,
     identityProof,
-    topicInfo
+    // REMOVED: topicInfo field
   };
 }
 

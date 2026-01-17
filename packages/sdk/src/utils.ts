@@ -1,4 +1,5 @@
 // packages/sdk/src/utils.ts
+// CLEANED VERSION - pickOutboundTopic and DuplexTopics removed
 
 import {
   Contract,
@@ -14,7 +15,7 @@ import {
   defineChain,
   type PublicClient,
 } from "viem";
-import { DuplexTopics } from "./types.js";
+// REMOVED: DuplexTopics import no longer needed
 
 
 export function parseBindingMessage(message: string): {
@@ -179,7 +180,11 @@ export async function isSmartContract1271(
   }
 }
 
-// picks the correct outbound topic from a DuplexTopics structure
-export function pickOutboundTopic(isInitiator: boolean, t: DuplexTopics): `0x${string}` {
-  return isInitiator ? t.topicOut : t.topicIn;
-}
+// =============================================================================
+// REMOVED FUNCTIONS:
+// =============================================================================
+// 
+// pickOutboundTopic() - removed, no longer using DuplexTopics structure
+//                       Topics are now derived directly from ephemeral DH
+//
+// =============================================================================

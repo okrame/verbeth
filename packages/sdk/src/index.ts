@@ -9,8 +9,6 @@ export * from './utils.js';
 export * from './identity.js';
 export * from './executor.js';
 
-export { decryptMessage as decryptLog } from './crypto.js';
-
 export {
   encodeUnifiedPubKeys,
   decodeUnifiedPubKeys,
@@ -23,7 +21,6 @@ export {
 
 export {
   decryptAndExtractHandshakeKeys,
-  decryptMessage,
   decryptHandshakeResponse
 } from './crypto.js';
 
@@ -73,3 +70,4 @@ export type {
 } from './client/index.js';
 
 export * from './ratchet/index.js';
+export { dh, deriveTopicFromDH } from './ratchet/kdf.js';

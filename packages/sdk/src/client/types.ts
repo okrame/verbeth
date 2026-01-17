@@ -9,7 +9,7 @@
 
 import type { Signer } from 'ethers';
 import type { IExecutor } from '../executor.js';
-import type { IdentityKeyPair, IdentityProof, DuplexTopics } from '../types.js';
+import type { IdentityKeyPair, IdentityProof } from '../types.js';
 import type { RatchetSession } from '../ratchet/types.js';
 import type nacl from 'tweetnacl';
 
@@ -31,7 +31,8 @@ export interface HandshakeResult {
 
 export interface HandshakeResponseResult {
   tx: any;
-  duplexTopics: DuplexTopics;
+  topicOutbound: `0x${string}`;  
+  topicInbound: `0x${string}`;  
   tag: `0x${string}`;
   salt: Uint8Array;
   responderEphemeralSecret: Uint8Array; //  must persist as dhMySecretKey in ratchet

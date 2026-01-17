@@ -1,10 +1,14 @@
 // src/services/EventProcessorService.ts
+// CLEANED VERSION - duplexTopics removed, topics derived from ephemeral DH
 
 /**
  * Event Processing Service.
  *
  * Handles decoding, verification, decryption, and persistence of blockchain events.
  * Uses VerbethClient SDK methods for simplified session management.
+ * 
+ * CHANGE: processHandshakeResponseEvent now derives topics from ephemeral DH
+ * instead of using verifyDerivedDuplexTopics.
  */
 
 import { AbiCoder, getBytes } from "ethers";
@@ -17,8 +21,11 @@ import {
   verifyHandshakeIdentity,
   decodeUnifiedPubKeys,
   verifyAndExtractHandshakeResponseKeys,
-  pickOutboundTopic,
+  // REMOVED: pickOutboundTopic
   initSessionAsInitiator,
+  // NEW: for topic derivation
+  dh,
+  deriveTopicFromDH,
 } from "@verbeth/sdk";
 
 import { dbService } from "./DbService.js";
@@ -204,7 +211,8 @@ export async function processHandshakeEvent(
 }
 
 // =============================================================================
-// Handshake Response Processing (unchanged - creates new session)
+// Handshake Response Processing
+// UPDATED: Now derives topics from ephemeral DH instead of identity keys
 // =============================================================================
 
 export async function processHandshakeResponseEvent(
@@ -263,21 +271,16 @@ export async function processHandshakeResponseEvent(
       return null;
     }
 
-    // Derive duplex topics
-    const { verifyDerivedDuplexTopics } = await import("@verbeth/sdk");
-    const { topics, ok } = verifyDerivedDuplexTopics({
-      myIdentitySecretKey: identityKeyPair.secretKey,
-      theirIdentityPubKey: result.keys.identityPubKey,
-      tag: inResponseTo as `0x${string}`,
-    });
-
-    if (ok === false) {
-      onLog(`✗ Topic checksum mismatch in handshake response`);
-      return null;
-    }
-
-    const topicOutbound = pickOutboundTopic(true, topics);
-    const topicInbound = pickOutboundTopic(false, topics);
+    // =========================================================================
+    // NEW: Derive initial topics from ephemeral shared secret
+    // This replaces the old verifyDerivedDuplexTopics + pickOutboundTopic
+    // =========================================================================
+    const ephemeralShared = dh(initiatorEphemeralSecret, result.keys.ephemeralPubKey);
+    const salt = getBytes(inResponseTo);  // Use tag as salt
+    
+    // Topics are derived from initiator's perspective (no swap needed here)
+    const topicOutbound = deriveTopicFromDH(ephemeralShared, 'outbound', salt);
+    const topicInbound = deriveTopicFromDH(ephemeralShared, 'inbound', salt);
 
     // Initialize ratchet session as initiator
     const ratchetSession = initSessionAsInitiator({

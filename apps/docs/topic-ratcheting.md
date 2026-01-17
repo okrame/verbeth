@@ -134,6 +134,16 @@ Enables O(1) lookups by any topic variant.
 
 ## Typical Flow
 
+Handshake Exchange
+       ↓
+Seed Topic (from ephemeral DH) ← both parties compute this
+       ↓
+First Message (Alice → Bob on seed topic, includes new DH pub)
+       ↓
+DH Ratchet → New Topics (from message DH)
+       ↓
+Subsequent messages use ratcheted topics
+
 ```
 Alice (Initiator)                          Bob (Responder)
 ─────────────────                          ────────────────

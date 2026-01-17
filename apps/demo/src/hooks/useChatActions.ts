@@ -1,4 +1,5 @@
 // src/hooks/useChatActions.ts
+// CLEANED VERSION - pickOutboundTopic removed, topics come directly from SDK
 
 /**
  * Chat Actions Hook.
@@ -8,12 +9,15 @@
  * - sendMessageToContact
  * - Retry/cancel failed messages
  * - Queue status management
+ * 
+ * CHANGE: acceptHandshake now receives topics directly from VerbethClient
+ * instead of using pickOutboundTopic on duplexTopics.
  */
 
 import { useCallback } from "react";
 import { hexlify } from "ethers";
 import {
-  pickOutboundTopic,
+  // REMOVED: pickOutboundTopic - no longer needed
   VerbethClient,
   initSessionAsResponder,
 } from "@verbeth/sdk";
@@ -159,6 +163,8 @@ export const useChatActions = ({
   /**
    * Accept a handshake from another user.
    * Creates ratchet session and establishes contact.
+   * 
+   * UPDATED: Now receives topicOutbound/topicInbound directly from SDK
    */
   const acceptHandshake = useCallback(
     async (handshake: any, responseMessage: string) => {
@@ -170,7 +176,9 @@ export const useChatActions = ({
       try {
         const {
           tx,
-          duplexTopics,
+          // CHANGED: Now receive topics directly instead of duplexTopics
+          topicOutbound,
+          topicInbound,
           responderEphemeralSecret,
           responderEphemeralPublic,
         } = await verbethClient.acceptHandshake(
@@ -179,8 +187,11 @@ export const useChatActions = ({
           responseMessage
         );
 
-        const topicOutbound = pickOutboundTopic(false, duplexTopics);
-        const topicInbound = pickOutboundTopic(true, duplexTopics);
+        // REMOVED: Topic selection via pickOutboundTopic
+        // const topicOutbound = pickOutboundTopic(false, duplexTopics);
+        // const topicInbound = pickOutboundTopic(true, duplexTopics);
+        
+        // Topics now come directly from the SDK
 
         const ratchetSession = initSessionAsResponder({
           myAddress: verbethClient.userAddress,

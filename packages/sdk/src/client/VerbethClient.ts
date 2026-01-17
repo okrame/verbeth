@@ -1,4 +1,5 @@
 // packages/sdk/src/client/VerbethClient.ts
+// CLEANED VERSION - duplexTopics removed, topics derived from ephemeral DH
 
 /**
  * High-level client for Verbeth E2EE messaging.
@@ -9,34 +10,17 @@
  * - Two-phase commit for message sending
  * - Transaction confirmation handling
  * 
- * @example
- * ```typescript
- * // Create client
- * const client = new VerbethClient({
- *   executor,
- *   identityKeyPair,
- *   identityProof,
- *   signer,
- *   address: '0x...'
- * });
- * 
- * // Configure storage (required for messaging)
- * client.setSessionStore(sessionStore);
- * client.setPendingStore(pendingStore);
- * 
- * // Send a message
- * const result = await client.sendMessage(conversationId, 'Hello!');
- * 
- * // On confirmation event
- * const confirmed = await client.confirmTx(txHash);
- * ```
+ * CHANGE: acceptHandshake now returns topicOutbound/topicInbound directly,
+ * derived from the ephemeral DH shared secret (same approach as post-handshake
+ * topic ratcheting).
  */
 
-import { hexlify } from 'ethers';
+import { hexlify, getBytes } from 'ethers';
 import { initiateHandshake, respondToHandshake } from '../send.js';
-import { deriveDuplexTopics } from '../crypto.js';
+// REMOVED: deriveDuplexTopics import
 import type { IExecutor } from '../executor.js';
-import type { IdentityKeyPair, IdentityProof, DuplexTopics } from '../types.js';
+import type { IdentityKeyPair, IdentityProof } from '../types.js';
+// REMOVED: DuplexTopics from types
 import type { Signer } from 'ethers';
 
 import * as crypto from '../crypto.js';
@@ -50,6 +34,7 @@ import { ratchetEncrypt } from '../ratchet/encrypt.js';
 import { ratchetDecrypt } from '../ratchet/decrypt.js';
 import { packageRatchetPayload, parseRatchetPayload, isRatchetPayload } from '../ratchet/codec.js';
 import { verifyMessageSignature } from '../ratchet/auth.js';
+import { dh, deriveTopicFromDH } from '../ratchet/kdf.js';  // NEW: for topic derivation
 import type { RatchetSession } from '../ratchet/types.js';
 
 import { SessionManager } from './SessionManager.js';
@@ -142,17 +127,18 @@ export class VerbethClient {
   /**
    * Accepts a handshake from an initiator.
    * 
-   * Derives duplex topics for the conversation and returns ephemeral keys
-   * needed for ratchet session initialization.
+   * UPDATED: Now derives topics from ephemeral DH shared secret (same approach
+   * as post-handshake topic ratcheting). Returns topicOutbound/topicInbound
+   * directly instead of duplexTopics structure.
    * 
    * @param initiatorEphemeralPubKey - Initiator's ephemeral public key from handshake event
-   * @param initiatorIdentityPubKey - Initiator's long-term X25519 identity key
+   * @param initiatorIdentityPubKey - Initiator's long-term X25519 identity key (kept for future use)
    * @param note - Response message to send back
-   * @returns Transaction, derived duplex topics, and ephemeral keys for ratchet
+   * @returns Transaction, derived topics, and ephemeral keys for ratchet
    */
   async acceptHandshake(
     initiatorEphemeralPubKey: Uint8Array,
-    initiatorIdentityPubKey: Uint8Array,
+    initiatorIdentityPubKey: Uint8Array,  // Kept for potential future use
     note: string
   ): Promise<HandshakeResponseResult> {
     const { 
@@ -168,18 +154,24 @@ export class VerbethClient {
       note,
       identityProof: this.identityProof,
       signer: this.signer,
-      initiatorIdentityPubKey,
+      // REMOVED: initiatorIdentityPubKey - no longer used for topic derivation
     });
 
-    const duplexTopics = deriveDuplexTopics(
-      this.identityKeyPair.secretKey,
-      initiatorIdentityPubKey,
-      salt
-    );
+    // NEW: Derive initial topics from ephemeral shared secret
+    // This is consistent with post-handshake topic ratcheting in ratchet/kdf.ts
+    const ephemeralShared = dh(responderEphemeralSecret, initiatorEphemeralPubKey);
+    
+    // Use salt (the tag) for topic derivation, same as conversationId derivation
+    // Labels are from INITIATOR's perspective, so we SWAP for responder:
+    // - Responder's outbound = initiator's inbound
+    // - Responder's inbound = initiator's outbound
+    const topicOutbound = deriveTopicFromDH(ephemeralShared, 'inbound', salt);
+    const topicInbound = deriveTopicFromDH(ephemeralShared, 'outbound', salt);
 
     return { 
       tx, 
-      duplexTopics, 
+      topicOutbound,
+      topicInbound,
       tag,
       salt,
       responderEphemeralSecret,

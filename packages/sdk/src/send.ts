@@ -1,10 +1,14 @@
 // packages/sdk/src/send.ts
+// CLEANED VERSION - topicInfo removed from handshake response
 
 /**
  * Handshake and message sending functions.
  * 
  * NOTE: sendEncryptedMessage is REMOVED - use ratchet for established sessions.
  * Only handshake functions remain here.
+ * 
+ * CHANGE: respondToHandshake no longer computes or includes topicInfo.
+ * Topics are now derived from ephemeral DH by the caller.
  */
 
 import { 
@@ -15,14 +19,16 @@ import {
   getBytes
 } from "ethers";
 import nacl from 'tweetnacl';
-import { encryptStructuredPayload, deriveDuplexTopics } from './crypto.js';
+import { encryptStructuredPayload } from './crypto.js';
+// REMOVED: deriveDuplexTopics import
 import { 
   HandshakeContent, 
   serializeHandshakeContent,
   encodeUnifiedPubKeys,
   createHandshakeResponseContent,
 } from './payload.js';
-import { IdentityKeyPair, IdentityProof, TopicInfoWire } from './types.js';  
+import { IdentityKeyPair, IdentityProof } from './types.js';
+// REMOVED: TopicInfoWire from imports
 import { IExecutor } from './executor.js';
 import { computeTagFromResponder } from './crypto.js';
 
@@ -91,6 +97,9 @@ export async function initiateHandshake({
  * Responds to a handshake with unified keys and mandatory identity proof.
  * Executor-agnostic: works with EOA, UserOp, and Direct EntryPoint (for tests)
  * 
+ * CHANGE: No longer computes or returns topicInfo. Topics are derived from
+ * ephemeral DH by the caller using deriveTopicFromDH().
+ * 
  * @returns Transaction, tag, salt, AND ephemeral keys (MUST be persisted for ratchet session)
  */
 export async function respondToHandshake({
@@ -100,7 +109,7 @@ export async function respondToHandshake({
   note,
   identityProof,
   signer,
-  initiatorIdentityPubKey,
+  // REMOVED: initiatorIdentityPubKey - no longer needed for topic derivation
 }: {
   executor: IExecutor;
   initiatorEphemeralPubKey: Uint8Array;
@@ -108,7 +117,7 @@ export async function respondToHandshake({
   note?: string;
   identityProof: IdentityProof;
   signer: Signer;
-  initiatorIdentityPubKey?: Uint8Array;
+  // REMOVED: initiatorIdentityPubKey?: Uint8Array;
 }): Promise<{
   tx: any;
   salt: Uint8Array;
@@ -152,24 +161,19 @@ export async function respondToHandshake({
   );
   const salt: Uint8Array = getBytes(inResponseTo);
 
-  let topicInfo: TopicInfoWire | undefined = undefined;
-  if (initiatorIdentityPubKey) {
-    const { topicOut, topicIn, checksum } = deriveDuplexTopics(
-      responderIdentityKeyPair.secretKey,
-      initiatorIdentityPubKey,
-      salt
-    );
-    topicInfo = { out: topicOut, in: topicIn, chk: checksum };
-  }
+  // REMOVED: topicInfo computation - caller will derive topics from ephemeral DH
+  // let topicInfo: TopicInfoWire | undefined = undefined;
+  // if (initiatorIdentityPubKey) { ... }
 
   // Response content includes ratchetKeyPair.publicKey (hidden inside encrypted payload)
+  // UPDATED: No longer includes topicInfo
   const responseContent = createHandshakeResponseContent(
     responderIdentityKeyPair.publicKey,        // X25519 identity
     responderIdentityKeyPair.signingPublicKey, // Ed25519 signing
     ratchetKeyPair.publicKey,                  // First DH ratchet key (INSIDE payload)
     note,
-    identityProof,
-    topicInfo
+    identityProof
+    // REMOVED: topicInfo parameter
   );
   
   // Encrypt using ratchetKeyPair (the epk in encrypted payload = ratchetKeyPair.publicKey)

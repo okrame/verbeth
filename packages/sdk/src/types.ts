@@ -23,22 +23,6 @@ export interface HandshakeResponseLog {
   ciphertext: string; // Contains unified pubKeys + identityProof encrypted
 }
 
-// Duplex topics structure
-export interface DuplexTopics {
-  /** Initiator to Responder */
-  topicOut: `0x${string}`;
-  /** Responder to Initiator */
-  topicIn: `0x${string}`;
-}
-
-// for HSR
-export interface TopicInfoWire {
-  out: `0x${string}`;
-  in: `0x${string}`;
-  // short checksum 
-  chk: `0x${string}`;
-}
-
 // Identity key pair structure
 export interface IdentityKeyPair {
   // X25519 keys per encryption/decryption
