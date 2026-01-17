@@ -6,8 +6,7 @@
  * Manages messaging state (messages, contacts, pendingHandshakes) and
  * orchestrates event processing via EventProcessorService.
  * 
- * SIMPLIFIED: Event processing now uses VerbethClient which handles
- * session management internally.
+ * Uses VerbethClient for session management and decryption.
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -78,7 +77,7 @@ export const useMessageProcessor = ({
   }, [address, onLog]);
 
   // ===========================================================================
-  // Event Processing - SIMPLIFIED
+  // Event Processing
   // ===========================================================================
 
   const processEvents = useCallback(
@@ -116,11 +115,11 @@ export const useMessageProcessor = ({
           }
 
           // -----------------------------------------------------------------
-          // HANDSHAKE RESPONSE
+          // HANDSHAKE RESPONSE - requires verbethClient for session creation
           // -----------------------------------------------------------------
           case "handshake_response": {
-            if (!identityKeyPair) {
-              onLog(`❌ Cannot process handshake response: identityKeyPair is null`);
+            if (!identityKeyPair || !verbethClient) {
+              onLog(`❌ Cannot process handshake response: missing dependencies`);
               break;
             }
 
@@ -128,8 +127,8 @@ export const useMessageProcessor = ({
               event,
               address,
               readProvider,
-              identityKeyPair,
               identityContext,
+              verbethClient,
               onLog
             );
 
@@ -193,8 +192,6 @@ export const useMessageProcessor = ({
           }
         }
       }
-
-      // Note: No need to persist session cache anymore - SDK handles it internally
     },
     [address, readProvider, identityKeyPair, identityContext, emitterAddress, verbethClient, onLog]
   );

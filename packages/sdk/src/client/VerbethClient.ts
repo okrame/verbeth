@@ -6,21 +6,16 @@
  * 
  * Provides a unified API for:
  * - Handshake operations (sendHandshake, acceptHandshake)
+ * - Session creation for both initiator and responder
  * - Message encryption/decryption with session management
  * - Two-phase commit for message sending
  * - Transaction confirmation handling
- * 
- * CHANGE: acceptHandshake now returns topicOutbound/topicInbound directly,
- * derived from the ephemeral DH shared secret (same approach as post-handshake
- * topic ratcheting).
  */
 
 import { hexlify, getBytes } from 'ethers';
 import { initiateHandshake, respondToHandshake } from '../send.js';
-// REMOVED: deriveDuplexTopics import
 import type { IExecutor } from '../executor.js';
 import type { IdentityKeyPair, IdentityProof } from '../types.js';
-// REMOVED: DuplexTopics from types
 import type { Signer } from 'ethers';
 
 import * as crypto from '../crypto.js';
@@ -34,7 +29,8 @@ import { ratchetEncrypt } from '../ratchet/encrypt.js';
 import { ratchetDecrypt } from '../ratchet/decrypt.js';
 import { packageRatchetPayload, parseRatchetPayload, isRatchetPayload } from '../ratchet/codec.js';
 import { verifyMessageSignature } from '../ratchet/auth.js';
-import { dh, deriveTopicFromDH } from '../ratchet/kdf.js';  // NEW: for topic derivation
+import { dh, deriveTopicFromDH } from '../ratchet/kdf.js';
+import { initSessionAsInitiator, initSessionAsResponder } from '../ratchet/session.js';
 import type { RatchetSession } from '../ratchet/types.js';
 
 import { SessionManager } from './SessionManager.js';
@@ -51,6 +47,21 @@ import type {
   ConfirmResult,
   SerializedSessionInfo,
 } from './types.js';
+
+export interface CreateInitiatorSessionParams {
+  contactAddress: string;
+  initiatorEphemeralSecret: Uint8Array;
+  responderEphemeralPubKey: Uint8Array;
+  inResponseToTag: `0x${string}`;
+}
+
+export interface CreateResponderSessionParams {
+  contactAddress: string;
+  responderEphemeralSecret: Uint8Array;
+  responderEphemeralPublic: Uint8Array;
+  initiatorEphemeralPubKey: Uint8Array;
+  salt: Uint8Array;
+}
 
 export class VerbethClient {
   private readonly executor: IExecutor;
@@ -72,21 +83,18 @@ export class VerbethClient {
   }
 
   /**
-   * Configure session storage.
-   * Must be called before using prepareMessage/decryptMessage/sendMessage.
+   * to be called before using prepareMessage/decryptMessage/sendMessage.
    */
   setSessionStore(store: SessionStore): void {
     this.sessionManager = new SessionManager(store);
   }
 
   /**
-   * Configure pending message storage.
-   * Must be called before using sendMessage/confirmTx/revertTx.
+   * to be called before using sendMessage/confirmTx/revertTx.
    */
   setPendingStore(store: PendingStore): void {
     this.pendingManager = new PendingManager(store);
   }
-
 
   hasSessionStore(): boolean {
     return !!this.sessionManager;
@@ -101,7 +109,7 @@ export class VerbethClient {
    * Initiates a handshake with a recipient.
    * 
    * Generates an ephemeral keypair for this handshake.
-   * The ephemeralKeyPair.secretKey MUST be stored for ratchet session initialization
+   * The ephemeralKeyPair.secretKey must be stored for ratchet session initialization
    * when the response arrives.
    * 
    * @param recipientAddress - Blockchain address of the recipient
@@ -127,7 +135,7 @@ export class VerbethClient {
   /**
    * Accepts a handshake from an initiator.
    * 
-   * UPDATED: Now derives topics from ephemeral DH shared secret (same approach
+   * Derives topics from ephemeral DH shared secret (same approach
    * as post-handshake topic ratcheting). Returns topicOutbound/topicInbound
    * directly instead of duplexTopics structure.
    * 
@@ -154,19 +162,14 @@ export class VerbethClient {
       note,
       identityProof: this.identityProof,
       signer: this.signer,
-      // REMOVED: initiatorIdentityPubKey - no longer used for topic derivation
     });
 
-    // NEW: Derive initial topics from ephemeral shared secret
-    // This is consistent with post-handshake topic ratcheting in ratchet/kdf.ts
-    const ephemeralShared = dh(responderEphemeralSecret, initiatorEphemeralPubKey);
-    
-    // Use salt (the tag) for topic derivation, same as conversationId derivation
-    // Labels are from INITIATOR's perspective, so we SWAP for responder:
-    // - Responder's outbound = initiator's inbound
-    // - Responder's inbound = initiator's outbound
-    const topicOutbound = deriveTopicFromDH(ephemeralShared, 'inbound', salt);
-    const topicInbound = deriveTopicFromDH(ephemeralShared, 'outbound', salt);
+    const { topicOutbound, topicInbound } = this.deriveTopicsFromDH(
+      responderEphemeralSecret,
+      initiatorEphemeralPubKey,
+      salt,
+      false // responder swaps labels
+    );
 
     return { 
       tx, 
@@ -179,6 +182,106 @@ export class VerbethClient {
     };
   }
 
+  // ===========================================================================
+  // Session Creation - Encapsulates DH and topic derivation
+  // ===========================================================================
+
+  /**
+   * Create a ratchet session as the handshake initiator.
+   * 
+   * Call this after receiving and validating a handshake response.
+   * Handles topic derivation from ephemeral DH internally.
+   * 
+   * @param params - Session creation parameters
+   * @returns Ready-to-save RatchetSession
+   */
+  createInitiatorSession(params: CreateInitiatorSessionParams): RatchetSession {
+    const { contactAddress, initiatorEphemeralSecret, responderEphemeralPubKey, inResponseToTag } = params;
+    
+    const salt = getBytes(inResponseToTag);
+    const { topicOutbound, topicInbound } = this.deriveTopicsFromDH(
+      initiatorEphemeralSecret,
+      responderEphemeralPubKey,
+      salt,
+      true // initiator: no swap
+    );
+
+    return initSessionAsInitiator({
+      myAddress: this.address,
+      contactAddress,
+      myHandshakeEphemeralSecret: initiatorEphemeralSecret,
+      theirResponderEphemeralPubKey: responderEphemeralPubKey,
+      topicOutbound,
+      topicInbound,
+    });
+  }
+
+  /**
+   * Create a ratchet session as the handshake responder.
+   * 
+   * Call this after sending a handshake response.
+   * Handles topic derivation from ephemeral DH internally.
+   * 
+   * @param params - Session creation parameters
+   * @returns Ready-to-save RatchetSession
+   */
+  createResponderSession(params: CreateResponderSessionParams): RatchetSession {
+    const { contactAddress, responderEphemeralSecret, responderEphemeralPublic, initiatorEphemeralPubKey, salt } = params;
+    
+    const { topicOutbound, topicInbound } = this.deriveTopicsFromDH(
+      responderEphemeralSecret,
+      initiatorEphemeralPubKey,
+      salt,
+      false // responder swaps labels
+    );
+
+    return initSessionAsResponder({
+      myAddress: this.address,
+      contactAddress,
+      myResponderEphemeralSecret: responderEphemeralSecret,
+      myResponderEphemeralPublic: responderEphemeralPublic,
+      theirHandshakeEphemeralPubKey: initiatorEphemeralPubKey,
+      topicOutbound,
+      topicInbound,
+    });
+  }
+
+  /**
+   * Derive topics from DH shared secret.
+   * 
+   * @param mySecret - My ephemeral secret key
+   * @param theirPublic - Their ephemeral public key
+   * @param salt - Salt for topic derivation (typically the tag bytes)
+   * @param isInitiator - Whether this party is the initiator (affects label swap)
+   * @returns Derived outbound and inbound topics
+   */
+  private deriveTopicsFromDH(
+    mySecret: Uint8Array,
+    theirPublic: Uint8Array,
+    salt: Uint8Array,
+    isInitiator: boolean
+  ): { topicOutbound: `0x${string}`; topicInbound: `0x${string}` } {
+    const ephemeralShared = dh(mySecret, theirPublic);
+    
+    // Labels are from initiator's perspective
+    // Initiator: outbound='outbound', inbound='inbound'
+    // Responder: outbound='inbound', inbound='outbound' (swapped)
+    if (isInitiator) {
+      return {
+        topicOutbound: deriveTopicFromDH(ephemeralShared, 'outbound', salt),
+        topicInbound: deriveTopicFromDH(ephemeralShared, 'inbound', salt),
+      };
+    } else {
+      return {
+        topicOutbound: deriveTopicFromDH(ephemeralShared, 'inbound', salt),
+        topicInbound: deriveTopicFromDH(ephemeralShared, 'outbound', salt),
+      };
+    }
+  }
+
+  // ===========================================================================
+  // Message Operations
+  // ===========================================================================
 
   /**
    * Prepare a message for sending (encrypt without submitting).
@@ -222,7 +325,6 @@ export class VerbethClient {
       encryptResult.ciphertext
     );
 
-    // Immediately persist session state
     await this.sessionManager.save(encryptResult.session);
 
     const prepared: PreparedMessage = {
@@ -241,7 +343,7 @@ export class VerbethClient {
   }
 
   // Session already saved in prepareMessage for forward secrecy.
-  // This method can be used for additional bookkeeping if needed.
+  // So this method can be used for additional bookkeeping if needed.
   async commitMessage(_prepared: PreparedMessage): Promise<void> {
   }
 

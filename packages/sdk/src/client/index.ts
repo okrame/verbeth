@@ -23,3 +23,8 @@ export type {
   
   SerializedSessionInfo,
 } from './types.js';
+
+export type {
+  CreateInitiatorSessionParams,
+  CreateResponderSessionParams,
+} from './VerbethClient.js';

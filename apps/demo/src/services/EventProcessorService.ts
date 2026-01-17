@@ -1,31 +1,22 @@
 // src/services/EventProcessorService.ts
-// CLEANED VERSION - duplexTopics removed, topics derived from ephemeral DH
+// CLEANED VERSION - uses VerbethClient for session creation
 
 /**
  * Event Processing Service.
  *
  * Handles decoding, verification, decryption, and persistence of blockchain events.
- * Uses VerbethClient SDK methods for simplified session management.
- * 
- * CHANGE: processHandshakeResponseEvent now derives topics from ephemeral DH
- * instead of using verifyDerivedDuplexTopics.
+ * Uses VerbethClient SDK methods for session management and topic derivation.
  */
 
 import { AbiCoder, getBytes } from "ethers";
 import {
   type IdentityContext,
-  type IdentityKeyPair,
   type VerbethClient,
   parseHandshakePayload,
   parseBindingMessage,
   verifyHandshakeIdentity,
   decodeUnifiedPubKeys,
   verifyAndExtractHandshakeResponseKeys,
-  // REMOVED: pickOutboundTopic
-  initSessionAsInitiator,
-  // NEW: for topic derivation
-  dh,
-  deriveTopicFromDH,
 } from "@verbeth/sdk";
 
 import { dbService } from "./DbService.js";
@@ -212,15 +203,15 @@ export async function processHandshakeEvent(
 
 // =============================================================================
 // Handshake Response Processing
-// UPDATED: Now derives topics from ephemeral DH instead of identity keys
+// Uses VerbethClient.createInitiatorSession for topic derivation
 // =============================================================================
 
 export async function processHandshakeResponseEvent(
   event: ProcessedEvent,
   address: string,
   readProvider: any,
-  identityKeyPair: IdentityKeyPair,
   identityContext: IdentityContext,
+  verbethClient: VerbethClient,
   onLog: (msg: string) => void
 ): Promise<HandshakeResponseResult | null> {
   try {
@@ -272,24 +263,13 @@ export async function processHandshakeResponseEvent(
     }
 
     // =========================================================================
-    // NEW: Derive initial topics from ephemeral shared secret
-    // This replaces the old verifyDerivedDuplexTopics + pickOutboundTopic
+    // Create session using VerbethClient (handles topic derivation internally)
     // =========================================================================
-    const ephemeralShared = dh(initiatorEphemeralSecret, result.keys.ephemeralPubKey);
-    const salt = getBytes(inResponseTo);  // Use tag as salt
-    
-    // Topics are derived from initiator's perspective (no swap needed here)
-    const topicOutbound = deriveTopicFromDH(ephemeralShared, 'outbound', salt);
-    const topicInbound = deriveTopicFromDH(ephemeralShared, 'inbound', salt);
-
-    // Initialize ratchet session as initiator
-    const ratchetSession = initSessionAsInitiator({
-      myAddress: address,
+    const ratchetSession = verbethClient.createInitiatorSession({
       contactAddress: contact.address,
-      myHandshakeEphemeralSecret: initiatorEphemeralSecret,
-      theirResponderEphemeralPubKey: result.keys.ephemeralPubKey,
-      topicOutbound,
-      topicInbound,
+      initiatorEphemeralSecret,
+      responderEphemeralPubKey: result.keys.ephemeralPubKey,
+      inResponseToTag: inResponseTo as `0x${string}`,
     });
 
     // Save session to DB (SDK will pick it up via SessionStore)
@@ -343,14 +323,14 @@ export async function processHandshakeResponseEvent(
 }
 
 // =============================================================================
-// Message Processing - FIXED: Uses txHash lookup like old code
+// Message Processing - Uses VerbethClient for decryption
 // =============================================================================
 
 /**
  * Process a message event using VerbethClient's decryptMessage.
  * 
  * For outgoing messages:
- * - Look up pending record by txHash (same as old code)
+ * - Look up pending record by txHash
  * - Finalize the pending record
  * - Use pending.id to update the message (which IS the optimistic message ID)
  */
@@ -388,12 +368,12 @@ export async function processMessageEvent(
     );
 
     // =========================================================================
-    // OUTGOING MESSAGE CONFIRMATION - Use txHash lookup like old code
+    // OUTGOING MESSAGE CONFIRMATION - Use txHash lookup
     // =========================================================================
     if (isOurMessage) {
       onLog(`🔄 Confirming outgoing message: tx=${log.transactionHash.slice(0, 10)}...`);
 
-      // Look up pending by txHash (same as old code!)
+      // Look up pending by txHash
       const pending = await dbService.getPendingOutboundByTxHash(log.transactionHash);
 
       if (pending && pending.status === "submitted") {

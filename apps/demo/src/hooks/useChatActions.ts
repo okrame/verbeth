@@ -1,5 +1,5 @@
 // src/hooks/useChatActions.ts
-// CLEANED VERSION - pickOutboundTopic removed, topics come directly from SDK
+// CLEANED VERSION - uses VerbethClient for all session creation
 
 /**
  * Chat Actions Hook.
@@ -10,17 +10,12 @@
  * - Retry/cancel failed messages
  * - Queue status management
  * 
- * CHANGE: acceptHandshake now receives topics directly from VerbethClient
- * instead of using pickOutboundTopic on duplexTopics.
+ * Uses VerbethClient for session creation.
  */
 
 import { useCallback } from "react";
 import { hexlify } from "ethers";
-import {
-  // REMOVED: pickOutboundTopic - no longer needed
-  VerbethClient,
-  initSessionAsResponder,
-} from "@verbeth/sdk";
+import type { VerbethClient } from "@verbeth/sdk";
 import { dbService } from "../services/DbService.js";
 import {
   Contact,
@@ -162,9 +157,7 @@ export const useChatActions = ({
 
   /**
    * Accept a handshake from another user.
-   * Creates ratchet session and establishes contact.
-   * 
-   * UPDATED: Now receives topicOutbound/topicInbound directly from SDK
+   * Creates ratchet session using VerbethClient and establishes contact.
    */
   const acceptHandshake = useCallback(
     async (handshake: any, responseMessage: string) => {
@@ -175,10 +168,7 @@ export const useChatActions = ({
 
       try {
         const {
-          tx,
-          // CHANGED: Now receive topics directly instead of duplexTopics
-          topicOutbound,
-          topicInbound,
+          salt,
           responderEphemeralSecret,
           responderEphemeralPublic,
         } = await verbethClient.acceptHandshake(
@@ -187,20 +177,13 @@ export const useChatActions = ({
           responseMessage
         );
 
-        // REMOVED: Topic selection via pickOutboundTopic
-        // const topicOutbound = pickOutboundTopic(false, duplexTopics);
-        // const topicInbound = pickOutboundTopic(true, duplexTopics);
-        
-        // Topics now come directly from the SDK
-
-        const ratchetSession = initSessionAsResponder({
-          myAddress: verbethClient.userAddress,
+        // Create session using VerbethClient (handles topic derivation internally)
+        const ratchetSession = verbethClient.createResponderSession({
           contactAddress: handshake.sender,
-          myResponderEphemeralSecret: responderEphemeralSecret,
-          myResponderEphemeralPublic: responderEphemeralPublic,
-          theirHandshakeEphemeralPubKey: handshake.ephemeralPubKey,
-          topicOutbound,
-          topicInbound,
+          responderEphemeralSecret,
+          responderEphemeralPublic,
+          initiatorEphemeralPubKey: handshake.ephemeralPubKey,
+          salt,
         });
 
         // Save session - SDK will pick it up via SessionStore adapter
