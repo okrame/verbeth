@@ -273,15 +273,17 @@ export async function processHandshakeResponseEvent(
     }
 
     // =========================================================================
-    // Create session using VerbethClient (handles topic derivation and KEM internally)
+    // Create session using VerbethClient convenience method
     // =========================================================================
-    const ratchetSession = verbethClient.createInitiatorSession({
+    const ratchetSession = verbethClient.createInitiatorSessionFromHsr({
       contactAddress: contact.address,
-      initiatorEphemeralSecret,
-      responderEphemeralPubKey: result.keys.ephemeralPubKey,
-      inResponseToTag: inResponseTo as `0x${string}`,
-      kemCiphertext: result.keys.kemCiphertext,
-      initiatorKemSecret,
+      myEphemeralSecret: initiatorEphemeralSecret,
+      myKemSecret: initiatorKemSecret,
+      hsrEvent: {
+        inResponseToTag: inResponseTo as `0x${string}`,
+        responderEphemeralPubKey: result.keys.ephemeralPubKey,
+        kemCiphertext: result.keys.kemCiphertext,
+      },
     });
 
     // Save session to DB (SDK will pick it up via SessionStore)

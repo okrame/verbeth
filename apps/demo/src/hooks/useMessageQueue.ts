@@ -2,12 +2,12 @@
 
 /**
  * Message Queue Hook for Sequential Processing with Optimistic UI.
- * 
+ *
  * Uses VerbethClient's two-phase commit pattern:
  * 1. prepareMessage() - get ID and encrypted payload
  * 2. Submit tx manually
  * 3. confirmTx() on chain confirmation
- * 
+ *
  * The key insight: we use prepareMessage()'s ID for BOTH the optimistic
  * message AND the pending record, so confirmTx() can find the right message.
  */
@@ -51,9 +51,6 @@ interface UseMessageQueueProps {
   updateContact: (contact: Contact) => Promise<void>;
 }
 
-// =============================================================================
-// Hook Implementation
-// =============================================================================
 
 export const useMessageQueue = ({
   verbethClient,
@@ -101,9 +98,12 @@ export const useMessageQueue = ({
         continue;
       }
 
+      // Track prepared ID for error handling (survives into catch block)
+      let preparedId: string | null = null;
+
       try {
         queuedMsg.status = "sending";
-        
+
         // =====================================================================
         // Step 1: Prepare message - this gives us the ID and encrypted payload
         // Session is committed immediately for forward secrecy
@@ -113,12 +113,16 @@ export const useMessageQueue = ({
           queuedMsg.plaintext
         );
 
+        // Update queuedMsg.id IMMEDIATELY so catch block has correct ID
+        preparedId = prepared.id;
+        queuedMsg.id = prepared.id;
+
         // =====================================================================
         // Step 2: Create optimistic message with the SAME ID as prepared
         // This is the key fix - both share prepared.id
         // =====================================================================
         const optimisticMessage: Message = {
-          id: prepared.id,  // USE THE PREPARED ID!
+          id: prepared.id,
           topic: prepared.topic,
           sender: verbethClient.userAddress,
           recipient: queuedMsg.contact.address,
@@ -170,8 +174,6 @@ export const useMessageQueue = ({
         // =====================================================================
         await dbService.updatePendingOutboundStatus(prepared.id, 'submitted', tx.hash);
 
-        // Update our tracking
-        queuedMsg.id = prepared.id;
         queuedMsg.txHash = tx.hash;
         queuedMsg.status = "pending";
 
@@ -192,24 +194,24 @@ export const useMessageQueue = ({
           await updateContact(updatedContact);
         }
 
-        // Remove from queue (confirmation will be handled by event processor)
         queue.messages.shift();
 
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
-        
-        // Mark as failed
         queuedMsg.status = "failed";
         queuedMsg.error = errorMessage;
 
-        // Note: Ratchet slot may already be burned (session was committed in prepareMessage)
+        // Use preparedId if message was already created in DB, otherwise use original queue id
+        const messageId = preparedId ?? queuedMsg.id;
 
-        await updateMessageStatus(queuedMsg.id, "failed", errorMessage);
+        // Note: Ratchet slot may already be burned (session was committed in prepareMessage)
+        await updateMessageStatus(messageId, "failed", errorMessage);
 
         addLog(`✗ Failed to send: "${queuedMsg.plaintext.slice(0, 20)}..." - ${errorMessage}`);
 
-        // Store failed message for retry/cancel
-        failedMessagesRef.current.set(queuedMsg.id, { ...queuedMsg });
+        // Store failed message for retry/cancel (use correct ID)
+        queuedMsg.id = messageId;
+        failedMessagesRef.current.set(messageId, { ...queuedMsg });
 
         // Remove from active queue
         queue.messages.shift();
@@ -219,14 +221,9 @@ export const useMessageQueue = ({
     queue.isProcessing = false;
   }, [verbethClient, addLog, addMessage, updateContact, updateMessageStatus]);
 
-  // ===========================================================================
-  // Public API
-  // ===========================================================================
 
   /**
    * Queue a message for sending.
-   * Note: The actual optimistic message is created in processQueue after prepareMessage
-   * so we can use the correct ID.
    */
   const queueMessage = useCallback(async (
     contact: Contact,
@@ -264,7 +261,6 @@ export const useMessageQueue = ({
       queuesRef.current.set(conversationId, queue);
     }
 
-    // Add to queue
     queue.messages.push(queuedMessage);
 
     addLog(`📝 Message queued: "${messageText.slice(0, 30)}..."`);
@@ -275,9 +271,6 @@ export const useMessageQueue = ({
     return tempId;
   }, [verbethClient, addLog, processQueue]);
 
-  /**
-   * Retry a failed message.
-   */
   const retryMessage = useCallback(async (messageId: string): Promise<boolean> => {
     const failedMessage = failedMessagesRef.current.get(messageId);
     
@@ -328,7 +321,6 @@ export const useMessageQueue = ({
     if (failedMessage) {
       failedMessagesRef.current.delete(messageId);
       
-      // Remove from DB and UI
       await removeMessage(messageId);
       
       addLog(`🗑️ Deleted message: "${failedMessage.plaintext.slice(0, 30)}..."`);

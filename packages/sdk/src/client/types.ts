@@ -15,6 +15,45 @@ import type nacl from 'tweetnacl';
 import type { KemKeyPair } from '../send.js';
 
 /**
+ * Event emitted when topic ratcheting occurs.
+ */
+export interface TopicRatchetEvent {
+  conversationId: string;
+  previousTopicInbound: string | null;
+  currentTopicInbound: string;
+  topicEpoch: number;
+}
+
+/**
+ * Event emitted after message decryption with topic match info.
+ */
+export interface MessageDecryptedEvent {
+  conversationId: string;
+  topicMatch: 'current' | 'next' | 'previous';
+  topicEpoch: number;
+}
+
+/**
+ * Optional callbacks for VerbethClient events.
+ *
+ * These callbacks allow apps to react to internal state changes
+ * without polling or manual session inspection.
+ */
+export interface VerbethClientCallbacks {
+  /**
+   * Called when a topic ratchet occurs (epoch advances).
+   * Useful for updating UI or triggering contact sync.
+   */
+  onTopicRatchet?: (event: TopicRatchetEvent) => void;
+
+  /**
+   * Called after successful message decryption.
+   * Provides topic match info for debugging/analytics.
+   */
+  onMessageDecrypted?: (event: MessageDecryptedEvent) => void;
+}
+
+/**
  * Configuration for creating a VerbethClient instance.
  */
 export interface VerbethClientConfig {
@@ -23,6 +62,7 @@ export interface VerbethClientConfig {
   identityProof: IdentityProof;
   signer: Signer;
   address: string;
+  callbacks?: VerbethClientCallbacks;
 }
 
 export interface HandshakeResult {
@@ -146,4 +186,23 @@ export interface SerializedSessionInfo {
   receivingMsgNumber: number;
   currentTopicOutbound: string;
   currentTopicInbound: string;
+}
+
+/**
+ * HSR event data for createInitiatorSessionFromHsr convenience method.
+ */
+export interface HsrEventData {
+  inResponseToTag: `0x${string}`;
+  responderEphemeralPubKey: Uint8Array;
+  kemCiphertext?: Uint8Array;
+}
+
+/**
+ * Parameters for createInitiatorSessionFromHsr convenience method.
+ */
+export interface CreateInitiatorSessionFromHsrParams {
+  contactAddress: string;
+  myEphemeralSecret: Uint8Array;
+  myKemSecret?: Uint8Array;
+  hsrEvent: HsrEventData;
 }

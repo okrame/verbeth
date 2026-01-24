@@ -5,6 +5,7 @@ import { useAccount, useWalletClient } from 'wagmi';
 import { useRpcClients } from './rpc.js';
 import {
   VerbethClient,
+  createVerbethClient,
 } from '@verbeth/sdk';
 import { useMessageListener } from './hooks/useMessageListener.js';
 import { useMessageProcessor } from './hooks/useMessageProcessor.js';
@@ -24,7 +25,7 @@ import { useSessionSetup } from './hooks/useSessionSetup.js';
 import { useInitIdentity } from './hooks/useInitIdentity.js';
 import { usePendingSessionReset } from './hooks/usePendingSessionReset.js';
 import { PinnedResetRequest } from './components/PinnedResetRequest.js';
-import { configureClientStorage } from './services/StorageAdapters.js';
+import { sessionStore, pendingStore } from './services/StorageAdapters.js';
 
 export default function App() {
   const { ethers: readProvider, viem: viemClient } = useRpcClients();
@@ -126,22 +127,22 @@ export default function App() {
   });
 
   // ===========================================================================
-  // UPDATED: Create and configure VerbethClient with storage adapters
+  // Create VerbethClient with storage adapters using factory function
   // ===========================================================================
   useEffect(() => {
     const currentAddress = address;
 
     if (executor && identityKeyPair && identityProof && identitySigner && currentAddress) {
-      const client = new VerbethClient({
-        executor,
+      const client = createVerbethClient({
+        address: currentAddress,
+        signer: identitySigner,
         identityKeyPair,
         identityProof,
-        signer: identitySigner,
-        address: currentAddress,
+        executor,
+        sessionStore,
+        pendingStore,
       });
-      
-      configureClientStorage(client);
-      
+
       setVerbethClient(client);
       addLog(`VerbethClient initialized for ${currentAddress.slice(0, 8)}...`);
     } else {
@@ -166,7 +167,7 @@ export default function App() {
     address: address ?? undefined,
     emitterAddress: emitterAddress ?? undefined,
     identityKeyPair,
-    verbethClient,  // NEW: Pass the configured client
+    verbethClient,
     onLog: addLog
   });
   const { hasPendingReset, pendingHandshake: pendingResetHandshake, limboAfterTimestamp } =

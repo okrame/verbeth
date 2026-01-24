@@ -48,25 +48,39 @@ export { getNextNonce } from './utils/nonce.js';
 export { SafeSessionSigner } from "./utils/safeSessionSigner.js";
 export type { SafeSessionSignerOptions } from "./utils/safeSessionSigner.js";
 
-export { VerbethClient, SessionManager, PendingManager } from './client/index.js';
+export {
+  VerbethClient,
+  SessionManager,
+  PendingManager,
+  VerbethClientBuilder,
+  createVerbethClient,
+  HsrTagIndex,
+} from './client/index.js';
 
-export type { 
+export type {
   VerbethClientConfig,
+  VerbethClientCallbacks,
+  TopicRatchetEvent,
+  MessageDecryptedEvent,
   HandshakeResult,
   HandshakeResponseResult,
-  
+
   SessionStore,
   PendingStore,
-  
+
   PreparedMessage,
   DecryptedMessage,
   PendingMessage,
   PendingStatus,
-  
+
   SendResult,
   ConfirmResult,
-  
+
   SerializedSessionInfo,
+  HsrEventData,
+  CreateInitiatorSessionFromHsrParams,
+  CreateVerbethClientOptions,
+  PendingContactEntry,
 } from './client/index.js';
 
 export * from './ratchet/index.js';

@@ -1,5 +1,4 @@
 // packages/sdk/src/client/VerbethClient.ts
-// CLEANED VERSION - duplexTopics removed, topics derived from ephemeral DH
 
 /**
  * High-level client for Verbeth E2EE messaging.
@@ -47,6 +46,8 @@ import type {
   SendResult,
   ConfirmResult,
   SerializedSessionInfo,
+  VerbethClientCallbacks,
+  CreateInitiatorSessionFromHsrParams,
 } from './types.js';
 
 export interface CreateInitiatorSessionParams {
@@ -73,6 +74,7 @@ export class VerbethClient {
   private readonly identityProof: IdentityProof;
   private readonly signer: Signer;
   private readonly address: string;
+  private readonly callbacks?: VerbethClientCallbacks;
 
   // configured via setters
   private sessionManager?: SessionManager;
@@ -84,6 +86,7 @@ export class VerbethClient {
     this.identityProof = config.identityProof;
     this.signer = config.signer;
     this.address = config.address;
+    this.callbacks = config.callbacks;
   }
 
   /**
@@ -294,8 +297,22 @@ export class VerbethClient {
   }
 
   /**
+   * Accepting a structured HSR event object instead of individual parameters scattered across variables.
+   */
+  createInitiatorSessionFromHsr(params: CreateInitiatorSessionFromHsrParams): RatchetSession {
+    return this.createInitiatorSession({
+      contactAddress: params.contactAddress,
+      initiatorEphemeralSecret: params.myEphemeralSecret,
+      responderEphemeralPubKey: params.hsrEvent.responderEphemeralPubKey,
+      inResponseToTag: params.hsrEvent.inResponseToTag,
+      kemCiphertext: params.hsrEvent.kemCiphertext,
+      initiatorKemSecret: params.myKemSecret,
+    });
+  }
+
+  /**
    * Derive topics from DH shared secret.
-   * 
+   *
    * @param mySecret - My ephemeral secret key
    * @param theirPublic - Their ephemeral public key
    * @param salt - Salt for topic derivation (typically the tag bytes)
@@ -440,7 +457,6 @@ export class VerbethClient {
       return null;
     }
 
-    // verify signature before any ratchet operations
     const sigValid = verifyMessageSignature(
       parsed.signature,
       parsed.header,
@@ -457,7 +473,31 @@ export class VerbethClient {
       return null;
     }
 
+    // Check for topic ratchet before saving
+    const topicRatcheted = decryptResult.session.topicEpoch > session.topicEpoch;
+    const previousTopicInbound = topicRatcheted ? session.currentTopicInbound : null;
+
     await this.sessionManager.save(decryptResult.session);
+
+    // Invoke callbacks if configured
+    if (this.callbacks) {
+      if (topicRatcheted && this.callbacks.onTopicRatchet) {
+        this.callbacks.onTopicRatchet({
+          conversationId: session.conversationId,
+          previousTopicInbound,
+          currentTopicInbound: decryptResult.session.currentTopicInbound,
+          topicEpoch: decryptResult.session.topicEpoch,
+        });
+      }
+
+      if (this.callbacks.onMessageDecrypted) {
+        this.callbacks.onMessageDecrypted({
+          conversationId: session.conversationId,
+          topicMatch,
+          topicEpoch: decryptResult.session.topicEpoch,
+        });
+      }
+    }
 
     const plaintextStr = new TextDecoder().decode(decryptResult.plaintext);
 

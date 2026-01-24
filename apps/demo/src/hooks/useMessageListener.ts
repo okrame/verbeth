@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { keccak256, toUtf8Bytes, getBytes } from "ethers";
-import { computeTagFromInitiator } from "@verbeth/sdk";
+import { HsrTagIndex, type PendingContactEntry } from "@verbeth/sdk";
 import { dbService } from "../services/DbService.js";
 import {
   LOGCHAIN_SINGLETON_ADDR,
@@ -47,6 +47,7 @@ export const useMessageListener = ({
 
   const processedLogs = useRef(new Set<string>());
   const scanChunks = useRef<ScanChunk[]>([]);
+  const hsrTagIndex = useRef(new HsrTagIndex());
 
   const calculateRecipientHash = (recipientAddr: string) => {
     return keccak256(toUtf8Bytes(`contact:${recipientAddr.toLowerCase()}`));
@@ -188,37 +189,36 @@ export const useMessageListener = ({
   };
 
   /**
-   * Match HSR event to a pending contact using cryptographic tag verification.
-   * This works regardless of whether responder uses EOA or Safe.
+   * Match HSR event to a pending contact using HsrTagIndex for O(1) lookup.
+   * Uses cached tag computation for efficiency with many pending contacts.
    */
   const matchHsrToContact = (
     log: any,
     pendingContacts: Contact[]
   ): Contact | null => {
-    const inResponseTo = log.topics[1] as string;
-    
+    const inResponseTo = log.topics[1] as `0x${string}`;
+
     // Extract responderEphemeralR (first bytes32 in log.data)
-    // ABI encoding: bytes32 is first 32 bytes = 64 hex chars + 0x prefix
     const responderEphemeralR = log.data.slice(0, 66);
     const R = getBytes(responderEphemeralR);
 
-    for (const contact of pendingContacts) {
-  if (!contact.handshakeEphemeralSecret) continue;
+    // Build index entries from pending contacts with ephemeral secrets
+    const indexEntries: PendingContactEntry[] = pendingContacts
+      .filter((c): c is Contact & { handshakeEphemeralSecret: string } =>
+        !!c.handshakeEphemeralSecret
+      )
+      .map(c => ({
+        address: c.address,
+        handshakeEphemeralSecret: getBytes(c.handshakeEphemeralSecret),
+      }));
 
-      try {
-        const expectedTag = computeTagFromInitiator(
-          getBytes(contact.handshakeEphemeralSecret),
-          R
-        );
-        if (expectedTag.toLowerCase() === inResponseTo.toLowerCase()) {
-          return contact;
-        }
-      } catch {
-        // Skip contacts where tag computation fails
-      }
-    }
+    hsrTagIndex.current.rebuild(indexEntries);
 
-    return null;
+    // O(1) lookup after first computation for this R
+    const matchedAddress = hsrTagIndex.current.matchByTag(inResponseTo, R);
+    if (!matchedAddress) return null;
+
+    return pendingContacts.find(c => c.address === matchedAddress) || null;
   };
 
   // scan specific block range - load contacts from db when needed

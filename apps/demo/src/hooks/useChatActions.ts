@@ -13,7 +13,7 @@
  * Uses VerbethClient for session creation.
  */
 
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { hexlify } from "ethers";
 import type { VerbethClient } from "@verbeth/sdk";
 import { dbService } from "../services/DbService.js";
@@ -68,6 +68,9 @@ export const useChatActions = ({
     removeMessage,
     updateContact,
   });
+
+  // Guard against duplicate acceptHandshake calls (e.g., rapid double-click)
+  const acceptingHandshakesRef = useRef<Set<string>>(new Set());
 
   // ===========================================================================
   // Handshake Operations
@@ -163,7 +166,14 @@ export const useChatActions = ({
    */
   const acceptHandshake = useCallback(
     async (handshake: any, responseMessage: string) => {
+      // Prevent duplicate calls for same handshake
+      if (acceptingHandshakesRef.current.has(handshake.id)) {
+        return;
+      }
+      acceptingHandshakesRef.current.add(handshake.id);
+
       if (!verbethClient) {
+        acceptingHandshakesRef.current.delete(handshake.id);
         addLog("✗ Client not initialized");
         return;
       }
@@ -251,6 +261,8 @@ export const useChatActions = ({
         addLog(
           `✗ Failed to accept handshake: ${error instanceof Error ? error.message : "Unknown error"}`
         );
+      } finally {
+        acceptingHandshakesRef.current.delete(handshake.id);
       }
     },
     [

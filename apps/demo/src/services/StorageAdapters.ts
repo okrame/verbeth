@@ -143,33 +143,8 @@ class PendingStoreAdapter implements PendingStore {
 }
 
 // =============================================================================
-// Singleton Instances
+// Singleton Instances (exported for createVerbethClient factory)
 // =============================================================================
 
-const sessionStoreInstance = new SessionStoreAdapter();
-const pendingStoreInstance = new PendingStoreAdapter();
-
-// =============================================================================
-// Client Configuration Helper
-// =============================================================================
-
-/**
- * Configure a VerbethClient with storage adapters.
- * Uses the singleton dbService internally.
- * 
- * @param client - VerbethClient instance to configure
- * 
- * @example
- * ```typescript
- * const client = new VerbethClient(config);
- * configureClientStorage(client);
- * 
- * // Now client is ready to use sendMessage/decryptMessage
- * ```
- */
-export function configureClientStorage(
-  client: { setSessionStore: (s: SessionStore) => void; setPendingStore: (p: PendingStore) => void }
-): void {
-  client.setSessionStore(sessionStoreInstance);
-  client.setPendingStore(pendingStoreInstance);
-}
+export const sessionStore = new SessionStoreAdapter();
+export const pendingStore = new PendingStoreAdapter();
