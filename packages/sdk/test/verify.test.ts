@@ -12,13 +12,20 @@ import {
   decodeHandshakePayload,
   encodeHandshakeResponseContent,
   decodeHandshakeResponseContent,
-  MessagePayload,
   HandshakeResponseContent,
   encodeUnifiedPubKeys,
   extractKeysFromHandshakePayload,
   extractKeysFromHandshakeResponse,
   parseHandshakeKeys,
 } from "../src/payload.js";
+
+// Local type for test payloads
+interface MessagePayload {
+  content: string;
+  timestamp?: number;
+  messageType?: 'text' | 'file' | 'media';
+  metadata?: Record<string, any>;
+}
 import { IdentityProof } from "../src/types.js";
 
 describe("Encryption/Decryption", () => {

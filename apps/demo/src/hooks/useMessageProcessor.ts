@@ -95,11 +95,17 @@ export const useMessageProcessor = ({
           // HANDSHAKE
           // -----------------------------------------------------------------
           case "handshake": {
+            if (!verbethClient) {
+              onLog(`❌ Cannot process handshake: VerbethClient not configured`);
+              break;
+            }
+
             const result = await processHandshakeEvent(
               event,
               address,
               readProvider,
               identityContext,
+              verbethClient,
               onLog
             );
 

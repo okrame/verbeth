@@ -44,14 +44,11 @@ export {
 } from './executor.js';
 
 
-export { getNextNonce } from './utils/nonce.js';
 export { SafeSessionSigner } from "./utils/safeSessionSigner.js";
 export type { SafeSessionSignerOptions } from "./utils/safeSessionSigner.js";
 
 export {
   VerbethClient,
-  SessionManager,
-  PendingManager,
   VerbethClientBuilder,
   createVerbethClient,
   HsrTagIndex,

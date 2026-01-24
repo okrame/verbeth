@@ -13,17 +13,6 @@ export interface EncryptedPayload {
   sig?: string; // base64 of detached signature over (epk || n || ct)
 }
 
-// Unified message payload
-export interface MessagePayload {
-  content: string;
-  timestamp?: number;
-  messageType?: 'text' | 'file' | 'media';
-  metadata?: Record<string, any>;
-}
-
-export interface HandshakeResponsePayload extends EncryptedPayload {
-}
-
 export interface HandshakeContent {
   plaintextPayload: string;
   identityProof: IdentityProof;  

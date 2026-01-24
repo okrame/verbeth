@@ -12,11 +12,6 @@ import { AbiCoder, getBytes } from "ethers";
 import {
   type IdentityContext,
   type VerbethClient,
-  parseHandshakePayload,
-  parseBindingMessage,
-  verifyHandshakeIdentity,
-  decodeUnifiedPubKeys,
-  verifyAndExtractHandshakeResponseKeys,
 } from "@verbeth/sdk";
 
 import { dbService } from "./DbService.js";
@@ -71,6 +66,7 @@ export async function processHandshakeEvent(
   address: string,
   readProvider: any,
   identityContext: IdentityContext,
+  verbethClient: VerbethClient,
   onLog: (msg: string) => void
 ): Promise<HandshakeResult | null> {
   try {
@@ -80,7 +76,7 @@ export async function processHandshakeEvent(
     const [identityPubKeyBytes, ephemeralPubKeyBytes, plaintextPayloadBytes] = decoded;
 
     const unifiedPubKeys = getBytes(identityPubKeyBytes);
-    const decodedKeys = decodeUnifiedPubKeys(unifiedPubKeys);
+    const decodedKeys = verbethClient.payload.decodeUnifiedPubKeys(unifiedPubKeys);
 
     if (!decodedKeys) {
       onLog("✗ Failed to decode unified public keys");
@@ -105,7 +101,7 @@ export async function processHandshakeEvent(
     let hasValidIdentityProof = false;
 
     try {
-      handshakeContent = parseHandshakePayload(plaintextPayload);
+      handshakeContent = verbethClient.payload.parseHandshakePayload(plaintextPayload);
       hasValidIdentityProof = true;
     } catch (error) {
       handshakeContent = {
@@ -126,7 +122,7 @@ export async function processHandshakeEvent(
           plaintextPayload: plaintextPayload,
         };
 
-        isVerified = await verifyHandshakeIdentity(
+        isVerified = await verbethClient.verify.verifyHandshakeIdentity(
           handshakeEvent,
           readProvider,
           identityContext
@@ -139,7 +135,7 @@ export async function processHandshakeEvent(
     let identityAddress = cleanSenderAddress;
     if (hasValidIdentityProof && handshakeContent.identityProof?.message) {
       try {
-        const parsed = parseBindingMessage(handshakeContent.identityProof.message);
+        const parsed = verbethClient.utils.parseBindingMessage(handshakeContent.identityProof.message);
         if (parsed.address) {
           identityAddress = parsed.address;
         }
@@ -260,7 +256,7 @@ export async function processHandshakeResponseEvent(
       ? getBytes(contact.handshakeKemSecret)
       : undefined;
 
-    const result = await verifyAndExtractHandshakeResponseKeys(
+    const result = await verbethClient.verify.verifyAndExtractHandshakeResponseKeys(
       responseEvent,
       initiatorEphemeralSecret,
       readProvider,

@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from "vitest";
 import nacl from "tweetnacl";
 import { JsonRpcProvider } from "ethers";
 
-import { getNextNonce } from "../src/utils/nonce.js";
 import { convertPublicKeyToX25519 } from "../src/utils/x25519.js";
 import { isSmartContract1271, parseBindingMessage } from "../src/utils.js";
 import { ExecutorFactory } from "../src/index.js";
@@ -19,17 +18,6 @@ const fakeProvider = {
     return name;
   },
 } as unknown as JsonRpcProvider;
-
-
-describe("getNextNonce", () => {
-  it("increments per (sender, topic) and returns bigint", () => {
-    const n1 = getNextNonce("0xAlice", "topic");
-    const n2 = getNextNonce("0xAlice", "topic");
-    const nOther = getNextNonce("0xBob", "topic");
-    expect(n2).toBe(n1 + 1n);
-    expect(nOther).toBe(1n);
-  });
-});
 
 describe("Utils Functions", () => {
   it("isSmartContract1271 returns true for contract bytecode", async () => {

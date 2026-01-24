@@ -19,12 +19,11 @@ import nacl from 'tweetnacl';
 import { keccak256, toUtf8Bytes } from 'ethers';
 import { sha256 } from '@noble/hashes/sha2';
 import { hkdf } from '@noble/hashes/hkdf';
-import { 
-  encodePayload, 
-  decodePayload, 
+import {
+  encodePayload,
+  decodePayload,
   encodeStructuredContent,
   decodeStructuredContent,
-  MessagePayload,
   HandshakeResponseContent,
   extractKeysFromHandshakeResponse
 } from './payload.js';
