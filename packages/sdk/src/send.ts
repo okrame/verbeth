@@ -1,17 +1,6 @@
 // packages/sdk/src/send.ts
-// CLEANED VERSION - topicInfo removed from handshake response
 
-/**
- * Handshake and message sending functions.
- * 
- * NOTE: sendEncryptedMessage is REMOVED - use ratchet for established sessions.
- * Only handshake functions remain here.
- * 
- * CHANGE: respondToHandshake no longer computes or includes topicInfo.
- * Topics are now derived from ephemeral DH by the caller.
- */
-
-import { 
+import {
   keccak256,
   toUtf8Bytes,
   hexlify,
@@ -20,23 +9,30 @@ import {
 } from "ethers";
 import nacl from 'tweetnacl';
 import { encryptStructuredPayload } from './crypto.js';
-// REMOVED: deriveDuplexTopics import
-import { 
-  HandshakeContent, 
+import {
+  HandshakeContent,
   serializeHandshakeContent,
   encodeUnifiedPubKeys,
   createHandshakeResponseContent,
 } from './payload.js';
 import { IdentityKeyPair, IdentityProof } from './types.js';
-// REMOVED: TopicInfoWire from imports
 import { IExecutor } from './executor.js';
 import { computeTagFromResponder } from './crypto.js';
+import { kem } from './pq/kem.js';
+
+/** ML-KEM keypair for PQ-hybrid handshake */
+export interface KemKeyPair {
+  publicKey: Uint8Array;
+  secretKey: Uint8Array;
+}
 
 /**
  * Initiates an on-chain handshake with unified keys and mandatory identity proof.
  * Executor-agnostic: works with EOA, UserOp, and Direct EntryPoint (for tests)
- * 
- * @returns Transaction and ephemeral keypair (MUST be persisted for session init)
+ *
+ * Includes ML-KEM-768 public key for post-quantum hybrid key exchange.
+ *
+ * @returns Transaction, ephemeral keypair, and KEM keypair (MUST be persisted for session init)
  */
 export async function initiateHandshake({
   executor,
@@ -55,6 +51,7 @@ export async function initiateHandshake({
 }): Promise<{
   tx: any;
   ephemeralKeyPair: nacl.BoxKeyPair;
+  kemKeyPair: KemKeyPair;
 }> {
   if (!executor) {
     throw new Error("Executor must be provided");
@@ -62,6 +59,9 @@ export async function initiateHandshake({
 
   // Generate ephemeral keypair for this handshake
   const ephemeralKeyPair = nacl.box.keyPair();
+
+  // Generate ML-KEM-768 keypair for PQ-hybrid key exchange
+  const kemKeyPair = kem.generateKeyPair();
 
   const recipientHash = keccak256(
     toUtf8Bytes('contact:' + recipientAddress.toLowerCase())
@@ -80,27 +80,33 @@ export async function initiateHandshake({
     identityKeyPair.signingPublicKey  // Ed25519 for signing
   );
 
+  // Ephemeral public key now includes KEM public key (32 + 1184 = 1216 bytes)
+  const ephemeralWithKem = new Uint8Array(32 + kem.publicKeyBytes);
+  ephemeralWithKem.set(ephemeralKeyPair.publicKey, 0);
+  ephemeralWithKem.set(kemKeyPair.publicKey, 32);
+
   const tx = await executor.initiateHandshake(
     recipientHash,
     hexlify(unifiedPubKeys),
-    hexlify(ephemeralKeyPair.publicKey),
+    hexlify(ephemeralWithKem),
     toUtf8Bytes(serializedPayload)
   );
 
   return {
     tx,
     ephemeralKeyPair, // Caller MUST persist secretKey for ratchet session init
+    kemKeyPair,       // Caller MUST also persist secretKey for KEM decapsulation
   };
 }
 
 /**
  * Responds to a handshake with unified keys and mandatory identity proof.
  * Executor-agnostic: works with EOA, UserOp, and Direct EntryPoint (for tests)
- * 
- * CHANGE: No longer computes or returns topicInfo. Topics are derived from
- * ephemeral DH by the caller using deriveTopicFromDH().
- * 
- * @returns Transaction, tag, salt, AND ephemeral keys (MUST be persisted for ratchet session)
+ *
+ * Supports PQ-hybrid handshake: if initiator includes KEM public key,
+ * encapsulates a shared secret and includes ciphertext in response.
+ *
+ * @returns Transaction, tag, salt, ephemeral keys, and KEM secret
  */
 export async function respondToHandshake({
   executor,
@@ -109,23 +115,24 @@ export async function respondToHandshake({
   note,
   identityProof,
   signer,
-  // REMOVED: initiatorIdentityPubKey - no longer needed for topic derivation
 }: {
   executor: IExecutor;
+  /** Initiator's ephemeral key (32 bytes X25519) OR extended key (1216 bytes: X25519 + ML-KEM) */
   initiatorEphemeralPubKey: Uint8Array;
   responderIdentityKeyPair: IdentityKeyPair;
   note?: string;
   identityProof: IdentityProof;
   signer: Signer;
-  // REMOVED: initiatorIdentityPubKey?: Uint8Array;
 }): Promise<{
   tx: any;
   salt: Uint8Array;
   tag: `0x${string}`;
-  /** Responder's DH ratchet secret - MUST persist as dhMySecretKey in ratchet session */
+  /** Responder's DH ratchet secret - must persist as dhMySecretKey in ratchet session */
   responderEphemeralSecret: Uint8Array;
-  /** Responder's DH ratchet public - inside encrypted payload, NOT on-chain */
+  /** Responder's DH ratchet public - inside encrypted payload, not on-chain */
   responderEphemeralPublic: Uint8Array;
+  /** ML-KEM shared secret (32 bytes) - MUST persist for hybrid KDF, undefined if no KEM in handshake */
+  kemSharedSecret?: Uint8Array;
 }> {
   if (!executor) {
     throw new Error("Executor must be provided");
@@ -133,7 +140,7 @@ export async function respondToHandshake({
 
   // =========================================================================
   // TWO SEPARATE KEYPAIRS for unlinkability:
-  // 
+  //
   // 1. tagKeyPair (R, r): ONLY for tag computation
   //    - R goes on-chain as responderEphemeralR
   //    - Used by Alice to verify the tag
@@ -147,50 +154,65 @@ export async function respondToHandshake({
   // first message's DH header, allowing observers to link HandshakeResponse
   // to subsequent conversation. With two keypairs, there's no on-chain link.
   // =========================================================================
-  
+
   // Keypair for tag computation - R goes on-chain
   const tagKeyPair = nacl.box.keyPair();
-  
+
   // Keypair for ratchet - public key is HIDDEN inside encrypted payload
   const ratchetKeyPair = nacl.box.keyPair();
-  
+
+  // Check if initiator included KEM public key (extended format: 32 + 1184 = 1216 bytes)
+  const hasKem = initiatorEphemeralPubKey.length === 32 + kem.publicKeyBytes;
+
+  // Extract X25519 ephemeral key (first 32 bytes)
+  const initiatorX25519Pub = hasKem
+    ? initiatorEphemeralPubKey.slice(0, 32)
+    : initiatorEphemeralPubKey;
+
   // Tag is derived from tagKeyPair, not ratchetKeyPair
   const inResponseTo = computeTagFromResponder(
     tagKeyPair.secretKey,
-    initiatorEphemeralPubKey
+    initiatorX25519Pub
   );
   const salt: Uint8Array = getBytes(inResponseTo);
 
-  // REMOVED: topicInfo computation - caller will derive topics from ephemeral DH
-  // let topicInfo: TopicInfoWire | undefined = undefined;
-  // if (initiatorIdentityPubKey) { ... }
+  // Handle ML-KEM encapsulation if initiator supports it
+  let kemCiphertext: Uint8Array | undefined;
+  let kemSharedSecret: Uint8Array | undefined;
+
+  if (hasKem) {
+    const initiatorKemPub = initiatorEphemeralPubKey.slice(32, 32 + kem.publicKeyBytes);
+    const { ciphertext, sharedSecret } = kem.encapsulate(initiatorKemPub);
+    kemCiphertext = ciphertext;
+    kemSharedSecret = sharedSecret;
+  }
 
   // Response content includes ratchetKeyPair.publicKey (hidden inside encrypted payload)
-  // UPDATED: No longer includes topicInfo
+  // and includes kemCiphertext for PQ-hybrid handshake
   const responseContent = createHandshakeResponseContent(
     responderIdentityKeyPair.publicKey,        // X25519 identity
     responderIdentityKeyPair.signingPublicKey, // Ed25519 signing
     ratchetKeyPair.publicKey,                  // First DH ratchet key (INSIDE payload)
     note,
-    identityProof
-    // REMOVED: topicInfo parameter
+    identityProof,
+    kemCiphertext
   );
-  
+
   // Encrypt using ratchetKeyPair (the epk in encrypted payload = ratchetKeyPair.publicKey)
   const payload = encryptStructuredPayload(
     responseContent,
-    initiatorEphemeralPubKey,
+    initiatorX25519Pub,
     ratchetKeyPair.secretKey,
     ratchetKeyPair.publicKey
   );
 
   // Execute transaction - tagKeyPair.publicKey goes on-chain (NOT ratchetKeyPair)
   const tx = await executor.respondToHandshake(
-    inResponseTo, 
+    inResponseTo,
     hexlify(tagKeyPair.publicKey),  // Tag key on-chain for tag verification
     toUtf8Bytes(payload)
   );
-  
+
   return {
     tx,
     salt,
@@ -199,5 +221,6 @@ export async function respondToHandshake({
     // These are DIFFERENT from the on-chain responderEphemeralR
     responderEphemeralSecret: ratchetKeyPair.secretKey,
     responderEphemeralPublic: ratchetKeyPair.publicKey,
+    kemSharedSecret,
   };
 }

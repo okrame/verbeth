@@ -24,7 +24,6 @@ import { useSessionSetup } from './hooks/useSessionSetup.js';
 import { useInitIdentity } from './hooks/useInitIdentity.js';
 import { usePendingSessionReset } from './hooks/usePendingSessionReset.js';
 import { PinnedResetRequest } from './components/PinnedResetRequest.js';
-// NEW: Import storage adapter configuration
 import { configureClientStorage } from './services/StorageAdapters.js';
 
 export default function App() {

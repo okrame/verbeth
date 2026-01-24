@@ -89,7 +89,11 @@ export async function processHandshakeEvent(
 
     const identityPubKey = decodedKeys.identityPubKey;
     const signingPubKey = decodedKeys.signingPubKey;
-    const ephemeralPubKey = getBytes(ephemeralPubKeyBytes);
+    const ephemeralPubKeyFull = getBytes(ephemeralPubKeyBytes);
+    // Extract X25519 part (first 32 bytes) for backward compatibility
+    const ephemeralPubKey = ephemeralPubKeyFull.length > 32
+      ? ephemeralPubKeyFull.slice(0, 32)
+      : ephemeralPubKeyFull;
     const plaintextPayload = new TextDecoder().decode(
       getBytes(plaintextPayloadBytes)
     );
@@ -152,7 +156,8 @@ export async function processHandshakeEvent(
       emitterAddress: cleanSenderAddress,
       identityPubKey,
       signingPubKey,
-      ephemeralPubKey,
+      ephemeralPubKey,           // X25519 only (32 bytes)
+      ephemeralPubKeyFull,       // Full key (may include KEM - 1216 bytes)
       message: handshakeContent.plaintextPayload,
       timestamp: Date.now(),
       blockNumber: log.blockNumber,
@@ -250,6 +255,11 @@ export async function processHandshakeResponseEvent(
 
     const initiatorEphemeralSecret = getBytes(contact.handshakeEphemeralSecret);
 
+    // Get stored KEM secret for PQ-hybrid decapsulation
+    const initiatorKemSecret = contact.handshakeKemSecret
+      ? getBytes(contact.handshakeKemSecret)
+      : undefined;
+
     const result = await verifyAndExtractHandshakeResponseKeys(
       responseEvent,
       initiatorEphemeralSecret,
@@ -263,13 +273,15 @@ export async function processHandshakeResponseEvent(
     }
 
     // =========================================================================
-    // Create session using VerbethClient (handles topic derivation internally)
+    // Create session using VerbethClient (handles topic derivation and KEM internally)
     // =========================================================================
     const ratchetSession = verbethClient.createInitiatorSession({
       contactAddress: contact.address,
       initiatorEphemeralSecret,
       responderEphemeralPubKey: result.keys.ephemeralPubKey,
       inResponseToTag: inResponseTo as `0x${string}`,
+      kemCiphertext: result.keys.kemCiphertext,
+      initiatorKemSecret,
     });
 
     // Save session to DB (SDK will pick it up via SessionStore)
@@ -284,6 +296,7 @@ export async function processHandshakeResponseEvent(
       topicInbound: ratchetSession.currentTopicInbound,
       conversationId: ratchetSession.conversationId,
       handshakeEphemeralSecret: undefined, // Clear after use
+      handshakeKemSecret: undefined,       // Clear after use
       lastMessage: result.keys.note || "Connection established",
       lastTimestamp: Date.now(),
     };

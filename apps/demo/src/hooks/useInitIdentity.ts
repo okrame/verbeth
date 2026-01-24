@@ -92,7 +92,6 @@ export function useInitIdentity({
     setNeedsSessionSetup(false);
     setIsSafeDeployed(false);
     setIsModuleEnabled(false);
-    // NEW
     setExecutionMode(null);
     setNeedsModeSelection(false);
     setEmitterAddress(null);
@@ -244,9 +243,6 @@ export function useInitIdentity({
     setContract(contractInstance);
   }, [walletClient, address, currentAccount, chainId, readProvider, addLog, switchToAccount]);
 
-  // ===========================================================================
-  // NEW: Mode-aware identity creation
-  // ===========================================================================
   const createIdentity = useCallback(async (selectedMode: ExecutionMode) => {
     if (!identitySigner || !address || !walletClient) {
       addLog('✗ Missing signer/provider or address');

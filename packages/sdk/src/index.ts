@@ -70,4 +70,6 @@ export type {
 } from './client/index.js';
 
 export * from './ratchet/index.js';
-export { dh, deriveTopicFromDH } from './ratchet/kdf.js';
+export { dh, deriveTopicFromDH, hybridInitialSecret } from './ratchet/kdf.js';
+
+export { kem } from './pq/kem.js';

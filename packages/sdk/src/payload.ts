@@ -161,18 +161,12 @@ export interface HandshakePayload {
   plaintextPayload: string;
 }
 
-/**
- * HandshakeResponseContent - CLEANED
- * 
- * REMOVED: topicInfo field - topics are now derived from ephemeral DH
- * in the caller (VerbethClient.acceptHandshake and EventProcessorService)
- */
 export interface HandshakeResponseContent {
   unifiedPubKeys: Uint8Array;      // 65 bytes: version + X25519 + Ed25519
   ephemeralPubKey: Uint8Array;
+  kemCiphertext?: Uint8Array;      // ML-KEM-768 ciphertext (1088 bytes) for PQ hybrid handshake
   note?: string;
   identityProof: IdentityProof;
-  // REMOVED: topicInfo?: TopicInfoWire;
 }
 
 export function encodeHandshakePayload(payload: HandshakePayload): Uint8Array {
@@ -193,37 +187,28 @@ export function decodeHandshakePayload(encoded: Uint8Array): HandshakePayload {
   };
 }
 
-/**
- * Encodes HandshakeResponseContent - CLEANED
- * 
- * REMOVED: topicInfo encoding - no longer included in handshake response
- */
 export function encodeHandshakeResponseContent(content: HandshakeResponseContent): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({
     unifiedPubKeys: Buffer.from(content.unifiedPubKeys).toString('base64'),
     ephemeralPubKey: Buffer.from(content.ephemeralPubKey).toString('base64'),
+    ...(content.kemCiphertext && { kemCiphertext: Buffer.from(content.kemCiphertext).toString('base64') }),
     note: content.note,
     identityProof: content.identityProof,
-    // REMOVED: topicInfo encoding
   }));
 }
 
-/**
- * Decodes HandshakeResponseContent - CLEANED
- * 
- * REMOVED: topicInfo decoding - no longer expected in handshake response
- */
 export function decodeHandshakeResponseContent(encoded: Uint8Array): HandshakeResponseContent {
   const json = new TextDecoder().decode(encoded);
   const obj = JSON.parse(json);
-  
+
   if (!obj.identityProof) {
     throw new Error("Invalid handshake response: missing identityProof");
   }
-  
+
   return {
     unifiedPubKeys: Uint8Array.from(Buffer.from(obj.unifiedPubKeys, 'base64')),
     ephemeralPubKey: Uint8Array.from(Buffer.from(obj.ephemeralPubKey, 'base64')),
+    ...(obj.kemCiphertext && { kemCiphertext: Uint8Array.from(Buffer.from(obj.kemCiphertext, 'base64')) }),
     note: obj.note,
     identityProof: obj.identityProof,
     // REMOVED: topicInfo decoding
@@ -246,29 +231,24 @@ export function createHandshakePayload(
   };
 }
 
-/**
- * Creates HandshakeResponseContent from separate identity keys - CLEANED
- * 
- * REMOVED: topicInfo parameter - topics are now derived from ephemeral DH
- */
 export function createHandshakeResponseContent(
   identityPubKey: Uint8Array,
   signingPubKey: Uint8Array,
   ephemeralPubKey: Uint8Array,
   note?: string,
   identityProof?: IdentityProof,
-  // REMOVED: topicInfo?: TopicInfoWire parameter
+  kemCiphertext?: Uint8Array,
 ): HandshakeResponseContent {
   if (!identityProof) {
     throw new Error("Identity proof is now mandatory for handshake responses");
   }
-  
+
   return {
     unifiedPubKeys: encodeUnifiedPubKeys(identityPubKey, signingPubKey),
     ephemeralPubKey,
+    ...(kemCiphertext && { kemCiphertext }),
     note,
     identityProof,
-    // REMOVED: topicInfo field
   };
 }
 

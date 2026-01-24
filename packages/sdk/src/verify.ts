@@ -255,6 +255,7 @@ export async function verifyAndExtractHandshakeResponseKeys(
     identityPubKey: Uint8Array;
     signingPubKey: Uint8Array;
     ephemeralPubKey: Uint8Array;
+    kemCiphertext?: Uint8Array; // from PQ-hybrid handshake
     note?: string;
   };
 }> {
@@ -295,16 +296,8 @@ export async function verifyAndExtractHandshakeResponseKeys(
       identityPubKey: extractedResponse.identityPubKey,
       signingPubKey: extractedResponse.signingPubKey,
       ephemeralPubKey: extractedResponse.ephemeralPubKey,
+      kemCiphertext: extractedResponse.kemCiphertext,
       note: extractedResponse.note,
     },
   };
 }
-
-// =============================================================================
-// REMOVED FUNCTIONS:
-// =============================================================================
-// 
-// verifyDerivedDuplexTopics() - removed, no longer using identity-based topics
-//                               Topics now derive from ephemeral DH in ratchet/kdf.ts
-//
-// =============================================================================

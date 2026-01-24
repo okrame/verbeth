@@ -102,10 +102,6 @@ export class PendingManager {
     await this.store.delete(id);
   }
 
-  // ===========================================================================
-  // Batch Operations
-  // ===========================================================================
-
   /**
    * Clean up stale pending messages.
    * Called periodically to remove old failed/stuck records.

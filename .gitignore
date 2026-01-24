@@ -22,3 +22,6 @@ ignition/deployments/chain-84532
 .venv/
 .envrc
 .python-version
+
+*apps/notes/
+.claudeignore

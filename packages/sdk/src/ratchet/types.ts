@@ -180,6 +180,8 @@ export interface InitResponderParams {
   theirHandshakeEphemeralPubKey: Uint8Array;
   topicOutbound: `0x${string}`;
   topicInbound: `0x${string}`;
+  /** ML-KEM shared secret for PQ-hybrid handshake */
+  kemSecret?: Uint8Array;
 }
 
 /**
@@ -194,4 +196,6 @@ export interface InitInitiatorParams {
   theirResponderEphemeralPubKey: Uint8Array;
   topicOutbound: `0x${string}`;
   topicInbound: `0x${string}`;
+  /** ML-KEM shared secret for PQ-hybrid handshake */
+  kemSecret?: Uint8Array;
 }

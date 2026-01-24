@@ -93,3 +93,20 @@ export function deriveTopicFromDH(
   const okm = hkdf(sha256, dhSharedSecret, salt, info, 32);
   return keccak256(okm) as `0x${string}`;
 }
+
+/**
+ * Combines classical (X25519) and post-quantum (ML-KEM-768) key exchange
+ *
+ * @param x25519Secret - X25519 DH shared secret (32 bytes)
+ * @param kemSecret - ML-KEM-768 shared secret (32 bytes)
+ * @returns Hybrid shared secret (32 bytes)
+ */
+export function hybridInitialSecret(
+  x25519Secret: Uint8Array,
+  kemSecret: Uint8Array
+): Uint8Array {
+  const combined = new Uint8Array(x25519Secret.length + kemSecret.length);
+  combined.set(x25519Secret, 0);
+  combined.set(kemSecret, x25519Secret.length);
+  return hkdf(sha256, combined, new Uint8Array(32), 'VerbethHybrid', 32);
+}

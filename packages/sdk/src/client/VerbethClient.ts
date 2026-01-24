@@ -14,6 +14,7 @@
 
 import { hexlify, getBytes } from 'ethers';
 import { initiateHandshake, respondToHandshake } from '../send.js';
+import { kem } from '../pq/kem.js';
 import type { IExecutor } from '../executor.js';
 import type { IdentityKeyPair, IdentityProof } from '../types.js';
 import type { Signer } from 'ethers';
@@ -53,6 +54,8 @@ export interface CreateInitiatorSessionParams {
   initiatorEphemeralSecret: Uint8Array;
   responderEphemeralPubKey: Uint8Array;
   inResponseToTag: `0x${string}`;
+  kemCiphertext?: Uint8Array;      // from handshake response (for KEM decapsulation)
+  initiatorKemSecret?: Uint8Array; // stored from sendHandshake
 }
 
 export interface CreateResponderSessionParams {
@@ -61,6 +64,7 @@ export interface CreateResponderSessionParams {
   responderEphemeralPublic: Uint8Array;
   initiatorEphemeralPubKey: Uint8Array;
   salt: Uint8Array;
+  kemSharedSecret?: Uint8Array; // from acceptHandshake (for hybrid KDF)
 }
 
 export class VerbethClient {
@@ -107,20 +111,20 @@ export class VerbethClient {
 
   /**
    * Initiates a handshake with a recipient.
-   * 
-   * Generates an ephemeral keypair for this handshake.
-   * The ephemeralKeyPair.secretKey must be stored for ratchet session initialization
+   *
+   * Generates an ephemeral keypair and ML-KEM keypair for this handshake.
+   * Both secretKeys must be stored for ratchet session initialization
    * when the response arrives.
-   * 
+   *
    * @param recipientAddress - Blockchain address of the recipient
    * @param message - Plaintext message to include in the handshake
-   * @returns Transaction response and the ephemeral keypair
+   * @returns Transaction response, ephemeral keypair, and KEM keypair
    */
   async sendHandshake(
     recipientAddress: string,
     message: string
   ): Promise<HandshakeResult> {
-    const { tx, ephemeralKeyPair } = await initiateHandshake({
+    const { tx, ephemeralKeyPair, kemKeyPair } = await initiateHandshake({
       executor: this.executor,
       recipientAddress,
       identityKeyPair: this.identityKeyPair,
@@ -129,32 +133,36 @@ export class VerbethClient {
       signer: this.signer,
     });
 
-    return { tx, ephemeralKeyPair };
+    return { tx, ephemeralKeyPair, kemKeyPair };
   }
 
   /**
    * Accepts a handshake from an initiator.
-   * 
+   *
    * Derives topics from ephemeral DH shared secret (same approach
    * as post-handshake topic ratcheting). Returns topicOutbound/topicInbound
    * directly instead of duplexTopics structure.
-   * 
-   * @param initiatorEphemeralPubKey - Initiator's ephemeral public key from handshake event
+   *
+   * Supports PQ-hybrid: if initiator includes ML-KEM public key (1216 bytes),
+   * performs KEM encapsulation and returns kemSharedSecret.
+   *
+   * @param initiatorEphemeralPubKey - Initiator's ephemeral key (32 bytes X25519 or 1216 bytes with KEM)
    * @param initiatorIdentityPubKey - Initiator's long-term X25519 identity key (kept for future use)
    * @param note - Response message to send back
-   * @returns Transaction, derived topics, and ephemeral keys for ratchet
+   * @returns Transaction, derived topics, ephemeral keys for ratchet, and KEM shared secret
    */
   async acceptHandshake(
     initiatorEphemeralPubKey: Uint8Array,
     initiatorIdentityPubKey: Uint8Array,  // Kept for potential future use
     note: string
   ): Promise<HandshakeResponseResult> {
-    const { 
-      tx, 
-      salt, 
+    const {
+      tx,
+      salt,
       tag,
       responderEphemeralSecret,
       responderEphemeralPublic,
+      kemSharedSecret,
     } = await respondToHandshake({
       executor: this.executor,
       initiatorEphemeralPubKey,
@@ -164,21 +172,27 @@ export class VerbethClient {
       signer: this.signer,
     });
 
+    // Extract X25519 part for topic derivation (first 32 bytes if extended)
+    const x25519Pub = initiatorEphemeralPubKey.length > 32
+      ? initiatorEphemeralPubKey.slice(0, 32)
+      : initiatorEphemeralPubKey;
+
     const { topicOutbound, topicInbound } = this.deriveTopicsFromDH(
       responderEphemeralSecret,
-      initiatorEphemeralPubKey,
+      x25519Pub,
       salt,
       false // responder swaps labels
     );
 
-    return { 
-      tx, 
+    return {
+      tx,
       topicOutbound,
       topicInbound,
       tag,
       salt,
       responderEphemeralSecret,
       responderEphemeralPublic,
+      kemSharedSecret,
     };
   }
 
@@ -188,16 +202,32 @@ export class VerbethClient {
 
   /**
    * Create a ratchet session as the handshake initiator.
-   * 
+   *
    * Call this after receiving and validating a handshake response.
    * Handles topic derivation from ephemeral DH internally.
-   * 
+   *
+   * If KEM ciphertext and secret are provided (PQ-hybrid), decapsulates
+   * to derive hybrid shared secret for post-quantum security.
+   *
    * @param params - Session creation parameters
    * @returns Ready-to-save RatchetSession
    */
   createInitiatorSession(params: CreateInitiatorSessionParams): RatchetSession {
-    const { contactAddress, initiatorEphemeralSecret, responderEphemeralPubKey, inResponseToTag } = params;
-    
+    const {
+      contactAddress,
+      initiatorEphemeralSecret,
+      responderEphemeralPubKey,
+      inResponseToTag,
+      kemCiphertext,
+      initiatorKemSecret,
+    } = params;
+
+    // Decapsulate KEM if present
+    let kemSecret: Uint8Array | undefined;
+    if (kemCiphertext && initiatorKemSecret) {
+      kemSecret = kem.decapsulate(kemCiphertext, initiatorKemSecret);
+    }
+
     const salt = getBytes(inResponseToTag);
     const { topicOutbound, topicInbound } = this.deriveTopicsFromDH(
       initiatorEphemeralSecret,
@@ -213,24 +243,40 @@ export class VerbethClient {
       theirResponderEphemeralPubKey: responderEphemeralPubKey,
       topicOutbound,
       topicInbound,
+      kemSecret,
     });
   }
 
   /**
    * Create a ratchet session as the handshake responder.
-   * 
+   *
    * Call this after sending a handshake response.
    * Handles topic derivation from ephemeral DH internally.
-   * 
+   *
+   * If kemSharedSecret is provided (PQ-hybrid), uses hybrid KDF
+   * for post-quantum security.
+   *
    * @param params - Session creation parameters
    * @returns Ready-to-save RatchetSession
    */
   createResponderSession(params: CreateResponderSessionParams): RatchetSession {
-    const { contactAddress, responderEphemeralSecret, responderEphemeralPublic, initiatorEphemeralPubKey, salt } = params;
-    
+    const {
+      contactAddress,
+      responderEphemeralSecret,
+      responderEphemeralPublic,
+      initiatorEphemeralPubKey,
+      salt,
+      kemSharedSecret,
+    } = params;
+
+    // Extract X25519 part for topic derivation (first 32 bytes if extended)
+    const x25519Pub = initiatorEphemeralPubKey.length > 32
+      ? initiatorEphemeralPubKey.slice(0, 32)
+      : initiatorEphemeralPubKey;
+
     const { topicOutbound, topicInbound } = this.deriveTopicsFromDH(
       responderEphemeralSecret,
-      initiatorEphemeralPubKey,
+      x25519Pub,
       salt,
       false // responder swaps labels
     );
@@ -240,9 +286,10 @@ export class VerbethClient {
       contactAddress,
       myResponderEphemeralSecret: responderEphemeralSecret,
       myResponderEphemeralPublic: responderEphemeralPublic,
-      theirHandshakeEphemeralPubKey: initiatorEphemeralPubKey,
+      theirHandshakeEphemeralPubKey: x25519Pub,
       topicOutbound,
       topicInbound,
+      kemSecret: kemSharedSecret,
     });
   }
 
@@ -559,67 +606,50 @@ export class VerbethClient {
   // Low-level API Access 
   // ===========================================================================
 
-  /** Crypto utilities */
   get crypto() {
     return crypto;
   }
 
-  /** Payload encoding utilities */
   get payload() {
     return payload;
   }
 
-  /** Verification utilities */
   get verify() {
     return verify;
   }
 
-  /** General utilities */
   get utils() {
     return utils;
   }
 
-  /** Identity derivation utilities */
   get identity() {
     return identity;
   }
 
-  /** Double ratchet module */
   get ratchet() {
     return ratchet;
   }
 
-  /** Executor instance for direct access */
   get executorInstance(): IExecutor {
     return this.executor;
   }
 
-  /** Identity keypair for direct access */
   get identityKeyPairInstance(): IdentityKeyPair {
     return this.identityKeyPair;
   }
 
-  /** User's address */
   get userAddress(): string {
     return this.address;
   }
 
-  /** Identity proof for direct access */
   get identityProofInstance(): IdentityProof {
     return this.identityProof;
   }
 
-  /**
-   * Generate unique ID for prepared messages.
-   */
   private generatePreparedId(): string {
     return `prep-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   }
 
-  /**
-   * Serialize session info for storage.
-   * Used in pending records for debugging/recovery.
-   */
   private serializeSessionInfo(session: RatchetSession): SerializedSessionInfo {
     return {
       conversationId: session.conversationId,

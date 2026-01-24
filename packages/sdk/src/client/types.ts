@@ -12,6 +12,7 @@ import type { IExecutor } from '../executor.js';
 import type { IdentityKeyPair, IdentityProof } from '../types.js';
 import type { RatchetSession } from '../ratchet/types.js';
 import type nacl from 'tweetnacl';
+import type { KemKeyPair } from '../send.js';
 
 /**
  * Configuration for creating a VerbethClient instance.
@@ -27,16 +28,18 @@ export interface VerbethClientConfig {
 export interface HandshakeResult {
   tx: any;
   ephemeralKeyPair: nacl.BoxKeyPair; // must persist secretKey for ratchet session init
+  kemKeyPair: KemKeyPair; // must persist secretKey for KEM decapsulation
 }
 
 export interface HandshakeResponseResult {
   tx: any;
-  topicOutbound: `0x${string}`;  
-  topicInbound: `0x${string}`;  
+  topicOutbound: `0x${string}`;
+  topicInbound: `0x${string}`;
   tag: `0x${string}`;
   salt: Uint8Array;
   responderEphemeralSecret: Uint8Array; //  must persist as dhMySecretKey in ratchet
   responderEphemeralPublic: Uint8Array;
+  kemSharedSecret?: Uint8Array; // from KEM encapsulation (32 bytes) - for hybrid KDF
 }
 
 /**

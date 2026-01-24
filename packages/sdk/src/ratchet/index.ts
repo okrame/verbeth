@@ -26,6 +26,7 @@ export {
   dh,
   generateDHKeyPair,
   deriveTopicFromDH,
+  hybridInitialSecret,
 } from './kdf.js';
 
 export {

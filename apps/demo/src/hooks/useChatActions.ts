@@ -75,7 +75,7 @@ export const useChatActions = ({
 
   /**
    * Send a handshake to initiate contact.
-   * Stores ephemeral secret for ratchet session init when response arrives.
+   * Stores ephemeral secret and KEM secret for ratchet session init when response arrives.
    */
   const sendHandshake = useCallback(
     async (recipientAddress: string, message: string) => {
@@ -91,7 +91,7 @@ export const useChatActions = ({
 
       setLoading(true);
       try {
-        const { tx, ephemeralKeyPair } = await verbethClient.sendHandshake(
+        const { tx, ephemeralKeyPair, kemKeyPair } = await verbethClient.sendHandshake(
           recipientAddress,
           message
         );
@@ -101,6 +101,7 @@ export const useChatActions = ({
           ownerAddress: verbethClient.userAddress,
           status: "handshake_sent",
           handshakeEphemeralSecret: hexlify(ephemeralKeyPair.secretKey),
+          handshakeKemSecret: hexlify(kemKeyPair.secretKey),
           lastMessage: message,
           lastTimestamp: Date.now(),
         };
@@ -158,6 +159,7 @@ export const useChatActions = ({
   /**
    * Accept a handshake from another user.
    * Creates ratchet session using VerbethClient and establishes contact.
+   * Supports PQ-hybrid: if initiator includes KEM, kemSharedSecret is derived.
    */
   const acceptHandshake = useCallback(
     async (handshake: any, responseMessage: string) => {
@@ -167,23 +169,28 @@ export const useChatActions = ({
       }
 
       try {
+        // Use full ephemeral key (may include KEM public key)
+        const ephemeralKey = handshake.ephemeralPubKeyFull || handshake.ephemeralPubKey;
+
         const {
           salt,
           responderEphemeralSecret,
           responderEphemeralPublic,
+          kemSharedSecret,
         } = await verbethClient.acceptHandshake(
-          handshake.ephemeralPubKey,
+          ephemeralKey,
           handshake.identityPubKey,
           responseMessage
         );
 
-        // Create session using VerbethClient (handles topic derivation internally)
+        // Create session using VerbethClient (handles topic derivation and hybrid KDF)
         const ratchetSession = verbethClient.createResponderSession({
           contactAddress: handshake.sender,
           responderEphemeralSecret,
           responderEphemeralPublic,
-          initiatorEphemeralPubKey: handshake.ephemeralPubKey,
+          initiatorEphemeralPubKey: ephemeralKey,
           salt,
+          kemSharedSecret,
         });
 
         // Save session - SDK will pick it up via SessionStore adapter

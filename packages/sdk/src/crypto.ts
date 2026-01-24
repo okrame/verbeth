@@ -106,6 +106,7 @@ export function decryptHandshakeResponse(
       return {
         unifiedPubKeys: Uint8Array.from(Buffer.from(obj.unifiedPubKeys, 'base64')),
         ephemeralPubKey: Uint8Array.from(Buffer.from(obj.ephemeralPubKey, 'base64')),
+        ...(obj.kemCiphertext && { kemCiphertext: Uint8Array.from(Buffer.from(obj.kemCiphertext, 'base64')) }),
         note: obj.note,
         identityProof: obj.identityProof,
         // topicInfo removed - no longer needed
@@ -124,19 +125,21 @@ export function decryptAndExtractHandshakeKeys(
   identityPubKey: Uint8Array;
   signingPubKey: Uint8Array;
   ephemeralPubKey: Uint8Array;
+  kemCiphertext?: Uint8Array;
   note?: string;
-  identityProof: IdentityProof; 
+  identityProof: IdentityProof;
 } | null {
   const decrypted = decryptHandshakeResponse(payloadJson, initiatorEphemeralSecretKey);
   if (!decrypted) return null;
-  
+
   const extracted = extractKeysFromHandshakeResponse(decrypted);
   if (!extracted) return null;
-  
+
   return {
     identityPubKey: extracted.identityPubKey,
     signingPubKey: extracted.signingPubKey,
     ephemeralPubKey: extracted.ephemeralPubKey,
+    kemCiphertext: decrypted.kemCiphertext,
     note: decrypted.note,
     identityProof: decrypted.identityProof
   };

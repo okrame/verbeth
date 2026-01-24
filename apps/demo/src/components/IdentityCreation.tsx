@@ -200,7 +200,7 @@ export function IdentityCreation({
                     </h2>
                 </div>
 
-                {/* NEW: Mode Selection (before identity creation) */}
+                {/* Mode Selection (before identity creation) */}
                 {needsModeSelection && !selectedMode && !signingStep && (
                     <div className="space-y-3 mb-6">
                         <ModeCard

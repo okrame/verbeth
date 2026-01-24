@@ -44,7 +44,8 @@ export interface Contact {
 
   conversationId?: string;
   previousConversationId?: string;
-  handshakeEphemeralSecret?: string; 
+  handshakeEphemeralSecret?: string;
+  handshakeKemSecret?: string; // ML-KEM secret for PQ-hybrid (hex)
   sessionResetAt?: number;
 }
 
@@ -72,12 +73,13 @@ export interface Message {
 
 export interface PendingHandshake {
   id: string;
-  ownerAddress: string; 
+  ownerAddress: string;
   emitterAddress?: string;
   sender: string;
   identityPubKey: Uint8Array;
   signingPubKey: Uint8Array;
-  ephemeralPubKey: Uint8Array;
+  ephemeralPubKey: Uint8Array;      // X25519 part only (32 bytes) - for backward compat
+  ephemeralPubKeyFull: Uint8Array;  // Full key (may be 1216 bytes with KEM)
   message: string;
   timestamp: number;
   blockNumber: number;

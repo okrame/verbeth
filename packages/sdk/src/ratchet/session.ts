@@ -10,12 +10,12 @@
  */
 
 import { keccak256, toUtf8Bytes, getBytes } from 'ethers';
-import { 
-  RatchetSession, 
-  InitResponderParams, 
+import {
+  RatchetSession,
+  InitResponderParams,
   InitInitiatorParams,
 } from './types.js';
-import { kdfRootKey, dh, generateDHKeyPair, deriveTopicFromDH } from './kdf.js';
+import { kdfRootKey, dh, generateDHKeyPair, deriveTopicFromDH, hybridInitialSecret } from './kdf.js';
 
 /**
  * Compute deterministic conversation ID from topics.
@@ -32,13 +32,16 @@ export function computeConversationId(topicA: string, topicB: string): string {
 
 /**
  * Initialize session as responder (Bob).
- * 
+ *
  * Called after receiving handshake, before/during sending response.
  * The responder must persist myResponderEphemeralSecret immediately.
  * This becomes dhMySecretKey and is required for all future ratchet operations.
- * 
+ *
  * Responder starts at epoch 0 (handshake topics).
- * 
+ *
+ * If kemSecret is provided (from ML-KEM encapsulation), uses hybrid KDF
+ * combining X25519 DH and ML-KEM for post-quantum security.
+ *
  * @param params - Initialization parameters
  * @returns Initialized ratchet session
  */
@@ -51,9 +54,14 @@ export function initSessionAsResponder(params: InitResponderParams): RatchetSess
     theirHandshakeEphemeralPubKey,
     topicOutbound,
     topicInbound,
+    kemSecret,
   } = params;
 
-  const sharedSecret = dh(myResponderEphemeralSecret, theirHandshakeEphemeralPubKey);
+  const x25519Secret = dh(myResponderEphemeralSecret, theirHandshakeEphemeralPubKey);
+
+  const sharedSecret = kemSecret
+    ? hybridInitialSecret(x25519Secret, kemSecret)
+    : x25519Secret;
 
   // Derive initial root key and sending chain key
   const { rootKey, chainKey: sendingChainKey } = kdfRootKey(
@@ -102,13 +110,16 @@ export function initSessionAsResponder(params: InitResponderParams): RatchetSess
 
 /**
  * Initialize session as initiator (Alice).
- * 
+ *
  * Called after receiving and validating handshake response.
- * 
+ *
  * Initiator precomputes epoch 1 topics from its first post-handshake DH step.
  * Outbound should use epoch 1 as soon as we introduce a new DH pubkey.
  * Inbound stays on epoch 0 until the responder ratchets.
- * 
+ *
+ * If kemSecret is provided (from ML-KEM decapsulation), uses hybrid KDF
+ * combining X25519 DH and ML-KEM for post-quantum security.
+ *
  * @param params - Initialization parameters
  * @returns Initialized ratchet session
  */
@@ -120,9 +131,14 @@ export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSess
     theirResponderEphemeralPubKey,
     topicOutbound,
     topicInbound,
+    kemSecret,
   } = params;
 
-  const sharedSecret = dh(myHandshakeEphemeralSecret, theirResponderEphemeralPubKey);
+  const x25519Secret = dh(myHandshakeEphemeralSecret, theirResponderEphemeralPubKey);
+
+  const sharedSecret = kemSecret
+    ? hybridInitialSecret(x25519Secret, kemSecret)
+    : x25519Secret;
 
   // Derive same initial root key as responder
   const { rootKey: initialRootKey, chainKey: bobsSendingChain } = kdfRootKey(
