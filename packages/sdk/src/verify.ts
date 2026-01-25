@@ -2,7 +2,8 @@
 // CLEANED VERSION - duplexTopics verification removed
 
 import { JsonRpcProvider, getBytes, hexlify, getAddress } from "ethers";
-import { decryptAndExtractHandshakeKeys, computeTagFromInitiator } from "./crypto.js";
+import { decryptAndExtractHandshakeKeys, computeHybridTagFromInitiator } from "./crypto.js";
+import { kem } from "./pq/kem.js";
 // REMOVED: verifyDuplexTopicsChecksum, deriveDuplexTopics imports
 import { HandshakeLog, HandshakeResponseLog, IdentityProof, IdentityContext } from "./types.js";
 // REMOVED: TopicInfoWire, DuplexTopics from imports
@@ -247,6 +248,7 @@ export async function verifyAndExtractHandshakeKeys(
 export async function verifyAndExtractHandshakeResponseKeys(
   responseEvent: HandshakeResponseLog,
   initiatorEphemeralSecretKey: Uint8Array,
+  initiatorKemSecretKey: Uint8Array,
   provider: JsonRpcProvider,
   ctx?: IdentityContext
 ): Promise<{
@@ -255,26 +257,34 @@ export async function verifyAndExtractHandshakeResponseKeys(
     identityPubKey: Uint8Array;
     signingPubKey: Uint8Array;
     ephemeralPubKey: Uint8Array;
-    kemCiphertext?: Uint8Array; // from PQ-hybrid handshake
+    kemCiphertext?: Uint8Array;
     note?: string;
   };
 }> {
-
-  const Rbytes = getBytes(responseEvent.responderEphemeralR); // hex -> Uint8Array
-  const expectedTag = computeTagFromInitiator(
-    initiatorEphemeralSecretKey,
-    Rbytes
-  );
-  if (expectedTag !== responseEvent.inResponseTo) {
-    return { isValid: false };
-  }
-
+  // Decrypt first to get kemCiphertext
   const extractedResponse = decryptAndExtractHandshakeKeys(
     responseEvent.ciphertext,
     initiatorEphemeralSecretKey
   );
 
   if (!extractedResponse) {
+    return { isValid: false };
+  }
+
+  if (!extractedResponse.kemCiphertext) {
+    return { isValid: false };
+  }
+
+  // Decapsulate and verify hybrid tag
+  const Rbytes = getBytes(responseEvent.responderEphemeralR);
+  const kemSecret = kem.decapsulate(extractedResponse.kemCiphertext, initiatorKemSecretKey);
+  const expectedTag = computeHybridTagFromInitiator(
+    initiatorEphemeralSecretKey,
+    Rbytes,
+    kemSecret
+  );
+
+  if (expectedTag !== responseEvent.inResponseTo) {
     return { isValid: false };
   }
 

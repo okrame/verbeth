@@ -5,6 +5,8 @@ import {
   decryptStructuredPayload,
   decryptHandshakeResponse,
   decryptAndExtractHandshakeKeys,
+  computeHybridTagFromResponder,
+  computeHybridTagFromInitiator,
 } from "../src/crypto.js";
 import {
   HandshakePayload,
@@ -581,6 +583,73 @@ describe("Encryption/Decryption", () => {
       expect(decoded.ephemeralPubKey).toEqual(ephemeralPubKey);
       expect(decoded.note).toBe(note);
       expect(decoded.identityProof).toEqual(identityProof);
+    });
+  });
+
+  describe("Hybrid HSR Tag (PQ-Secure)", () => {
+    it("responder and initiator compute matching hybrid tags", () => {
+      const viewKeyPair = nacl.box.keyPair(); // Alice's ephemeral
+      const tagKeyPair = nacl.box.keyPair();  // Bob's tag keypair (r, R)
+      const kemSecret = nacl.randomBytes(32);
+
+      const tagFromResponder = computeHybridTagFromResponder(
+        tagKeyPair.secretKey, // r
+        viewKeyPair.publicKey, // viewPubA
+        kemSecret
+      );
+
+      const tagFromInitiator = computeHybridTagFromInitiator(
+        viewKeyPair.secretKey, // viewPrivA
+        tagKeyPair.publicKey,  // R
+        kemSecret
+      );
+
+      expect(tagFromResponder).toBe(tagFromInitiator);
+      expect(tagFromResponder).toMatch(/^0x[a-f0-9]{64}$/);
+    });
+
+    it("different kemSecret produces different tag (PQ unlinkability)", () => {
+      const viewKeyPair = nacl.box.keyPair();
+      const tagKeyPair = nacl.box.keyPair();
+      const kemSecret1 = nacl.randomBytes(32);
+      const kemSecret2 = nacl.randomBytes(32);
+
+      const tag1 = computeHybridTagFromResponder(
+        tagKeyPair.secretKey,
+        viewKeyPair.publicKey,
+        kemSecret1
+      );
+
+      const tag2 = computeHybridTagFromResponder(
+        tagKeyPair.secretKey,
+        viewKeyPair.publicKey,
+        kemSecret2
+      );
+
+      // Same ECDH, different KEM -> different tags
+      expect(tag1).not.toBe(tag2);
+    });
+
+    it("different R produces different tag (R binding)", () => {
+      const viewKeyPair = nacl.box.keyPair();
+      const tagKeyPair1 = nacl.box.keyPair();
+      const tagKeyPair2 = nacl.box.keyPair();
+      const kemSecret = nacl.randomBytes(32);
+
+      const tag1 = computeHybridTagFromResponder(
+        tagKeyPair1.secretKey,
+        viewKeyPair.publicKey,
+        kemSecret
+      );
+
+      const tag2 = computeHybridTagFromResponder(
+        tagKeyPair2.secretKey,
+        viewKeyPair.publicKey,
+        kemSecret
+      );
+
+      // Same kemSecret, different ECDH -> different tags
+      expect(tag1).not.toBe(tag2);
     });
   });
 });

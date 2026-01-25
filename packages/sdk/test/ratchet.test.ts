@@ -10,7 +10,6 @@ import {
   ratchetEncrypt,
   ratchetDecrypt,
   matchesSessionTopic,
-  TOPIC_TRANSITION_WINDOW_MS,
   type RatchetSession,
 } from '../src/ratchet/index.js';
 

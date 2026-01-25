@@ -256,9 +256,15 @@ export async function processHandshakeResponseEvent(
       ? getBytes(contact.handshakeKemSecret)
       : undefined;
 
+    if (!initiatorKemSecret) {
+      onLog(`✗ Missing KEM secret for contact ${contact.address.slice(0, 8)}...`);
+      return null;
+    }
+
     const result = await verbethClient.verify.verifyAndExtractHandshakeResponseKeys(
       responseEvent,
       initiatorEphemeralSecret,
+      initiatorKemSecret,
       readProvider,
       identityContext
     );

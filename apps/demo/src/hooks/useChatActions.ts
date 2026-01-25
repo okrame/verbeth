@@ -189,7 +189,6 @@ export const useChatActions = ({
           kemSharedSecret,
         } = await verbethClient.acceptHandshake(
           ephemeralKey,
-          handshake.identityPubKey,
           responseMessage
         );
 

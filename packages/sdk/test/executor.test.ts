@@ -11,6 +11,7 @@ import {
 } from "../src/index.js";
 import type { LogChainV1 } from "@verbeth/contracts/typechain-types";
 import { IdentityKeyPair, IdentityProof } from "../src/types.js";
+import { kem } from "../src/pq/kem.js";
 
 const TEST_SMART_ACCOUNT_ADDRESS = "0x" + "12".repeat(20);
 const TEST_ENTRYPOINT_ADDRESS = "0x" + "45".repeat(20);
@@ -52,7 +53,13 @@ const mockSigner = {
 } as unknown as Signer;
 
 // Test data
-const testRecipientKey = nacl.box.keyPair();
+const testRecipientX25519Key = nacl.box.keyPair();
+const testKemKeyPair = kem.generateKeyPair();
+// Extended ephemeral key: X25519 (32) + ML-KEM (1184) = 1216 bytes
+const testInitiatorEphemeralExtended = new Uint8Array(32 + kem.publicKeyBytes);
+testInitiatorEphemeralExtended.set(testRecipientX25519Key.publicKey, 0);
+testInitiatorEphemeralExtended.set(testKemKeyPair.publicKey, 32);
+
 const testIdentityKeyPair: IdentityKeyPair = {
   publicKey: new Uint8Array(32).fill(1),
   secretKey: new Uint8Array(32).fill(2),
@@ -177,7 +184,7 @@ describe("respondToHandshake with Executors", () => {
 
     await respondToHandshake({
       executor,
-      initiatorEphemeralPubKey: testRecipientKey.publicKey,
+      initiatorEphemeralPubKey: testInitiatorEphemeralExtended,
       responderIdentityKeyPair: testIdentityKeyPair,
       note: "Response from EOA",
       identityProof: testIdentityProof,
@@ -208,7 +215,7 @@ describe("respondToHandshake with Executors", () => {
 
     await respondToHandshake({
       executor,
-      initiatorEphemeralPubKey: testRecipientKey.publicKey,
+      initiatorEphemeralPubKey: testInitiatorEphemeralExtended,
       responderIdentityKeyPair: testIdentityKeyPair,
       note: "Response from UserOp",
       identityProof: testIdentityProof,
@@ -231,7 +238,7 @@ describe("respondToHandshake with Executors", () => {
 
     await respondToHandshake({
       executor,
-      initiatorEphemeralPubKey: testRecipientKey.publicKey,
+      initiatorEphemeralPubKey: testInitiatorEphemeralExtended,
       responderIdentityKeyPair: testIdentityKeyPair,
       note: "Response from DirectEntryPoint",
       identityProof: testIdentityProof,
@@ -248,7 +255,7 @@ describe("respondToHandshake with Executors", () => {
 
     await respondToHandshake({
       executor,
-      initiatorEphemeralPubKey: testRecipientKey.publicKey,
+      initiatorEphemeralPubKey: testInitiatorEphemeralExtended,
       responderIdentityKeyPair: testIdentityKeyPair,
       // No responderEphemeralKeyPair provided
       note: "Auto-generated ephemeral key",

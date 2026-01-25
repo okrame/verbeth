@@ -31,7 +31,7 @@ import { ratchetEncrypt } from '../ratchet/encrypt.js';
 import { ratchetDecrypt } from '../ratchet/decrypt.js';
 import { packageRatchetPayload, parseRatchetPayload, isRatchetPayload } from '../ratchet/codec.js';
 import { verifyMessageSignature } from '../ratchet/auth.js';
-import { dh } from '../ratchet/kdf.js';
+import { dh, hybridInitialSecret } from '../ratchet/kdf.js';
 import { initSessionAsInitiator, initSessionAsResponder } from '../ratchet/session.js';
 import type { RatchetSession } from '../ratchet/types.js';
 
@@ -152,13 +152,11 @@ export class VerbethClient {
    * performs KEM encapsulation and returns kemSharedSecret.
    *
    * @param initiatorEphemeralPubKey - Initiator's ephemeral key (32 bytes X25519 or 1216 bytes with KEM)
-   * @param initiatorIdentityPubKey - Initiator's long-term X25519 identity key (kept for future use)
    * @param note - Response message to send back
    * @returns Transaction, derived topics, ephemeral keys for ratchet, and KEM shared secret
    */
   async acceptHandshake(
     initiatorEphemeralPubKey: Uint8Array,
-    initiatorIdentityPubKey: Uint8Array,  // Kept for potential future use
     note: string
   ): Promise<HandshakeResponseResult> {
     const {
@@ -182,11 +180,16 @@ export class VerbethClient {
       ? initiatorEphemeralPubKey.slice(0, 32)
       : initiatorEphemeralPubKey;
 
+    if (!kemSharedSecret) {
+      throw new Error("KEM is required for PQ-secure handshake");
+    }
+
     const { topicOutbound, topicInbound } = this.deriveTopicsFromDH(
       responderEphemeralSecret,
       x25519Pub,
       salt,
-      false // responder swaps labels
+      false,
+      kemSharedSecret
     );
 
     return {
@@ -227,18 +230,18 @@ export class VerbethClient {
       initiatorKemSecret,
     } = params;
 
-    // Decapsulate KEM if present
-    let kemSecret: Uint8Array | undefined;
-    if (kemCiphertext && initiatorKemSecret) {
-      kemSecret = kem.decapsulate(kemCiphertext, initiatorKemSecret);
+    if (!kemCiphertext || !initiatorKemSecret) {
+      throw new Error("KEM is required for PQ-secure handshake");
     }
+    const kemSecret = kem.decapsulate(kemCiphertext, initiatorKemSecret);
 
     const salt = getBytes(inResponseToTag);
     const { topicOutbound, topicInbound } = this.deriveTopicsFromDH(
       initiatorEphemeralSecret,
       responderEphemeralPubKey,
       salt,
-      true // initiator: no swap
+      true,
+      kemSecret
     );
 
     return initSessionAsInitiator({
@@ -274,6 +277,10 @@ export class VerbethClient {
       kemSharedSecret,
     } = params;
 
+    if (!kemSharedSecret) {
+      throw new Error("KEM is required for PQ-secure handshake");
+    }
+
     // Extract X25519 part for topic derivation (first 32 bytes if extended)
     const x25519Pub = initiatorEphemeralPubKey.length > 32
       ? initiatorEphemeralPubKey.slice(0, 32)
@@ -283,7 +290,8 @@ export class VerbethClient {
       responderEphemeralSecret,
       x25519Pub,
       salt,
-      false // responder swaps labels
+      false,
+      kemSharedSecret
     );
 
     return initSessionAsResponder({
@@ -312,38 +320,22 @@ export class VerbethClient {
     });
   }
 
-  /**
-   * Derive epoch 0 topics from DH shared secret (handshake topics).
-   *
-   * NOTE: This uses the v2 scheme (DH + salt) for backward compatibility
-   * with epoch 0 topics. Post-handshake topics (epoch 1+) use the v3 scheme
-   * (DH + rootKey) via deriveTopic() for quantum-resistant unlinkability.
-   *
-   * @param mySecret - My ephemeral secret key
-   * @param theirPublic - Their ephemeral public key
-   * @param salt - Salt for topic derivation (typically the tag bytes)
-   * @param isInitiator - Whether this party is the initiator (affects label swap)
-   * @returns Derived outbound and inbound topics
-   */
   private deriveTopicsFromDH(
     mySecret: Uint8Array,
     theirPublic: Uint8Array,
     salt: Uint8Array,
-    isInitiator: boolean
+    isInitiator: boolean,
+    kemSecret: Uint8Array
   ): { topicOutbound: `0x${string}`; topicInbound: `0x${string}` } {
     const ephemeralShared = dh(mySecret, theirPublic);
+    const hybridSecret = hybridInitialSecret(ephemeralShared, kemSecret);
 
-    // Inline epoch 0 topic derivation (v2 scheme: DH + salt)
-    // This keeps epoch 0 topics compatible while epoch 1+ use PQ-secure derivation
     const deriveEpoch0Topic = (direction: 'outbound' | 'inbound'): `0x${string}` => {
       const info = `verbeth:topic-${direction}:v2`;
-      const okm = hkdf(sha256, ephemeralShared, salt, info, 32);
+      const okm = hkdf(sha256, hybridSecret, salt, info, 32);
       return keccak256(okm) as `0x${string}`;
     };
 
-    // Labels are from initiator's perspective
-    // Initiator: outbound='outbound', inbound='inbound'
-    // Responder: outbound='inbound', inbound='outbound' (swapped)
     if (isInitiator) {
       return {
         topicOutbound: deriveEpoch0Topic('outbound'),

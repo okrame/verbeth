@@ -7,23 +7,19 @@
  * when matching incoming handshake responses.
  */
 
-import { computeTagFromInitiator } from '../crypto.js';
+import { computeHybridTagFromInitiator, decryptHandshakeResponse } from '../crypto.js';
+import { kem } from '../pq/kem.js';
 
-/**
- * Pending contact entry for HSR matching.
- */
 export interface PendingContactEntry {
   address: string;
   handshakeEphemeralSecret: Uint8Array;
+  kemSecretKey: Uint8Array;
 }
 
-/**
- * Cache entry storing computed tags per R value.
- */
 interface CacheEntry {
   address: string;
   secret: Uint8Array;
-  tagsByR: Map<string, `0x${string}`>;
+  kemSecretKey: Uint8Array;
 }
 
 /**
@@ -68,25 +64,20 @@ export class HsrTagIndex {
     for (const contact of contacts) {
       const existing = this.entries.get(contact.address);
 
-      if (existing && this.secretsEqual(existing.secret, contact.handshakeEphemeralSecret)) {
+      if (existing &&
+          this.secretsEqual(existing.secret, contact.handshakeEphemeralSecret) &&
+          this.secretsEqual(existing.kemSecretKey, contact.kemSecretKey)) {
         newEntries.set(contact.address, existing);
       } else {
         newEntries.set(contact.address, {
           address: contact.address,
           secret: contact.handshakeEphemeralSecret,
-          tagsByR: new Map(),
+          kemSecretKey: contact.kemSecretKey,
         });
       }
     }
 
-    // Rebuild tagToAddress map
-    this.tagToAddress.clear();
-    for (const [address, entry] of newEntries) {
-      for (const [, tag] of entry.tagsByR) {
-        this.tagToAddress.set(tag, address);
-      }
-    }
-
+    // Keep tagToAddress cache - it's still valid for already computed tags
     this.entries = newEntries;
   }
 
@@ -98,11 +89,13 @@ export class HsrTagIndex {
   addContact(contact: PendingContactEntry): void {
     const existing = this.entries.get(contact.address);
 
-    if (!existing || !this.secretsEqual(existing.secret, contact.handshakeEphemeralSecret)) {
+    if (!existing ||
+        !this.secretsEqual(existing.secret, contact.handshakeEphemeralSecret) ||
+        !this.secretsEqual(existing.kemSecretKey, contact.kemSecretKey)) {
       this.entries.set(contact.address, {
         address: contact.address,
         secret: contact.handshakeEphemeralSecret,
-        tagsByR: new Map(),
+        kemSecretKey: contact.kemSecretKey,
       });
     }
   }
@@ -115,9 +108,11 @@ export class HsrTagIndex {
   removeContact(address: string): void {
     const entry = this.entries.get(address);
     if (entry) {
-      // Remove all cached tags for this contact
-      for (const [, tag] of entry.tagsByR) {
-        this.tagToAddress.delete(tag);
+      // Remove any cached tags for this address
+      for (const [tag, addr] of this.tagToAddress) {
+        if (addr === address) {
+          this.tagToAddress.delete(tag);
+        }
       }
       this.entries.delete(address);
     }
@@ -130,36 +125,36 @@ export class HsrTagIndex {
   }
 
   /**
-   * Match an HSR by its tag and responder ephemeral public key.
+   * Match an HSR by its tag using hybrid (PQ-secure) computation.
    *
-   * First checks the global tag cache for O(1) lookup.
-   * If not found, computes tags for all pending contacts for this R
-   * and caches them.
+   * Decrypts the payload internally to extract kemCiphertext, then
+   * decapsulates and computes the hybrid tag for matching.
    *
    * @param inResponseToTag - The tag from the HSR event
    * @param R - Responder's ephemeral public key (from HSR event)
+   * @param encryptedPayload - JSON string of the encrypted HSR payload
    * @returns Address of matching contact, or null if no match
    */
-  matchByTag(inResponseToTag: `0x${string}`, R: Uint8Array): string | null {
-    // Fast path: check global tag cache
+  matchByTag(
+    inResponseToTag: `0x${string}`,
+    R: Uint8Array,
+    encryptedPayload: string
+  ): string | null {
+    // Cache check
     const cachedAddress = this.tagToAddress.get(inResponseToTag);
     if (cachedAddress) {
       return cachedAddress;
     }
 
-    // Slow path: compute tags for all contacts for this R
-    const rKey = this.bytesToHex(R);
-
+    // For each contact: decrypt → extract kemCiphertext → decapsulate → compute hybrid tag
     for (const [address, entry] of this.entries) {
-      // Check if we already computed for this R
-      let tag = entry.tagsByR.get(rKey);
+      const decrypted = decryptHandshakeResponse(encryptedPayload, entry.secret);
+      if (!decrypted || !decrypted.kemCiphertext) continue;
 
-      if (!tag) {
-        // Compute and cache
-        tag = computeTagFromInitiator(entry.secret, R);
-        entry.tagsByR.set(rKey, tag);
-        this.tagToAddress.set(tag, address);
-      }
+      const kemSecret = kem.decapsulate(decrypted.kemCiphertext, entry.kemSecretKey);
+      const tag = computeHybridTagFromInitiator(entry.secret, R, kemSecret);
+
+      this.tagToAddress.set(tag, address);
 
       if (tag === inResponseToTag) {
         return address;
@@ -189,11 +184,5 @@ export class HsrTagIndex {
       if (a[i] !== b[i]) return false;
     }
     return true;
-  }
-
-  private bytesToHex(bytes: Uint8Array): string {
-    return Array.from(bytes)
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
   }
 }

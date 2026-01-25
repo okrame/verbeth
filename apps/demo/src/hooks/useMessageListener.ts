@@ -1,7 +1,7 @@
 // apps/demo/src/hooks/useMessageListener.ts
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { keccak256, toUtf8Bytes, getBytes } from "ethers";
+import { keccak256, toUtf8Bytes, getBytes, AbiCoder } from "ethers";
 import { HsrTagIndex, type PendingContactEntry } from "@verbeth/sdk";
 import { dbService } from "../services/DbService.js";
 import {
@@ -198,26 +198,37 @@ export const useMessageListener = ({
   ): Contact | null => {
     const inResponseTo = log.topics[1] as `0x${string}`;
 
-    // Extract responderEphemeralR (first bytes32 in log.data)
-    const responderEphemeralR = log.data.slice(0, 66);
-    const R = getBytes(responderEphemeralR);
+    // Extract R and encrypted payload using AbiCoder
+    const abiCoder = new AbiCoder();
+    const [responderEphemeralRBytes, ciphertextBytes] = abiCoder.decode(
+      ["bytes32", "bytes"],
+      log.data
+    );
+    const R = getBytes(responderEphemeralRBytes);
+    const encryptedPayload = new TextDecoder().decode(getBytes(ciphertextBytes));
 
-    // Build index entries from pending contacts with ephemeral secrets
+    // Build index entries with kemSecretKey
     const indexEntries: PendingContactEntry[] = pendingContacts
-      .filter((c): c is Contact & { handshakeEphemeralSecret: string } =>
-        !!c.handshakeEphemeralSecret
-      )
+      .filter((c): c is Contact & {
+        handshakeEphemeralSecret: string;
+        handshakeKemSecret: string;
+      } => !!c.handshakeEphemeralSecret && !!c.handshakeKemSecret)
       .map(c => ({
         address: c.address,
         handshakeEphemeralSecret: getBytes(c.handshakeEphemeralSecret),
+        kemSecretKey: getBytes(c.handshakeKemSecret),
       }));
 
     hsrTagIndex.current.rebuild(indexEntries);
 
-    // O(1) lookup after first computation for this R
-    const matchedAddress = hsrTagIndex.current.matchByTag(inResponseTo, R);
-    if (!matchedAddress) return null;
+    // matchByTag now does decrypt+match internally
+    const matchedAddress = hsrTagIndex.current.matchByTag(
+      inResponseTo,
+      R,
+      encryptedPayload
+    );
 
+    if (!matchedAddress) return null;
     return pendingContacts.find(c => c.address === matchedAddress) || null;
   };
 

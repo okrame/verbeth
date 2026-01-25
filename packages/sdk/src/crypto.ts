@@ -179,6 +179,33 @@ export function computeTagFromInitiator(
 }
 
 // =============================================================================
+// Hybrid Tag Computation (PQ-Secure)
+// =============================================================================
+
+function finalizeHybridHsrTag(kemSecret: Uint8Array, ecdhShared: Uint8Array): `0x${string}` {
+  const okm = hkdf(sha256, kemSecret, ecdhShared, toUtf8Bytes("verbeth:hsr-hybrid:v1"), 32);
+  return keccak256(okm) as `0x${string}`;
+}
+
+export function computeHybridTagFromResponder(
+  rSecretKey: Uint8Array,
+  viewPubA: Uint8Array,
+  kemSecret: Uint8Array
+): `0x${string}` {
+  const ecdhShared = nacl.scalarMult(rSecretKey, viewPubA);
+  return finalizeHybridHsrTag(kemSecret, ecdhShared);
+}
+
+export function computeHybridTagFromInitiator(
+  viewPrivA: Uint8Array,
+  R: Uint8Array,
+  kemSecret: Uint8Array
+): `0x${string}` {
+  const ecdhShared = nacl.scalarMult(viewPrivA, R);
+  return finalizeHybridHsrTag(kemSecret, ecdhShared);
+}
+
+// =============================================================================
 // REMOVED FUNCTIONS:
 // =============================================================================
 // 

@@ -17,7 +17,7 @@ import {
 } from './payload.js';
 import { IdentityKeyPair, IdentityProof } from './types.js';
 import { IExecutor } from './executor.js';
-import { computeTagFromResponder } from './crypto.js';
+import { computeHybridTagFromResponder } from './crypto.js';
 import { kem } from './pq/kem.js';
 
 /** ML-KEM keypair for PQ-hybrid handshake */
@@ -40,14 +40,13 @@ export async function initiateHandshake({
   identityKeyPair,
   plaintextPayload,
   identityProof,
-  signer
 }: {
   executor: IExecutor;
   recipientAddress: string;
   identityKeyPair: IdentityKeyPair;
   plaintextPayload: string;
   identityProof: IdentityProof;
-  signer: Signer;
+  signer?: Signer;
 }): Promise<{
   tx: any;
   ephemeralKeyPair: nacl.BoxKeyPair;
@@ -114,7 +113,6 @@ export async function respondToHandshake({
   responderIdentityKeyPair,
   note,
   identityProof,
-  signer,
 }: {
   executor: IExecutor;
   /** Initiator's ephemeral key (32 bytes X25519) OR extended key (1216 bytes: X25519 + ML-KEM) */
@@ -122,7 +120,7 @@ export async function respondToHandshake({
   responderIdentityKeyPair: IdentityKeyPair;
   note?: string;
   identityProof: IdentityProof;
-  signer: Signer;
+  signer?: Signer;
 }): Promise<{
   tx: any;
   salt: Uint8Array;
@@ -169,14 +167,7 @@ export async function respondToHandshake({
     ? initiatorEphemeralPubKey.slice(0, 32)
     : initiatorEphemeralPubKey;
 
-  // Tag is derived from tagKeyPair, not ratchetKeyPair
-  const inResponseTo = computeTagFromResponder(
-    tagKeyPair.secretKey,
-    initiatorX25519Pub
-  );
-  const salt: Uint8Array = getBytes(inResponseTo);
-
-  // Handle ML-KEM encapsulation if initiator supports it
+  // KEM encapsulation FIRST (needed for hybrid tag)
   let kemCiphertext: Uint8Array | undefined;
   let kemSharedSecret: Uint8Array | undefined;
 
@@ -186,6 +177,18 @@ export async function respondToHandshake({
     kemCiphertext = ciphertext;
     kemSharedSecret = sharedSecret;
   }
+
+  if (!kemSharedSecret) {
+    throw new Error("KEM is required for PQ-secure handshake");
+  }
+
+  // Hybrid tag: combines ECDH(r, viewPubA) + kemSecret
+  const inResponseTo = computeHybridTagFromResponder(
+    tagKeyPair.secretKey,
+    initiatorX25519Pub,
+    kemSharedSecret
+  );
+  const salt: Uint8Array = getBytes(inResponseTo);
 
   // Response content includes ratchetKeyPair.publicKey (hidden inside encrypted payload)
   // and includes kemCiphertext for PQ-hybrid handshake
