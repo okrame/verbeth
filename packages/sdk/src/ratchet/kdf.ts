@@ -76,21 +76,24 @@ export function generateDHKeyPair(): { secretKey: Uint8Array; publicKey: Uint8Ar
 }
 
 /**
- * Derive topic from DH shared secret.
- * Called after each DH ratchet step to rotate topics.
- * 
- * @param dhSharedSecret - DH output from ratchet step (32 bytes)
+ * Derive topic from DH output using rootKey as PQ-secure salt.
+ *
+ * The rootKey (PQ-secure from hybrid handshake) acts as HKDF salt,
+ * providing quantum-resistant topic unlinkability even if dhOutput
+ * is later computed by a quantum adversary.
+ *
+ * @param rootKey - Current root key (32 bytes, PQ-secure)
+ * @param dhOutput - DH shared secret from ratchet step (32 bytes)
  * @param direction - 'outbound' or 'inbound' for topic direction
- * @param salt - Conversation ID bytes for domain separation
  * @returns bytes32 topic as hex string
  */
-export function deriveTopicFromDH(
-  dhSharedSecret: Uint8Array,
-  direction: 'outbound' | 'inbound',
-  salt: Uint8Array
+export function deriveTopic(
+  rootKey: Uint8Array,
+  dhOutput: Uint8Array,
+  direction: 'outbound' | 'inbound'
 ): `0x${string}` {
-  const info = `verbeth:topic-${direction}:v2`;
-  const okm = hkdf(sha256, dhSharedSecret, salt, info, 32);
+  const info = `verbeth:topic-${direction}:v3`;
+  const okm = hkdf(sha256, dhOutput, rootKey, info, 32);
   return keccak256(okm) as `0x${string}`;
 }
 

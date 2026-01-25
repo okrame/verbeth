@@ -11,7 +11,7 @@
  */
 
 import nacl from 'tweetnacl';
-import { hexlify, getBytes } from 'ethers';
+import { hexlify } from 'ethers';
 import {
   RatchetSession,
   MessageHeader,
@@ -21,7 +21,7 @@ import {
   MAX_STORED_SKIPPED_KEYS,
   TOPIC_TRANSITION_WINDOW_MS,
 } from './types.js';
-import { kdfRootKey, kdfChainKey, dh, generateDHKeyPair, deriveTopicFromDH } from './kdf.js';
+import { kdfRootKey, kdfChainKey, dh, generateDHKeyPair, deriveTopic } from './kdf.js';
 
 /**
  * Decrypt a message using the ratchet.
@@ -135,15 +135,15 @@ function dhRatchetStep(session: RatchetSession, theirNewDHPub: Uint8Array): Ratc
   const dhSend = dh(newDHKeyPair.secretKey, theirNewDHPub);
   const { rootKey: rootKey2, chainKey: sendingChainKey } = kdfRootKey(rootKey1, dhSend);
 
-  const saltBytes = getBytes(session.conversationId);
-  
   // Current topics (post ratchet) - swapped since we're the receiver
-  const newTopicOut = deriveTopicFromDH(dhReceive, 'inbound', saltBytes);  
-  const newTopicIn = deriveTopicFromDH(dhReceive, 'outbound', saltBytes); 
+  // Use rootKey1 (derived from dhReceive) for PQ-secure topic derivation
+  const newTopicOut = deriveTopic(rootKey1, dhReceive, 'inbound');
+  const newTopicIn = deriveTopic(rootKey1, dhReceive, 'outbound');
 
   // Next topics (for our next DH pubkey) - normal labels because we will be the sender
-  const nextTopicOut = deriveTopicFromDH(dhSend, 'outbound', saltBytes);
-  const nextTopicIn = deriveTopicFromDH(dhSend, 'inbound', saltBytes);
+  // Use rootKey2 (derived from dhSend) for PQ-secure topic derivation
+  const nextTopicOut = deriveTopic(rootKey2, dhSend, 'outbound');
+  const nextTopicIn = deriveTopic(rootKey2, dhSend, 'inbound');
 
   return {
     ...session,

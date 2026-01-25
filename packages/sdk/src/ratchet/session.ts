@@ -9,13 +9,13 @@
  * Initial shared secret is derived from ephemeral-to-ephemeral DH only.
  */
 
-import { keccak256, toUtf8Bytes, getBytes } from 'ethers';
+import { keccak256, toUtf8Bytes } from 'ethers';
 import {
   RatchetSession,
   InitResponderParams,
   InitInitiatorParams,
 } from './types.js';
-import { kdfRootKey, dh, generateDHKeyPair, deriveTopicFromDH, hybridInitialSecret } from './kdf.js';
+import { kdfRootKey, dh, generateDHKeyPair, deriveTopic, hybridInitialSecret } from './kdf.js';
 
 /**
  * Compute deterministic conversation ID from topics.
@@ -156,11 +156,11 @@ export function initSessionAsInitiator(params: InitInitiatorParams): RatchetSess
   );
 
   const conversationId = computeConversationId(topicOutbound, topicInbound);
-  const saltBytes = getBytes(conversationId);
-  
+
   // Pre-compute epoch 1 topics (for when our first message is sent)
-  const epoch1TopicOut = deriveTopicFromDH(dhSend, 'outbound', saltBytes);
-  const epoch1TopicIn = deriveTopicFromDH(dhSend, 'inbound', saltBytes);
+  // Use finalRootKey as PQ-secure salt for quantum-resistant topic unlinkability
+  const epoch1TopicOut = deriveTopic(finalRootKey, dhSend, 'outbound');
+  const epoch1TopicIn = deriveTopic(finalRootKey, dhSend, 'inbound');
 
   const now = Date.now();
 

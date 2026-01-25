@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import nacl from 'tweetnacl';
 
 import {
-  deriveTopicFromDH,
+  deriveTopic,
   initSessionAsResponder,
   initSessionAsInitiator,
   ratchetEncrypt,
@@ -14,48 +14,50 @@ import {
   type RatchetSession,
 } from '../src/ratchet/index.js';
 
-describe('deriveTopicFromDH', () => {
-  it('derives deterministic topic from DH output', () => {
+describe('deriveTopic (PQ-secure)', () => {
+  it('derives deterministic topic from rootKey + dhOutput', () => {
+    const rootKey = nacl.randomBytes(32);
     const dhOutput = nacl.randomBytes(32);
-    const salt = nacl.randomBytes(32);
 
-    const topic1 = deriveTopicFromDH(dhOutput, 'outbound', salt);
-    const topic2 = deriveTopicFromDH(dhOutput, 'outbound', salt);
+    const topic1 = deriveTopic(rootKey, dhOutput, 'outbound');
+    const topic2 = deriveTopic(rootKey, dhOutput, 'outbound');
 
     expect(topic1).toBe(topic2);
     expect(topic1).toMatch(/^0x[a-f0-9]{64}$/);
   });
 
-  it('derives different topics for outbound vs inbound', () => {
-    const dhOutput = nacl.randomBytes(32);
-    const salt = nacl.randomBytes(32);
+  it('derives different topics for different rootKeys (PQ-unlinkability)', () => {
+    const rootKey1 = nacl.randomBytes(32);
+    const rootKey2 = nacl.randomBytes(32);
+    const dhOutput = nacl.randomBytes(32); // SAME dhOutput
 
-    const topicOut = deriveTopicFromDH(dhOutput, 'outbound', salt);
-    const topicIn = deriveTopicFromDH(dhOutput, 'inbound', salt);
+    const topic1 = deriveTopic(rootKey1, dhOutput, 'outbound');
+    const topic2 = deriveTopic(rootKey2, dhOutput, 'outbound');
 
-    expect(topicOut).not.toBe(topicIn);
+    // Key property: quantum adversary who knows dhOutput
+    // but not rootKey cannot derive the topic
+    expect(topic1).not.toBe(topic2);
   });
 
-  it('derives different topics for different DH outputs', () => {
+  it('derives different topics for different dhOutputs', () => {
+    const rootKey = nacl.randomBytes(32);
     const dhOutput1 = nacl.randomBytes(32);
     const dhOutput2 = nacl.randomBytes(32);
-    const salt = nacl.randomBytes(32);
 
-    const topic1 = deriveTopicFromDH(dhOutput1, 'outbound', salt);
-    const topic2 = deriveTopicFromDH(dhOutput2, 'outbound', salt);
+    const topic1 = deriveTopic(rootKey, dhOutput1, 'outbound');
+    const topic2 = deriveTopic(rootKey, dhOutput2, 'outbound');
 
     expect(topic1).not.toBe(topic2);
   });
 
-  it('derives different topics for different salts', () => {
+  it('derives different topics for outbound vs inbound', () => {
+    const rootKey = nacl.randomBytes(32);
     const dhOutput = nacl.randomBytes(32);
-    const salt1 = nacl.randomBytes(32);
-    const salt2 = nacl.randomBytes(32);
 
-    const topic1 = deriveTopicFromDH(dhOutput, 'outbound', salt1);
-    const topic2 = deriveTopicFromDH(dhOutput, 'outbound', salt2);
+    const topicOut = deriveTopic(rootKey, dhOutput, 'outbound');
+    const topicIn = deriveTopic(rootKey, dhOutput, 'inbound');
 
-    expect(topic1).not.toBe(topic2);
+    expect(topicOut).not.toBe(topicIn);
   });
 });
 

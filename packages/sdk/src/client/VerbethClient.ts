@@ -11,7 +11,9 @@
  * - Transaction confirmation handling
  */
 
-import { hexlify, getBytes } from 'ethers';
+import { hexlify, getBytes, keccak256 } from 'ethers';
+import { hkdf } from '@noble/hashes/hkdf';
+import { sha256 } from '@noble/hashes/sha2';
 import { initiateHandshake, respondToHandshake } from '../send.js';
 import { kem } from '../pq/kem.js';
 import type { IExecutor } from '../executor.js';
@@ -29,7 +31,7 @@ import { ratchetEncrypt } from '../ratchet/encrypt.js';
 import { ratchetDecrypt } from '../ratchet/decrypt.js';
 import { packageRatchetPayload, parseRatchetPayload, isRatchetPayload } from '../ratchet/codec.js';
 import { verifyMessageSignature } from '../ratchet/auth.js';
-import { dh, deriveTopicFromDH } from '../ratchet/kdf.js';
+import { dh } from '../ratchet/kdf.js';
 import { initSessionAsInitiator, initSessionAsResponder } from '../ratchet/session.js';
 import type { RatchetSession } from '../ratchet/types.js';
 
@@ -311,7 +313,11 @@ export class VerbethClient {
   }
 
   /**
-   * Derive topics from DH shared secret.
+   * Derive epoch 0 topics from DH shared secret (handshake topics).
+   *
+   * NOTE: This uses the v2 scheme (DH + salt) for backward compatibility
+   * with epoch 0 topics. Post-handshake topics (epoch 1+) use the v3 scheme
+   * (DH + rootKey) via deriveTopic() for quantum-resistant unlinkability.
    *
    * @param mySecret - My ephemeral secret key
    * @param theirPublic - Their ephemeral public key
@@ -326,19 +332,27 @@ export class VerbethClient {
     isInitiator: boolean
   ): { topicOutbound: `0x${string}`; topicInbound: `0x${string}` } {
     const ephemeralShared = dh(mySecret, theirPublic);
-    
+
+    // Inline epoch 0 topic derivation (v2 scheme: DH + salt)
+    // This keeps epoch 0 topics compatible while epoch 1+ use PQ-secure derivation
+    const deriveEpoch0Topic = (direction: 'outbound' | 'inbound'): `0x${string}` => {
+      const info = `verbeth:topic-${direction}:v2`;
+      const okm = hkdf(sha256, ephemeralShared, salt, info, 32);
+      return keccak256(okm) as `0x${string}`;
+    };
+
     // Labels are from initiator's perspective
     // Initiator: outbound='outbound', inbound='inbound'
     // Responder: outbound='inbound', inbound='outbound' (swapped)
     if (isInitiator) {
       return {
-        topicOutbound: deriveTopicFromDH(ephemeralShared, 'outbound', salt),
-        topicInbound: deriveTopicFromDH(ephemeralShared, 'inbound', salt),
+        topicOutbound: deriveEpoch0Topic('outbound'),
+        topicInbound: deriveEpoch0Topic('inbound'),
       };
     } else {
       return {
-        topicOutbound: deriveTopicFromDH(ephemeralShared, 'inbound', salt),
-        topicInbound: deriveTopicFromDH(ephemeralShared, 'outbound', salt),
+        topicOutbound: deriveEpoch0Topic('inbound'),
+        topicInbound: deriveEpoch0Topic('outbound'),
       };
     }
   }

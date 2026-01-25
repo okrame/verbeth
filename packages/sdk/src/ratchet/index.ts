@@ -25,7 +25,7 @@ export {
   kdfChainKey,
   dh,
   generateDHKeyPair,
-  deriveTopicFromDH,
+  deriveTopic,
   hybridInitialSecret,
 } from './kdf.js';
 
