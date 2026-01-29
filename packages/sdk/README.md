@@ -3,17 +3,38 @@
 End-to-end encrypted messaging over public EVM blockchains.
 
 ### Install
+```bash
 npm install @verbeth/sdk
+```
 
-### Minimal example
+### Quickstart
 ```ts
-const client = await createVerbethClient(...)
-await client.send("hello")
+import { createVerbethClient, deriveIdentityKeyPairWithProof, ExecutorFactory } from '@verbeth/sdk';
+import { ethers } from 'ethers';
+
+const LOGCHAIN = '0x62720f39d5Ec6501508bDe4D152c1E13Fd2F6707';
+
+const provider = new ethers.BrowserProvider(window.ethereum);
+const signer = await provider.getSigner();
+const address = await signer.getAddress();
+
+const { identityKeyPair, identityProof } = await deriveIdentityKeyPairWithProof(signer, address);
+
+const contract = new ethers.Contract(LOGCHAIN, LogChainABI, signer);
+const client = createVerbethClient({
+  address,
+  signer,
+  identityKeyPair,
+  identityProof,
+  executor: ExecutorFactory.createEOA(contract),
+});
+
+await client.sendMessage(conversationId, 'Hello, encrypted world!');
 ```
 
 ## Documentation
 
-For detailed protocol documentation, security analysis, and improvement proposals, see the [main repository](https://github.com/okrame/verbeth-sdk).
+For detailed protocol documentation, see [docs.verbeth.xyz](https://docs.verbeth.xyz).
 
 ## License
 
