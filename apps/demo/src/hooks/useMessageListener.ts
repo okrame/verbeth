@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { keccak256, toUtf8Bytes, getBytes, AbiCoder } from "ethers";
-import { HsrTagIndex, type PendingContactEntry } from "@verbeth/sdk";
+import { matchHsrToContact, type PendingContactEntry } from "@verbeth/sdk";
 import { dbService } from "../services/DbService.js";
 import {
   LOGCHAIN_SINGLETON_ADDR,
@@ -47,7 +47,6 @@ export const useMessageListener = ({
 
   const processedLogs = useRef(new Set<string>());
   const scanChunks = useRef<ScanChunk[]>([]);
-  const hsrTagIndex = useRef(new HsrTagIndex());
 
   const calculateRecipientHash = (recipientAddr: string) => {
     return keccak256(toUtf8Bytes(`contact:${recipientAddr.toLowerCase()}`));
@@ -189,10 +188,10 @@ export const useMessageListener = ({
   };
 
   /**
-   * Match HSR event to a pending contact using HsrTagIndex for O(1) lookup.
-   * Uses cached tag computation for efficiency with many pending contacts.
+   * Match HSR event to a pending contact by computing hybrid tags.
+   * Complexity: O(N) where N = number of pending contacts.
    */
-  const matchHsrToContact = (
+  const findMatchingContact = (
     log: any,
     pendingContacts: Contact[]
   ): Contact | null => {
@@ -207,8 +206,8 @@ export const useMessageListener = ({
     const R = getBytes(responderEphemeralRBytes);
     const encryptedPayload = new TextDecoder().decode(getBytes(ciphertextBytes));
 
-    // Build index entries with kemSecretKey
-    const indexEntries: PendingContactEntry[] = pendingContacts
+    // Build entries for matching
+    const entries: PendingContactEntry[] = pendingContacts
       .filter((c): c is Contact & {
         handshakeEphemeralSecret: string;
         handshakeKemSecret: string;
@@ -219,14 +218,7 @@ export const useMessageListener = ({
         kemSecretKey: getBytes(c.handshakeKemSecret),
       }));
 
-    hsrTagIndex.current.rebuild(indexEntries);
-
-    // matchByTag now does decrypt+match internally
-    const matchedAddress = hsrTagIndex.current.matchByTag(
-      inResponseTo,
-      R,
-      encryptedPayload
-    );
+    const matchedAddress = matchHsrToContact(entries, inResponseTo, R, encryptedPayload);
 
     if (!matchedAddress) return null;
     return pendingContacts.find(c => c.address === matchedAddress) || null;
@@ -291,7 +283,7 @@ export const useMessageListener = ({
 
         // Match by cryptographic tag (not address)
         for (const log of responseLogs) {
-          const matchingContact = matchHsrToContact(log, pendingContacts);
+          const matchingContact = findMatchingContact(log, pendingContacts);
 
           if (matchingContact) {
             const logKey = `${log.transactionHash}-${log.logIndex}`;

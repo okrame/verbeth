@@ -2,7 +2,7 @@
 
 export { VerbethClient } from './VerbethClient.js';
 export { VerbethClientBuilder, createVerbethClient } from './VerbethClientBuilder.js';
-export { HsrTagIndex } from './HsrTagIndex.js';
+export { matchHsrToContact } from './hsrMatcher.js';
 
 export type {
   CreateVerbethClientOptions,
@@ -10,7 +10,7 @@ export type {
 
 export type {
   PendingContactEntry,
-} from './HsrTagIndex.js';
+} from './hsrMatcher.js';
 
 export type {
   VerbethClientConfig,

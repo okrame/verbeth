@@ -51,7 +51,7 @@ export {
   VerbethClient,
   VerbethClientBuilder,
   createVerbethClient,
-  HsrTagIndex,
+  matchHsrToContact,
 } from './client/index.js';
 
 export type {
