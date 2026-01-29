@@ -18,8 +18,9 @@ import {
   deriveIdentityKeyPairWithProof,
   verifyHandshakeIdentity,
   verifyHandshakeResponseIdentity,
-  computeTagFromInitiator,
+  computeHybridTagFromInitiator,
   decodeUnifiedPubKeys,
+  kem,
 } from "../packages/sdk/src/index.js";
 
 import {

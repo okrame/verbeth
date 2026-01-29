@@ -27,3 +27,5 @@ ignition/deployments/chain-84532
 
 pnpm-lock.yaml
 /tests
+
+README.md
