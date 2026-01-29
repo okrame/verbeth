@@ -25,6 +25,6 @@ ignition/deployments/chain-84532
 
 *apps/notes/
 .claudeignore
+*.claude/
 CLAUDE.md
-
 old-plan-docs.md
