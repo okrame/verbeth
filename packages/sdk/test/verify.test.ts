@@ -7,14 +7,8 @@ import {
   decryptAndExtractHandshakeKeys,
 } from "../src/crypto.js";
 import {
-  HandshakePayload,
-  encodeHandshakePayload,
-  decodeHandshakePayload,
-  encodeHandshakeResponseContent,
-  decodeHandshakeResponseContent,
   HandshakeResponseContent,
   encodeUnifiedPubKeys,
-  extractKeysFromHandshakePayload,
   extractKeysFromHandshakeResponse,
   parseHandshakeKeys,
 } from "../src/payload.js";
@@ -296,26 +290,6 @@ describe("Encryption/Decryption", () => {
   });
 
   describe("Key Extraction Functions", () => {
-    it("should extract keys from handshake payload", () => {
-      const identityPubKey = new Uint8Array(32).fill(20);
-      const signingPubKey = new Uint8Array(32).fill(21);
-      const ephemeralPubKey = new Uint8Array(32).fill(22);
-      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
-
-      const payload: HandshakePayload = {
-        unifiedPubKeys,
-        ephemeralPubKey,
-        plaintextPayload: "test payload",
-      };
-
-      const extracted = extractKeysFromHandshakePayload(payload);
-
-      expect(extracted).not.toBeNull();
-      expect(extracted!.identityPubKey).toEqual(identityPubKey);
-      expect(extracted!.signingPubKey).toEqual(signingPubKey);
-      expect(extracted!.ephemeralPubKey).toEqual(ephemeralPubKey);
-    });
-
     it("should extract keys from handshake response content", () => {
       const identityPubKey = new Uint8Array(32).fill(25);
       const signingPubKey = new Uint8Array(32).fill(26);
@@ -340,19 +314,6 @@ describe("Encryption/Decryption", () => {
       expect(extracted!.identityPubKey).toEqual(identityPubKey);
       expect(extracted!.signingPubKey).toEqual(signingPubKey);
       expect(extracted!.ephemeralPubKey).toEqual(ephemeralPubKey);
-    });
-
-    it("should return null for invalid unified keys in payload", () => {
-      const invalidUnifiedKeys = new Uint8Array(30).fill(1); // Wrong size
-
-      const payload: HandshakePayload = {
-        unifiedPubKeys: invalidUnifiedKeys,
-        ephemeralPubKey: new Uint8Array(32).fill(2),
-        plaintextPayload: "invalid test",
-      };
-
-      const extracted = extractKeysFromHandshakePayload(payload);
-      expect(extracted).toBeNull();
     });
 
     it("should return null for invalid unified keys in response content", () => {
@@ -534,53 +495,4 @@ describe("Encryption/Decryption", () => {
     });
   });
 
-  describe("Payload Encoding/Decoding", () => {
-    it("should encode and decode handshake payload correctly", () => {
-      const identityPubKey = new Uint8Array(32).fill(1);
-      const signingPubKey = new Uint8Array(32).fill(9);
-      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
-
-      const payload: HandshakePayload = {
-        unifiedPubKeys,
-        ephemeralPubKey: new Uint8Array(32).fill(2),
-        plaintextPayload: "hello bob",
-      };
-
-      const encoded = encodeHandshakePayload(payload);
-      const decoded = decodeHandshakePayload(encoded);
-
-      expect(decoded.unifiedPubKeys).toEqual(payload.unifiedPubKeys);
-      expect(decoded.ephemeralPubKey).toEqual(payload.ephemeralPubKey);
-      expect(decoded.plaintextPayload).toBe("hello bob");
-    });
-
-    it("should encode and decode response content correctly", () => {
-      const identityPubKey = new Uint8Array(32).fill(3);
-      const signingPubKey = new Uint8Array(32).fill(10);
-      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
-
-      const ephemeralPubKey = new Uint8Array(32).fill(4);
-      const note = "here is my response";
-
-      const identityProof: IdentityProof = {
-        message: "VerbEth Identity Key Identity v1\nAddress: 0xtest...",
-        signature: "0x" + "3".repeat(130),
-      };
-
-      const content: HandshakeResponseContent = {
-        unifiedPubKeys,
-        ephemeralPubKey,
-        note,
-        identityProof,
-      };
-
-      const encoded = encodeHandshakeResponseContent(content);
-      const decoded = decodeHandshakeResponseContent(encoded);
-
-      expect(decoded.unifiedPubKeys).toEqual(unifiedPubKeys);
-      expect(decoded.ephemeralPubKey).toEqual(ephemeralPubKey);
-      expect(decoded.note).toBe(note);
-      expect(decoded.identityProof).toEqual(identityProof);
-    });
-  });
 });

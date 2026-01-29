@@ -14,7 +14,7 @@
 import { hexlify, getBytes, keccak256 } from 'ethers';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
-import { initiateHandshake, respondToHandshake } from '../send.js';
+import { initiateHandshake, respondToHandshake } from '../handshake.js';
 import { kem } from '../pq/kem.js';
 import type { IExecutor } from '../executor.js';
 import type { IdentityKeyPair, IdentityProof } from '../types.js';

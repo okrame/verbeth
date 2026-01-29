@@ -12,7 +12,7 @@ import type { IExecutor } from '../executor.js';
 import type { IdentityKeyPair, IdentityProof } from '../types.js';
 import type { RatchetSession } from '../ratchet/types.js';
 import type nacl from 'tweetnacl';
-import type { KemKeyPair } from '../send.js';
+import type { KemKeyPair } from '../handshake.js';
 
 /**
  * Event emitted when topic ratcheting occurs.

@@ -137,40 +137,6 @@ export function decryptAndExtractHandshakeKeys(
 }
 
 // =============================================================================
-// HSR Tag Computation
-// =============================================================================
-
-/**
- * HKDF(sha256) on shared secret, info="verbeth:hsr", then Keccak-256 -> bytes32 (0x...)
- */
-function finalizeHsrTag(shared: Uint8Array): `0x${string}` {
-  const okm = hkdf(sha256, shared, new Uint8Array(0), toUtf8Bytes("verbeth:hsr"), 32);
-  return keccak256(okm) as `0x${string}`;
-}
-
-/**
- * Responder: tag = H( KDF( ECDH(r, viewPubA), "verbeth:hsr"))
- */
-export function computeTagFromResponder(
-  rSecretKey: Uint8Array,
-  viewPubA: Uint8Array
-): `0x${string}` {
-  const shared = nacl.scalarMult(rSecretKey, viewPubA);
-  return finalizeHsrTag(shared);
-}
-
-/**
- * Initiator: tag = H( KDF( ECDH(viewPrivA, R), "verbeth:hsr"))
- */
-export function computeTagFromInitiator(
-  viewPrivA: Uint8Array,
-  R: Uint8Array
-): `0x${string}` {
-  const shared = nacl.scalarMult(viewPrivA, R);
-  return finalizeHsrTag(shared);
-}
-
-// =============================================================================
 // Hybrid Tag Computation (PQ-Secure)
 // =============================================================================
 

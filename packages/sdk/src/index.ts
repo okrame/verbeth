@@ -2,7 +2,7 @@
 
 export * from './crypto.js';
 export * from './payload.js';
-export * from './send.js';
+export * from './handshake.js';
 export * from './verify.js';
 export * from './types.js';
 export * from './utils.js';
@@ -12,9 +12,7 @@ export * from './executor.js';
 export {
   encodeUnifiedPubKeys,
   decodeUnifiedPubKeys,
-  createHandshakePayload,
   createHandshakeResponseContent,
-  extractKeysFromHandshakePayload,
   extractKeysFromHandshakeResponse,
   parseHandshakeKeys
 } from './payload.js';

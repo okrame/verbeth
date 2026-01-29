@@ -153,67 +153,6 @@ export interface HandshakeResponseContent {
   identityProof: IdentityProof;
 }
 
-export function encodeHandshakePayload(payload: HandshakePayload): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify({
-    unifiedPubKeys: Buffer.from(payload.unifiedPubKeys).toString('base64'),
-    ephemeralPubKey: Buffer.from(payload.ephemeralPubKey).toString('base64'),
-    plaintextPayload: payload.plaintextPayload
-  }));
-}
-
-export function decodeHandshakePayload(encoded: Uint8Array): HandshakePayload {
-  const json = new TextDecoder().decode(encoded);
-  const parsed = JSON.parse(json);
-  return {
-    unifiedPubKeys: Uint8Array.from(Buffer.from(parsed.unifiedPubKeys, 'base64')),
-    ephemeralPubKey: Uint8Array.from(Buffer.from(parsed.ephemeralPubKey, 'base64')),
-    plaintextPayload: parsed.plaintextPayload
-  };
-}
-
-export function encodeHandshakeResponseContent(content: HandshakeResponseContent): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify({
-    unifiedPubKeys: Buffer.from(content.unifiedPubKeys).toString('base64'),
-    ephemeralPubKey: Buffer.from(content.ephemeralPubKey).toString('base64'),
-    ...(content.kemCiphertext && { kemCiphertext: Buffer.from(content.kemCiphertext).toString('base64') }),
-    note: content.note,
-    identityProof: content.identityProof,
-  }));
-}
-
-export function decodeHandshakeResponseContent(encoded: Uint8Array): HandshakeResponseContent {
-  const json = new TextDecoder().decode(encoded);
-  const obj = JSON.parse(json);
-
-  if (!obj.identityProof) {
-    throw new Error("Invalid handshake response: missing identityProof");
-  }
-
-  return {
-    unifiedPubKeys: Uint8Array.from(Buffer.from(obj.unifiedPubKeys, 'base64')),
-    ephemeralPubKey: Uint8Array.from(Buffer.from(obj.ephemeralPubKey, 'base64')),
-    ...(obj.kemCiphertext && { kemCiphertext: Uint8Array.from(Buffer.from(obj.kemCiphertext, 'base64')) }),
-    note: obj.note,
-    identityProof: obj.identityProof,
-  };
-}
-
-/**
- * Creates HandshakePayload from separate identity keys
- */
-export function createHandshakePayload(
-  identityPubKey: Uint8Array,
-  signingPubKey: Uint8Array,
-  ephemeralPubKey: Uint8Array,
-  plaintextPayload: string
-): HandshakePayload {
-  return {
-    unifiedPubKeys: encodeUnifiedPubKeys(identityPubKey, signingPubKey),
-    ephemeralPubKey,
-    plaintextPayload
-  };
-}
-
 export function createHandshakeResponseContent(
   identityPubKey: Uint8Array,
   signingPubKey: Uint8Array,
@@ -232,24 +171,6 @@ export function createHandshakeResponseContent(
     ...(kemCiphertext && { kemCiphertext }),
     note,
     identityProof,
-  };
-}
-
-/**
- * Extracts individual keys from HandshakePayload
- */
-export function extractKeysFromHandshakePayload(payload: HandshakePayload): {
-  identityPubKey: Uint8Array;
-  signingPubKey: Uint8Array;
-  ephemeralPubKey: Uint8Array;
-} | null {
-  const decoded = decodeUnifiedPubKeys(payload.unifiedPubKeys);
-  if (!decoded) return null;
-  
-  return {
-    identityPubKey: decoded.identityPubKey,
-    signingPubKey: decoded.signingPubKey,
-    ephemeralPubKey: payload.ephemeralPubKey
   };
 }
 

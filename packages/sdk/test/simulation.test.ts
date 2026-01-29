@@ -31,9 +31,6 @@ function createSigningKeyPair() {
   return nacl.sign.keyPair();
 }
 
-/**
- * Helper to create a pair of initialized sessions (Alice & Bob)
- */
 function createSessionPair(): {
   aliceSession: RatchetSession;
   bobSession: RatchetSession;
@@ -657,7 +654,6 @@ describe("App Layer Simulation", () => {
     it("should handle large message", () => {
       const { aliceSession, bobSession, bobSigning } = createSessionPair();
 
-      // 1MB message
       const largeMessage = nacl.randomBytes(1024 * 1024);
       const enc = ratchetEncrypt(bobSession, largeMessage, bobSigning.secretKey);
       const dec = ratchetDecrypt(aliceSession, enc.header, enc.ciphertext);
@@ -672,15 +668,12 @@ describe("App Layer Simulation", () => {
 
       const enc = ratchetEncrypt(bobSession, new TextEncoder().encode("Original"), bobSigning.secretKey);
 
-      // First decrypt succeeds
       const dec1 = ratchetDecrypt(aliceSession, enc.header, enc.ciphertext);
       expect(dec1).not.toBeNull();
       aliceSession = dec1!.session;
 
-      // Replay attempt - same header/ciphertext
       const dec2 = ratchetDecrypt(aliceSession, enc.header, enc.ciphertext);
       
-      // Should fail - message key was consumed
       expect(dec2).toBeNull();
     });
 

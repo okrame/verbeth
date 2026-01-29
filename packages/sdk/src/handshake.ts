@@ -1,4 +1,4 @@
-// packages/sdk/src/send.ts
+// packages/sdk/src/handshake.ts
 
 import {
   keccak256,
