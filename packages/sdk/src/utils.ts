@@ -1,5 +1,4 @@
 // packages/sdk/src/utils.ts
-// CLEANED VERSION - pickOutboundTopic and DuplexTopics removed
 
 import {
   Contract,
@@ -15,7 +14,6 @@ import {
   defineChain,
   type PublicClient,
 } from "viem";
-// REMOVED: DuplexTopics import no longer needed
 
 
 export function parseBindingMessage(message: string): {
@@ -110,7 +108,7 @@ export function hasERC6492Suffix(sigHex: string): boolean {
 
 /**
  * Checks if an address is a smart contract that supports EIP-1271 signature verification
- * Returns true if the address has deployed code AND implements isValidSignature function
+ * Returns true if the address has deployed code and implements isValidSignature function
  */
 export async function isSmartContract1271(
   address: string,
@@ -179,12 +177,3 @@ export async function isSmartContract1271(
     return false;
   }
 }
-
-// =============================================================================
-// REMOVED FUNCTIONS:
-// =============================================================================
-// 
-// pickOutboundTopic() - removed, no longer using DuplexTopics structure
-//                       Topics are now derived directly from ephemeral DH
-//
-// =============================================================================

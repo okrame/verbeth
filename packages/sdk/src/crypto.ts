@@ -1,17 +1,14 @@
 // packages/sdk/src/crypto.ts
-// CLEANED VERSION - duplexTopics and legacy functions removed
 
 /**
- * Cryptographic utilities for Verbeth.
- * 
  * This module handles:
- * - Handshake encryption/decryption (NaCl box - one-time exchange)
+ * - Handshake encryption/decryption 
  * - Tag computation for handshake responses
  * 
- * NOTE: Post-handshake message encryption uses the ratchet module.
+ * Post-handshake message encryption uses the ratchet module.
  * See `ratchet/encrypt.ts` and `ratchet/decrypt.ts` for Double Ratchet.
  * 
- * NOTE: Topic derivation is now handled entirely by the ratchet module.
+ * Topic derivation is handled entirely by the ratchet module.
  * See `ratchet/kdf.ts` for `deriveTopicFromDH`.
  */
 
@@ -30,7 +27,7 @@ import {
 import { IdentityProof } from './types.js'; 
 
 // =============================================================================
-// Handshake Encryption (NaCl Box)
+// Handshake Encryption
 // =============================================================================
 
 /**
@@ -88,9 +85,7 @@ export function decryptStructuredPayload<T>(
 // Handshake Response Decryption
 // =============================================================================
 
-/**
- * Decrypts handshake response and extracts individual keys from unified format.
- */
+
 export function decryptHandshakeResponse(
   payloadJson: string,
   initiatorEphemeralSecretKey: Uint8Array
@@ -108,15 +103,12 @@ export function decryptHandshakeResponse(
         ...(obj.kemCiphertext && { kemCiphertext: Uint8Array.from(Buffer.from(obj.kemCiphertext, 'base64')) }),
         note: obj.note,
         identityProof: obj.identityProof,
-        // topicInfo removed - no longer needed
       };
     }
   );
 }
 
-/**
- * Helper to decrypt handshake response and extract individual keys.
- */
+
 export function decryptAndExtractHandshakeKeys(
   payloadJson: string,
   initiatorEphemeralSecretKey: Uint8Array
@@ -145,7 +137,7 @@ export function decryptAndExtractHandshakeKeys(
 }
 
 // =============================================================================
-// Tag Computation (Handshake Response Linkage)
+// HSR Tag Computation
 // =============================================================================
 
 /**
@@ -204,15 +196,3 @@ export function computeHybridTagFromInitiator(
   const ecdhShared = nacl.scalarMult(viewPrivA, R);
   return finalizeHybridHsrTag(kemSecret, ecdhShared);
 }
-
-// =============================================================================
-// REMOVED FUNCTIONS:
-// =============================================================================
-// 
-// deriveLongTermShared() - was used for duplexTopics, now use ratchet/kdf.ts dh()
-// deriveDuplexTopics() - replaced by deriveTopicFromDH() in ratchet/kdf.ts
-// verifyDuplexTopicsChecksum() - no longer needed, topics derive from DH
-// encryptMessage() - deprecated, use ratchetEncrypt() from ratchet module
-// decryptMessage() - deprecated, use ratchetDecrypt() from ratchet module
-//
-// =============================================================================

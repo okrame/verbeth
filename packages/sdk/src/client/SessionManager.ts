@@ -13,9 +13,6 @@
 import { RatchetSession, TOPIC_TRANSITION_WINDOW_MS } from '../ratchet/types.js';
 import { SessionStore } from './types.js';
 
-/**
- * Result of topic-based session lookup.
- */
 export interface TopicLookupResult {
   session: RatchetSession;
   topicMatch: 'current' | 'next' | 'previous';
@@ -38,13 +35,11 @@ export class SessionManager {
    * Get session by conversation ID, checking cache first.
    */
   async getByConversationId(conversationId: string): Promise<RatchetSession | null> {
-    // Check cache first
     const cached = this.cache.get(conversationId);
     if (cached) {
       return cached;
     }
 
-    // Load from store
     const session = await this.store.get(conversationId);
     if (session) {
       this.cache.set(conversationId, session);
@@ -66,19 +61,16 @@ export class SessionManager {
   async getByInboundTopic(topic: string): Promise<TopicLookupResult | null> {
     const topicLower = topic.toLowerCase();
     
-    // Try store's topic lookup (handles all three cases)
     const session = await this.store.getByInboundTopic(topic);
     if (!session) {
       return null;
     }
 
-    // Check cache for more recent state (important for batched operations)
+    // Check cache for more recent state (e.g. for batched operations)
     const cached = this.cache.get(session.conversationId);
     let workingSession = cached || session;
 
-    // Determine which topic matched
     if (workingSession.currentTopicInbound.toLowerCase() === topicLower) {
-      // Cache if not already cached
       if (!cached) {
         this.cache.set(workingSession.conversationId, workingSession);
       }
@@ -103,8 +95,7 @@ export class SessionManager {
       return { session: workingSession, topicMatch: 'previous' };
     }
 
-    // Topic found in store but doesn't match current session state
-    // This shouldn't happen normally, but handle gracefully
+    // Topic found in store but doesn't match current session state (this shouldn't happen normally, but handle gracefully)
     return null;
   }
 
@@ -122,7 +113,6 @@ export class SessionManager {
 
   /**
    * Update cache without persisting (for batch operations).
-   * Call save() after batch completes.
    */
   updateCache(session: RatchetSession): void {
     this.cache.set(session.conversationId, session);
@@ -130,7 +120,6 @@ export class SessionManager {
 
   /**
    * Persist all cached sessions to store.
-   * Used after batch operations.
    */
   async flushCache(): Promise<void> {
     const saves = Array.from(this.cache.values()).map(s => this.store.save(s));

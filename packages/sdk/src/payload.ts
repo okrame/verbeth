@@ -1,9 +1,6 @@
 // packages/sdk/src/payload.ts
-// CLEANED VERSION - TopicInfoWire removed
 
 import { IdentityProof } from './types.js'; 
-// REMOVED: TopicInfoWire import
-
 
 export interface EncryptedPayload {
   v: number; // version
@@ -124,7 +121,6 @@ export function decodeUnifiedPubKeys(pubKeys: Uint8Array): {
   signingPubKey: Uint8Array;
 } | null {
   if (pubKeys.length === 64) {
-    // Legacy
     return {
       version: 0,
       identityPubKey: pubKeys.slice(0, 32),
@@ -133,7 +129,6 @@ export function decodeUnifiedPubKeys(pubKeys: Uint8Array): {
   }
   
   if (pubKeys.length === 65 && pubKeys[0] === 0x01) {
-    // V1: with versioning
     return {
       version: 1,
       identityPubKey: pubKeys.slice(1, 33),
@@ -145,15 +140,15 @@ export function decodeUnifiedPubKeys(pubKeys: Uint8Array): {
 }
 
 export interface HandshakePayload {
-  unifiedPubKeys: Uint8Array;      // 65 bytes: version + X25519 + Ed25519
+  unifiedPubKeys: Uint8Array;   
   ephemeralPubKey: Uint8Array;
   plaintextPayload: string;
 }
 
 export interface HandshakeResponseContent {
-  unifiedPubKeys: Uint8Array;      // 65 bytes: version + X25519 + Ed25519
+  unifiedPubKeys: Uint8Array;    
   ephemeralPubKey: Uint8Array;
-  kemCiphertext?: Uint8Array;      // ML-KEM-768 ciphertext (1088 bytes) for PQ hybrid handshake
+  kemCiphertext?: Uint8Array;   
   note?: string;
   identityProof: IdentityProof;
 }
@@ -200,7 +195,6 @@ export function decodeHandshakeResponseContent(encoded: Uint8Array): HandshakeRe
     ...(obj.kemCiphertext && { kemCiphertext: Uint8Array.from(Buffer.from(obj.kemCiphertext, 'base64')) }),
     note: obj.note,
     identityProof: obj.identityProof,
-    // REMOVED: topicInfo decoding
   };
 }
 

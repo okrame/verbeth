@@ -35,9 +35,6 @@ export interface MessageDecryptedEvent {
 
 /**
  * Optional callbacks for VerbethClient events.
- *
- * These callbacks allow apps to react to internal state changes
- * without polling or manual session inspection.
  */
 export interface VerbethClientCallbacks {
   /**
@@ -67,8 +64,8 @@ export interface VerbethClientConfig {
 
 export interface HandshakeResult {
   tx: any;
-  ephemeralKeyPair: nacl.BoxKeyPair; // must persist secretKey for ratchet session init
-  kemKeyPair: KemKeyPair; // must persist secretKey for KEM decapsulation
+  ephemeralKeyPair: nacl.BoxKeyPair; 
+  kemKeyPair: KemKeyPair; 
 }
 
 export interface HandshakeResponseResult {
@@ -77,28 +74,26 @@ export interface HandshakeResponseResult {
   topicInbound: `0x${string}`;
   tag: `0x${string}`;
   salt: Uint8Array;
-  responderEphemeralSecret: Uint8Array; //  must persist as dhMySecretKey in ratchet
+  responderEphemeralSecret: Uint8Array; 
   responderEphemeralPublic: Uint8Array;
-  kemSharedSecret?: Uint8Array; // from KEM encapsulation (32 bytes) - for hybrid KDF
+  kemSharedSecret?: Uint8Array; 
 }
 
 /**
- * Storage interface for ratchet sessions.
- * Implement this to connect VerbethClient to your storage layer.
+ * Storage interface for ratchet sessions (to connect VerbethClient to a storage layer)
  */
 export interface SessionStore {
   get(conversationId: string): Promise<RatchetSession | null>;
 
   /**
    * Find session by any active inbound topic.
-   * Must check: currentTopicInbound, nextTopicInbound, previousTopicInbound (if not expired).
    */
   getByInboundTopic(topic: string): Promise<RatchetSession | null>;
   save(session: RatchetSession): Promise<void>;
 }
 
 /**
- * Result of prepareMessage - contains everything needed to send and commit.
+ * Result of prepareMessage contains everything needed to send and commit.
  * 
  * Two-phase commit pattern:
  * 1. prepareMessage() - encrypts and returns PreparedMessage
@@ -162,9 +157,6 @@ export interface PendingStore {
   getByConversation(conversationId: string): Promise<PendingMessage[]>;
 }
 
-/**
- * Result of sendMessage.
- */
 export interface SendResult {
   messageId: string;
   txHash: string;
@@ -188,18 +180,13 @@ export interface SerializedSessionInfo {
   currentTopicInbound: string;
 }
 
-/**
- * HSR event data for createInitiatorSessionFromHsr convenience method.
- */
+
 export interface HsrEventData {
   inResponseToTag: `0x${string}`;
   responderEphemeralPubKey: Uint8Array;
   kemCiphertext?: Uint8Array;
 }
 
-/**
- * Parameters for createInitiatorSessionFromHsr convenience method.
- */
 export interface CreateInitiatorSessionFromHsrParams {
   contactAddress: string;
   myEphemeralSecret: Uint8Array;

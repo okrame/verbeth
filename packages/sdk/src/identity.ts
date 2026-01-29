@@ -29,8 +29,7 @@ function bigIntTo32BytesBE(x: bigint): Uint8Array {
 }
 
 /**
- * Canonicalize an Ethereum ECDSA signature (65 bytes) to low-s form.
- * This is only used as KDF input.
+ * Canonicalize an Ethereum ECDSA signature (65 bytes) to low-s form (only used as KDF input)
  */
 function canonicalizeEcdsaSig65(sig: Uint8Array): Uint8Array {
   if (sig.length !== 65) return sig;
@@ -107,11 +106,10 @@ export async function deriveIdentityKeys(
   const enc = new TextEncoder();
   const addrLower = address.toLowerCase();
 
-  // 1) Signature-based seed
   const seedMessage = buildSeedMessage(addrLower);
   let seedSignature = await signer.signMessage(seedMessage);
   const seedSigBytes = canonicalizeEcdsaSig65(getBytes(seedSignature));
-  seedSignature = ""; // wipe from memory
+  seedSignature = ""; 
 
   // IKM = HKDF( canonicalSig || H(seedMessage) || "verbeth/addr:" || address_lower )
   const seedSalt = enc.encode("verbeth/seed-sig-v1");
@@ -132,14 +130,13 @@ export async function deriveIdentityKeys(
   const ed25519_seed = hkdf(sha256, ikm, new Uint8Array(0), info_ed25519, 32);
   const signKeyPair = nacl.sign.keyPair.fromSeed(ed25519_seed);
 
-  // Derive secp256k1 session key (for Ethereum txs via Safe module)
+  // Derive secp256k1 session key for txs via Safe module
   const info_session = enc.encode("verbeth-session-secp256k1-v1");
   const sessionSeed = hkdf(sha256, ikm, new Uint8Array(0), info_session, 32);
   const sessionPrivateKey = hexlify(sessionSeed);
   const sessionWallet = new Wallet(sessionPrivateKey);
   const sessionAddress = sessionWallet.address;
 
-  // wipe intermediates
   try {
     seedSigBytes.fill(0);
     seedMsgHash.fill(0);
@@ -250,8 +247,8 @@ export async function deriveIdentityWithUnifiedKeys(
   );
 
   const unifiedPubKeys = encodeUnifiedPubKeys(
-    result.keyPair.publicKey, // X25519
-    result.keyPair.signingPublicKey // Ed25519
+    result.keyPair.publicKey, 
+    result.keyPair.signingPublicKey
   );
 
   return {

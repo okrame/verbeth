@@ -12,9 +12,6 @@
 
 import { PendingStore, PendingMessage, PendingStatus } from './types.js';
 
-/**
- * Parameters for creating a new pending message.
- */
 export interface CreatePendingParams {
   id: string;
   conversationId: string;
@@ -26,9 +23,6 @@ export interface CreatePendingParams {
   createdAt: number;
 }
 
-/**
- * Internal pending message manager that wraps a PendingStore.
- */
 export class PendingManager {
   constructor(private store: PendingStore) {}
 
@@ -79,7 +73,7 @@ export class PendingManager {
 
 
   /**
-   * Finalize (confirm) and delete.
+   * Finalize and delete.
    * Called when we see our MessageSent event on-chain.
    * 
    * @returns The finalized pending message, or null if not found

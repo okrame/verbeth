@@ -1,12 +1,9 @@
 // packages/sdk/src/verify.ts
-// CLEANED VERSION - duplexTopics verification removed
 
 import { JsonRpcProvider, getBytes, hexlify, getAddress } from "ethers";
 import { decryptAndExtractHandshakeKeys, computeHybridTagFromInitiator } from "./crypto.js";
 import { kem } from "./pq/kem.js";
-// REMOVED: verifyDuplexTopicsChecksum, deriveDuplexTopics imports
 import { HandshakeLog, HandshakeResponseLog, IdentityProof, IdentityContext } from "./types.js";
-// REMOVED: TopicInfoWire, DuplexTopics from imports
 import { parseHandshakePayload, parseHandshakeKeys } from "./payload.js";
 import {
   Rpcish,
@@ -120,7 +117,7 @@ export async function verifyHandshakeResponseIdentity(
 }
 
 /**
- * Verify "IdentityProof" for EOAs and smart accounts.
+ * Verify IdentityProof for EOAs and smart accounts.
  * - Verifies the signature with viem (EOA / ERC-1271 / ERC-6492).
  * - Parses and checks the expected address and public key against the message content.
  */
