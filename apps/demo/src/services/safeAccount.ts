@@ -2,18 +2,15 @@
 import SafeDefault from '@safe-global/protocol-kit'
 import SafeApiKitDefault from '@safe-global/api-kit'
 import { getAddress, Interface } from 'ethers'
-import { SAFE_MODULE_ADDRESS, VERBETH_SINGLETON_ADDR } from '../types.js'
+import { getModuleSetupHelper, getVerbethAddress } from '@verbeth/sdk'
+import { SAFE_MODULE_ADDRESS } from '../types.js'
 
 // Handle ESM/CJS interop - safe libs export default differently
 const Safe = (SafeDefault as any).default ?? SafeDefault
 const SafeApiKit = (SafeApiKitDefault as any).default ?? SafeApiKitDefault
 
 const SAFE_API_KEY = import.meta.env.VITE_SAFE_API_KEY as string
-
-const MODULE_SETUP_HELPER_ADDRESS: Record<number, `0x${string}`> = {
-  84532: '0xbd59Fea46D308eDF3b75C22a6f64AC68feFc731A',
-  8453: '0xc022F74924BDB4b62D830234d89b066359bF67c0',
-}
+const VERBETH_SINGLETON_ADDR = getVerbethAddress()
 
 export interface SessionConfig {
   sessionSigner: string
@@ -205,7 +202,7 @@ export async function getOrCreateSafeForOwner(params: {
 
   console.log(`✅ VerbEth Safe deployed at ${verbEthSafeAddress}`)
 
-  const helperAddress = MODULE_SETUP_HELPER_ADDRESS[chainId]
+  const helperAddress = getModuleSetupHelper(chainId)
   if (helperAddress && sessionConfig) {
     console.log(`   Module enabled: true (via helper)`)
     console.log(`   Session configured: true (via helper)`)
@@ -255,7 +252,7 @@ function buildSafeAccountConfig(
     threshold: 1,
   }
 
-  const helperAddress = MODULE_SETUP_HELPER_ADDRESS[chainId]
+  const helperAddress = getModuleSetupHelper(chainId)
   if (!helperAddress) {
     console.warn(`⚠️ ModuleSetupHelper not deployed on chain ${chainId}, using base config`)
     return baseConfig
@@ -283,7 +280,7 @@ function buildSafeAccountConfig(
 }
 
 export function isHelperAvailable(chainId: number): boolean {
-  return !!MODULE_SETUP_HELPER_ADDRESS[chainId]
+  return !!getModuleSetupHelper(chainId)
 }
 
 /**

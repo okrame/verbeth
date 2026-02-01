@@ -82,3 +82,5 @@ export * from './ratchet/index.js';
 export { dh, deriveTopic, hybridInitialSecret } from './ratchet/kdf.js';
 
 export { kem } from './pq/kem.js';
+
+export * from './addresses.js';

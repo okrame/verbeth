@@ -1,15 +1,12 @@
 import type { IdentityKeyPair, IdentityProof, RatchetSession as SDKRatchetSession, } from '@verbeth/sdk';
+import { getVerbethAddress, getCreationBlock, SCAN_DEFAULTS } from '@verbeth/sdk';
 import { keccak256, toUtf8Bytes, hexlify, getBytes } from 'ethers';
 
 /* ------------------------------- CONSTANTS -------------------------------- */
-export const VERBETH_SINGLETON_ADDR =
-  '0x51670aB6eDE1d1B11C654CCA53b7D42080802326';
-export const CONTRACT_CREATION_BLOCK = 36_053_269;
-export const INITIAL_SCAN_BLOCKS = 1_000;
-export const MAX_RETRIES = 3;
-export const MAX_RANGE_PROVIDER = 2_000;
-export const CHUNK_SIZE = 2_000;
-export const REAL_TIME_BUFFER = 3;
+// Re-export from SDK for backward compatibility
+export const VERBETH_SINGLETON_ADDR = getVerbethAddress();
+export const CONTRACT_CREATION_BLOCK = getCreationBlock();
+export const { INITIAL_SCAN_BLOCKS, MAX_RETRIES, MAX_RANGE_PROVIDER, CHUNK_SIZE, REAL_TIME_BUFFER } = SCAN_DEFAULTS;
 
 export const SAFE_MODULE_ADDRESS = import.meta.env.VITE_SAFE_SESSION_MODULE as `0x${string}`
 

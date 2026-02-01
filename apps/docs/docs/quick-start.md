@@ -20,12 +20,10 @@ npm install @verbeth/sdk ethers
 import {
   createVerbethClient,
   deriveIdentityKeyPairWithProof,
-  ExecutorFactory
+  ExecutorFactory,
+  getVerbethAddress
 } from '@verbeth/sdk';
 import { ethers } from 'ethers';
-
-// Contract address (Base mainnet)
-const VERBETH_ADDRESS = '0x51670aB6eDE1d1B11C654CCA53b7D42080802326';
 
 // 1. Connect wallet
 const provider = new ethers.BrowserProvider(window.ethereum);
@@ -39,7 +37,7 @@ const { identityKeyPair, identityProof } = await deriveIdentityKeyPairWithProof(
 );
 
 // 3. Create executor for contract interactions
-const contract = new ethers.Contract(VERBETH_ADDRESS, VERBETH_ABI, signer);
+const contract = new ethers.Contract(getVerbethAddress(), VERBETH_ABI, signer);
 const executor = ExecutorFactory.createEOA(contract);
 
 // 4. Create client
@@ -159,11 +157,10 @@ if (decrypted) {
 import {
   createVerbethClient,
   deriveIdentityKeyPairWithProof,
-  ExecutorFactory
+  ExecutorFactory,
+  getVerbethAddress
 } from '@verbeth/sdk';
 import { ethers } from 'ethers';
-
-const VERBETH_ADDRESS = '0x51670aB6eDE1d1B11C654CCA53b7D42080802326';
 
 async function initVerbeth() {
   const provider = new ethers.BrowserProvider(window.ethereum);
@@ -175,7 +172,7 @@ async function initVerbeth() {
     address
   );
 
-  const contract = new ethers.Contract(VERBETH_ADDRESS, VERBETH_ABI, signer);
+  const contract = new ethers.Contract(getVerbethAddress(), VERBETH_ABI, signer);
   const executor = ExecutorFactory.createEOA(contract);
 
   const client = createVerbethClient({
