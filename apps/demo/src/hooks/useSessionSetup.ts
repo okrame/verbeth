@@ -5,7 +5,7 @@ import {
   getOrCreateSafeForOwner,
   ensureModuleEnabled,
 } from "../services/safeAccount.js";
-import { LOGCHAIN_SINGLETON_ADDR, SAFE_MODULE_ADDRESS, ExecutionMode } from "../types.js";
+import { VERBETH_SINGLETON_ADDR, SAFE_MODULE_ADDRESS, ExecutionMode } from "../types.js";
 
 interface UseSessionSetupParams {
   walletClient: any;
@@ -108,7 +108,7 @@ export function useSessionSetup({
           deployIfMissing: true,
           sessionConfig: {
             sessionSigner: sessionSignerAddr,
-            target: LOGCHAIN_SINGLETON_ADDR,
+            target: VERBETH_SINGLETON_ADDR,
           },
           useApiLookup: false, 
         });
@@ -145,7 +145,7 @@ export function useSessionSetup({
           deployIfMissing: false,
           sessionConfig: {
             sessionSigner: sessionSignerAddr,
-            target: LOGCHAIN_SINGLETON_ADDR,
+            target: VERBETH_SINGLETON_ADDR,
           },
           useApiLookup: false,
         });
@@ -167,7 +167,7 @@ export function useSessionSetup({
         safeAddr,
         sessionSignerAddr,
         BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
-        LOGCHAIN_SINGLETON_ADDR
+        VERBETH_SINGLETON_ADDR
       );
       console.log(`TX: ${tx.hash}`);
       await tx.wait();

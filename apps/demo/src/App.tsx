@@ -10,7 +10,7 @@ import {
 import { useMessageListener } from './hooks/useMessageListener.js';
 import { useMessageProcessor } from './hooks/useMessageProcessor.js';
 import {
-  LOGCHAIN_SINGLETON_ADDR,
+  VERBETH_SINGLETON_ADDR,
   CONTRACT_CREATION_BLOCK,
   Contact,
   Message,
@@ -682,7 +682,7 @@ export default function App() {
 
                     {!isActivityLogOpen && (
                       <div className="w-full bg-black/80 backdrop-blur-sm p-2 sm:p-3 text-xs text-gray-500 space-y-1 h-fit">
-                        <p>Contract: {LOGCHAIN_SINGLETON_ADDR}</p>
+                        <p>Contract: {VERBETH_SINGLETON_ADDR}</p>
                         <p>Network: Base (Chain ID: {chainId})</p>
                         <p>Contract creation block: {CONTRACT_CREATION_BLOCK}</p>
                         <p>Status: {ready ? '🟢 Ready' : '🔴 Not Ready'} {(isInitialLoading || isLoadingMore) ? '⏳ Loading' : ''}</p>

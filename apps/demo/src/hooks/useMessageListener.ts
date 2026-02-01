@@ -5,7 +5,7 @@ import { keccak256, toUtf8Bytes, getBytes, AbiCoder } from "ethers";
 import { matchHsrToContact, type PendingContactEntry } from "@verbeth/sdk";
 import { dbService } from "../services/DbService.js";
 import {
-  LOGCHAIN_SINGLETON_ADDR,
+  VERBETH_SINGLETON_ADDR,
   CONTRACT_CREATION_BLOCK,
   INITIAL_SCAN_BLOCKS,
   MAX_RETRIES,
@@ -238,7 +238,7 @@ export const useMessageListener = ({
 
     try {
       const handshakeFilter = {
-        address: LOGCHAIN_SINGLETON_ADDR,
+        address: VERBETH_SINGLETON_ADDR,
         topics: [EVENT_SIGNATURES.Handshake, userRecipientHash],
       };
       const handshakeLogs = await safeGetLogs(
@@ -268,7 +268,7 @@ export const useMessageListener = ({
       if (pendingContacts.length > 0) {
         // Fetch ALL HSR events (no address filter - responder could be Safe or EOA)
         const responseFilter = {
-          address: LOGCHAIN_SINGLETON_ADDR,
+          address: VERBETH_SINGLETON_ADDR,
           topics: [EVENT_SIGNATURES.HandshakeResponse],
         };
         const responseLogs = await safeGetLogs(
@@ -308,7 +308,7 @@ export const useMessageListener = ({
       if (activeTopics.length > 0) {
         // Query messages on all active topics
         const messageFilterIn = {
-          address: LOGCHAIN_SINGLETON_ADDR,
+          address: VERBETH_SINGLETON_ADDR,
           topics: [EVENT_SIGNATURES.MessageSent, null, activeTopics],
         };
         const inboundLogs = await safeGetLogs(
@@ -338,7 +338,7 @@ export const useMessageListener = ({
         const senderTopic =
           "0x000000000000000000000000" + emitter.slice(2).toLowerCase();
         const messageFilterOutConfirm = {
-          address: LOGCHAIN_SINGLETON_ADDR,
+          address: VERBETH_SINGLETON_ADDR,
           topics: [EVENT_SIGNATURES.MessageSent, senderTopic],
         };
         const outLogs = await safeGetLogs(

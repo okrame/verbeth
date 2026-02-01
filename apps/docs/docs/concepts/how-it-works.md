@@ -16,7 +16,7 @@ Instead of running servers or relay infrastructure, Verbeth stores encrypted mes
 - **Censorship resistance**: Anyone can read/write to the contract
 - **Global ordering**: Block timestamps provide message ordering
 
-Messages are emitted as events from the LogChain contract. Clients query these events using standard RPC calls.
+Messages are emitted as events from the Verbeth contract. Clients query these events using standard RPC calls.
 
 ## No Servers, No Relays
 
@@ -69,7 +69,7 @@ Verbeth works with EOAs but is optimized for Safe accounts:
 │          @verbeth/sdk               │
 │  (ratchet, handshake, identity)     │
 ├─────────────────────────────────────┤
-│       LogChainV1 Contract           │
+│       VerbethV1 Contract           │
 │  (Handshake, HandshakeResponse,     │
 │   MessageSent events)               │
 ├─────────────────────────────────────┤
@@ -80,7 +80,7 @@ Verbeth works with EOAs but is optimized for Safe accounts:
 
 ## On-Chain Data Model
 
-The LogChain contract emits three event types:
+The Verbeth contract emits three event types:
 
 | Event | Purpose | Indexed Fields |
 |-------|---------|----------------|

@@ -2,8 +2,8 @@ import type { IdentityKeyPair, IdentityProof, RatchetSession as SDKRatchetSessio
 import { keccak256, toUtf8Bytes, hexlify, getBytes } from 'ethers';
 
 /* ------------------------------- CONSTANTS -------------------------------- */
-export const LOGCHAIN_SINGLETON_ADDR =
-  '0x41a3eaC0d858028E9228d1E2092e6178fc81c4f0';
+export const VERBETH_SINGLETON_ADDR =
+  '0x51670aB6eDE1d1B11C654CCA53b7D42080802326';
 export const CONTRACT_CREATION_BLOCK = 36_053_269;
 export const INITIAL_SCAN_BLOCKS = 1_000;
 export const MAX_RETRIES = 3;

@@ -2,7 +2,7 @@
 import SafeDefault from '@safe-global/protocol-kit'
 import SafeApiKitDefault from '@safe-global/api-kit'
 import { getAddress, Interface } from 'ethers'
-import { SAFE_MODULE_ADDRESS, LOGCHAIN_SINGLETON_ADDR } from '../types.js'
+import { SAFE_MODULE_ADDRESS, VERBETH_SINGLETON_ADDR } from '../types.js'
 
 // Handle ESM/CJS interop - safe libs export default differently
 const Safe = (SafeDefault as any).default ?? SafeDefault
@@ -31,7 +31,7 @@ export async function predictVerbEthSafeAddress(params: {
 
   const sessionConfig: SessionConfig = {
     sessionSigner: sessionSignerAddr,
-    target: LOGCHAIN_SINGLETON_ADDR,
+    target: VERBETH_SINGLETON_ADDR,
   }
 
   const safeAccountConfig = buildSafeAccountConfig(

@@ -51,7 +51,7 @@ export function SessionSetupPrompt({
         steps: [
           "Deploy your Safe smart wallet",
           "Enable session module",
-          "Register session signer + allow LogChain target",
+          "Register session signer + allow Verbeth target",
         ],
       };
     } else if (!isModuleEnabled) {
@@ -62,7 +62,7 @@ export function SessionSetupPrompt({
         description: "Enable the session module on your existing Safe and authorize gasless messaging.",
         steps: [
           "Enable session module on Safe",
-          "Register session signer + allow LogChain target",
+          "Register session signer + allow Verbeth target",
         ],
       };
     } else {
@@ -72,7 +72,7 @@ export function SessionSetupPrompt({
         title: "Authorize Session",
         description: "One-time setup: authorize your session wallet to send messages without popups.",
         steps: [
-          "Register session signer + allow LogChain target",
+          "Register session signer + allow Verbeth target",
         ],
       };
     }

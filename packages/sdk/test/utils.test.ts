@@ -5,7 +5,7 @@ import { JsonRpcProvider } from "ethers";
 import { convertPublicKeyToX25519 } from "../src/utils/x25519.js";
 import { isSmartContract1271, parseBindingMessage } from "../src/utils.js";
 import { ExecutorFactory } from "../src/index.js";
-import type { LogChainV1 } from "@verbeth/contracts/typechain-types";
+import type { VerbethV1 } from "@verbeth/contracts/typechain-types";
 
 const fakeProvider = {
   async getCode(addr: string) {

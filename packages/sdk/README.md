@@ -12,7 +12,7 @@ npm install @verbeth/sdk
 import { createVerbethClient, deriveIdentityKeyPairWithProof, ExecutorFactory } from '@verbeth/sdk';
 import { ethers } from 'ethers';
 
-const LOGCHAIN = '0x62720f39d5Ec6501508bDe4D152c1E13Fd2F6707';
+const VERBETH = '0x51670aB6eDE1d1B11C654CCA53b7D42080802326';
 
 const provider = new ethers.BrowserProvider(window.ethereum);
 const signer = await provider.getSigner();
@@ -20,7 +20,7 @@ const address = await signer.getAddress();
 
 const { identityKeyPair, identityProof } = await deriveIdentityKeyPairWithProof(signer, address);
 
-const contract = new ethers.Contract(LOGCHAIN, LogChainABI, signer);
+const contract = new ethers.Contract(VERBETH, VerbethABI, signer);
 const client = createVerbethClient({
   address,
   signer,

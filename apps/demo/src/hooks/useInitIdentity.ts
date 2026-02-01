@@ -2,8 +2,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { BrowserProvider, Wallet } from 'ethers';
 import {
-  LogChainV1__factory,
-  type LogChainV1,
+  VerbethV1__factory,
+  type VerbethV1,
 } from '@verbeth/contracts/typechain-types/index.js';
 import {
   IExecutor,
@@ -22,7 +22,7 @@ import {
   isHelperAvailable,
 } from '../services/safeAccount.js';
 import {
-  LOGCHAIN_SINGLETON_ADDR,
+  VERBETH_SINGLETON_ADDR,
   SAFE_MODULE_ADDRESS,
   StoredIdentity,
   ExecutionMode,
@@ -52,7 +52,7 @@ export function useInitIdentity({
   const [identityKeyPair, setIdentityKeyPair] = useState<IdentityKeyPair | null>(null);
   const [identityProof, setIdentityProof] = useState<IdentityProof | null>(null);
   const [executor, setExecutor] = useState<IExecutor | null>(null);
-  const [contract, setContract] = useState<LogChainV1 | null>(null);
+  const [contract, setContract] = useState<VerbethV1 | null>(null);
   const [identitySigner, setIdentitySigner] = useState<any>(null);
   const [txSigner, setTxSigner] = useState<any>(null);
   const [safeAddr, setSafeAddr] = useState<string | null>(null);
@@ -158,7 +158,7 @@ export function useInitIdentity({
     if (currentMode === 'classic') {
       addLog(`Classic mode: using EOA executor`);
 
-      const contractInstance = LogChainV1__factory.connect(LOGCHAIN_SINGLETON_ADDR, ethersSigner as any);
+      const contractInstance = VerbethV1__factory.connect(VERBETH_SINGLETON_ADDR, ethersSigner as any);
       const executorInstance = ExecutorFactory.createEOA(contractInstance);
 
       setExecutor(executorInstance);
@@ -185,7 +185,7 @@ export function useInitIdentity({
       deployIfMissing: false,
       sessionConfig: {
         sessionSigner: sessionAddr,
-        target: LOGCHAIN_SINGLETON_ADDR,
+        target: VERBETH_SINGLETON_ADDR,
       },
       // Never use API for fast mode
       useApiLookup: false,
@@ -217,7 +217,7 @@ export function useInitIdentity({
       provider: readProvider,
       safeAddress,
       moduleAddress: SAFE_MODULE_ADDRESS,
-      logChainAddress: LOGCHAIN_SINGLETON_ADDR,
+      verbEthAddress: VERBETH_SINGLETON_ADDR,
       sessionSigner: sessionWallet,
     });
     setTxSigner(safeSessionSigner);
@@ -236,7 +236,7 @@ export function useInitIdentity({
 
     console.log(`=====================================================\n`);
 
-    const contractInstance = LogChainV1__factory.connect(LOGCHAIN_SINGLETON_ADDR, safeSessionSigner as any);
+    const contractInstance = VerbethV1__factory.connect(VERBETH_SINGLETON_ADDR, safeSessionSigner as any);
     const executorInstance = ExecutorFactory.createEOA(contractInstance);
 
     setExecutor(executorInstance);

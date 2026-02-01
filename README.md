@@ -45,9 +45,9 @@ From there it's just encrypted `MessageSent` events back and forth. A Double Rat
 
 ### Deployed Addresses (base mainnet)
 
-LogChainV1 (singleton) `0x41a3eaC0d858028E9228d1E2092e6178fc81c4f0`
+VerbethV1 (singleton) `0x51670aB6eDE1d1B11C654CCA53b7D42080802326`
 
-ERC1967Proxy `0x62720f39d5Ec6501508bDe4D152c1E13Fd2F6707`
+ERC1967Proxy `0x82C9c5475D63e4C9e959280e9066aBb24973a663`
 
 
 ### Notes on the current model

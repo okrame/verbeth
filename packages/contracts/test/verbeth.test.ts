@@ -1,15 +1,15 @@
 // @ts-ignore
 import { ethers } from "hardhat";
 import { expect } from "chai";
-import { LogChainV1 } from "../typechain-types";
+import { VerbethV1 } from "../typechain-types";
 
-describe("LogChain", () => {
-  let logChain: LogChainV1;
+describe("Verbeth", () => {
+  let verbEth: VerbethV1;
 
   beforeEach(async () => {
-    const factory = await ethers.getContractFactory("LogChainV1");
-    logChain = (await factory.deploy()) as LogChainV1;
-    await logChain.waitForDeployment();
+    const factory = await ethers.getContractFactory("VerbethV1");
+    verbEth = (await factory.deploy()) as VerbethV1;
+    await verbEth.waitForDeployment();
   });
 
   it("should emit a MessageSent event", async () => {
@@ -20,9 +20,9 @@ describe("LogChain", () => {
     const timestamp = Math.floor(Date.now() / 1000);
     const nonce = 1;
 
-    await expect(logChain.sendMessage(msg, topic, timestamp, nonce))
+    await expect(verbEth.sendMessage(msg, topic, timestamp, nonce))
       // @ts-ignore
-      .to.emit(logChain, "MessageSent")
+      .to.emit(verbEth, "MessageSent")
       .withArgs(await sender.getAddress(), msg, timestamp, topic, nonce);
   });
 
@@ -34,8 +34,8 @@ describe("LogChain", () => {
     const timestamp = Math.floor(Date.now() / 1000);
     const nonce = 42;
 
-    await logChain.sendMessage(msg, topic, timestamp, nonce);
-    await logChain.sendMessage(msg, topic, timestamp + 1, nonce); // re-use same nonce, no revert
+    await verbEth.sendMessage(msg, topic, timestamp, nonce);
+    await verbEth.sendMessage(msg, topic, timestamp + 1, nonce); // re-use same nonce, no revert
   });
 
   it("should emit a Handshake event", async () => {
@@ -50,7 +50,7 @@ describe("LogChain", () => {
     const plaintextPayload = ethers.toUtf8Bytes("Hi Bob, respond pls");
 
     await expect(
-      logChain.initiateHandshake(
+      verbEth.initiateHandshake(
         recipientHash,
         unifiedPubKeys,
         ephemeralPubKey,
@@ -58,7 +58,7 @@ describe("LogChain", () => {
       )
     )
       // @ts-ignore
-      .to.emit(logChain, "Handshake")
+      .to.emit(verbEth, "Handshake")
       .withArgs(
         recipientHash,
         recipient,
@@ -78,14 +78,14 @@ describe("LogChain", () => {
     const responseCiphertext = ethers.hexlify(ethers.randomBytes(64));
 
     await expect(
-      logChain.respondToHandshake(
+      verbEth.respondToHandshake(
         inResponseTo,
         responderEphemeralR,
         responseCiphertext
       )
     )
       // @ts-ignore
-      .to.emit(logChain, "HandshakeResponse")
+      .to.emit(verbEth, "HandshakeResponse")
       .withArgs(
         inResponseTo,
         await bob.getAddress(),

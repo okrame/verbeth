@@ -11,7 +11,7 @@ const config: Config = {
     v4: true,
   },
 
-  url: 'https://verbeth.dev',
+  url: 'https://docs.verbeth.xyz',
   baseUrl: '/',
 
   organizationName: 'okrame',

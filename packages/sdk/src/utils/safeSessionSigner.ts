@@ -14,7 +14,7 @@ export interface SafeSessionSignerOptions {
   provider: Provider;
   safeAddress: string;
   moduleAddress: string;
-  logChainAddress: string;
+  verbEthAddress: string;
   sessionSigner: Signer;
 }
 
@@ -60,7 +60,7 @@ export class SafeSessionSigner extends AbstractSigner {
   }
 
   async isTargetAllowed(): Promise<boolean> {
-    return this.module.isAllowedTarget(this.opts.safeAddress, this.opts.logChainAddress);
+    return this.module.isAllowedTarget(this.opts.safeAddress, this.opts.verbEthAddress);
   }
 
   override async signMessage(message: string | Uint8Array): Promise<string> {
@@ -87,10 +87,10 @@ export class SafeSessionSigner extends AbstractSigner {
     if (!tx.to) throw new Error("SafeSessionSigner: tx.to required");
 
     const to = String(tx.to).toLowerCase();
-    const logChain = this.opts.logChainAddress.toLowerCase();
+    const verbEth = this.opts.verbEthAddress.toLowerCase();
 
-    if (to !== logChain) {
-      throw new Error(`SafeSessionSigner: only LogChain txs allowed. Got ${tx.to}`);
+    if (to !== verbEth) {
+      throw new Error(`SafeSessionSigner: only verbEth txs allowed. Got ${tx.to}`);
     }
 
     const data = tx.data ?? "0x";
@@ -98,7 +98,7 @@ export class SafeSessionSigner extends AbstractSigner {
     // execute(safe, to, value, data, operation)
     return this.module.execute(
       this.opts.safeAddress,
-      this.opts.logChainAddress,
+      this.opts.verbEthAddress,
       0n,
       data,
       0 

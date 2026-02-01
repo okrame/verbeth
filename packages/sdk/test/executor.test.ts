@@ -9,13 +9,13 @@ import {
   initiateHandshake,
   respondToHandshake,
 } from "../src/index.js";
-import type { LogChainV1 } from "@verbeth/contracts/typechain-types";
+import type { VerbethV1 } from "@verbeth/contracts/typechain-types";
 import { IdentityKeyPair, IdentityProof } from "../src/types.js";
 import { kem } from "../src/pq/kem.js";
 
 const TEST_SMART_ACCOUNT_ADDRESS = "0x" + "12".repeat(20);
 const TEST_ENTRYPOINT_ADDRESS = "0x" + "45".repeat(20);
-const TEST_LOGCHAIN_ADDRESS = "0x" + "78".repeat(20);
+const TEST_VERBETH_ADDRESS = "0x" + "78".repeat(20);
 
 const mockSendMessage = vi.fn().mockResolvedValue("txHash");
 const mockInitiateHandshake = vi.fn().mockResolvedValue("txHash");
@@ -25,7 +25,7 @@ const fakeContract = {
   sendMessage: mockSendMessage,
   initiateHandshake: mockInitiateHandshake,
   respondToHandshake: mockRespondToHandshake,
-} as unknown as LogChainV1;
+} as unknown as VerbethV1;
 
 const mockBundler = {
   sendUserOperation: vi.fn().mockResolvedValue("0x123"),
@@ -81,7 +81,7 @@ describe("ExecutorFactory", () => {
     const executor = ExecutorFactory.createUserOp(
       TEST_SMART_ACCOUNT_ADDRESS,
       TEST_ENTRYPOINT_ADDRESS,
-      TEST_LOGCHAIN_ADDRESS,
+      TEST_VERBETH_ADDRESS,
       mockBundler,
       mockSmartAccount
     );
@@ -92,7 +92,7 @@ describe("ExecutorFactory", () => {
     const executor = ExecutorFactory.createDirectEntryPoint(
       TEST_SMART_ACCOUNT_ADDRESS,
       mockEntryPoint,
-      TEST_LOGCHAIN_ADDRESS,
+      TEST_VERBETH_ADDRESS,
       mockSmartAccount,
       mockSigner
     );
@@ -131,7 +131,7 @@ describe("initiateHandshake with Executors", () => {
     const executor = ExecutorFactory.createUserOp(
       TEST_SMART_ACCOUNT_ADDRESS,
       TEST_ENTRYPOINT_ADDRESS,
-      TEST_LOGCHAIN_ADDRESS,
+      TEST_VERBETH_ADDRESS,
       mockBundler,
       mockSmartAccount
     );
@@ -154,7 +154,7 @@ describe("initiateHandshake with Executors", () => {
     const executor = ExecutorFactory.createDirectEntryPoint(
       TEST_SMART_ACCOUNT_ADDRESS,
       mockEntryPoint,
-      TEST_LOGCHAIN_ADDRESS,
+      TEST_VERBETH_ADDRESS,
       mockSmartAccount,
       mockSigner
     );
@@ -208,7 +208,7 @@ describe("respondToHandshake with Executors", () => {
     const executor = ExecutorFactory.createUserOp(
       TEST_SMART_ACCOUNT_ADDRESS,
       TEST_ENTRYPOINT_ADDRESS,
-      TEST_LOGCHAIN_ADDRESS,
+      TEST_VERBETH_ADDRESS,
       mockBundler,
       mockSmartAccount
     );
@@ -231,7 +231,7 @@ describe("respondToHandshake with Executors", () => {
     const executor = ExecutorFactory.createDirectEntryPoint(
       TEST_SMART_ACCOUNT_ADDRESS,
       mockEntryPoint,
-      TEST_LOGCHAIN_ADDRESS,
+      TEST_VERBETH_ADDRESS,
       mockSmartAccount,
       mockSigner
     );
