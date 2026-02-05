@@ -1,0 +1,27 @@
+app = "verbeth-indexer"
+primary_region = "iad"
+
+[env]
+  RUST_LOG = "info"
+  SERVER_PORT = "3000"
+  CONTRACT_ADDRESS = "0x82C9c5475D63e4C9e959280e9066aBb24973a663"
+  CREATION_BLOCK = "37097547"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  min_machines_running = 1
+
+[[http_service.checks]]
+  path = "/health"
+  interval = "30s"
+  timeout = "10s"
+
+[[mounts]]
+  source = "indexer_data"
+  destination = "/data"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
