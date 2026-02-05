@@ -30,7 +30,7 @@ cargo run
 | `CONTRACT_ADDRESS` | No | Verbeth proxy | Contract to index |
 | `CREATION_BLOCK` | No | 37097547 | Block to start backfill from |
 | `DATABASE_PATH` | No | ./data/indexer.db | SQLite file location |
-| `SERVER_PORT` | No | 3000 | HTTP server port |
+| `SERVER_PORT` | No | 3002 | HTTP server port |
 | `BACKFILL_DAYS` | No | 7 | Days to backfill on empty DB |
 | `RUST_LOG` | No | info | Log level |
 
