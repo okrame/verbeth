@@ -1,6 +1,6 @@
-# Verbeth Indexer
+# Indexer
 
-Rust-based event indexer for Verbeth protocol. Listens to on-chain events via WebSocket and persists them in SQLite with stable sequence counters for APSI integration.
+Rust-based event indexer. Listens to on-chain events via WebSocket and persists them in SQLite with stable sequence counters for APSI integration.
 
 ## Features
 
@@ -58,8 +58,8 @@ Returns indexer status:
 ### Docker
 
 ```bash
-docker build -t verbeth-indexer .
-docker run -v indexer-data:/data -e RPC_WS_URL=wss://... verbeth-indexer
+docker build -t indexer .
+docker run -v indexer-data:/data -e RPC_WS_URL=wss://... indexer
 ```
 
 ### Fly.io

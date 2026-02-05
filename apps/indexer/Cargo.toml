@@ -1,9 +1,9 @@
 [package]
-name = "verbeth-indexer"
+name = "indexer"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.84"
-default-run = "verbeth-indexer"
+default-run = "indexer"
 
 [dependencies]
 tokio = { version = "1.43", features = ["full", "signal"] }

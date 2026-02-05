@@ -1,4 +1,4 @@
-app = "verbeth-indexer"
+app = "indexer"
 primary_region = "iad"
 
 [env]
