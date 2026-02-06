@@ -44,7 +44,6 @@ interface ConversationQueue {
 
 interface UseMessageQueueProps {
   verbethClient: VerbethClient | null;
-  addLog: (message: string) => void;
   addMessage: (message: Message) => Promise<void>;
   updateMessageStatus: (id: string, status: Message["status"], error?: string) => Promise<void>;
   removeMessage: (id: string) => Promise<void>;
@@ -54,7 +53,6 @@ interface UseMessageQueueProps {
 
 export const useMessageQueue = ({
   verbethClient,
-  addLog,
   addMessage,
   updateMessageStatus,
   removeMessage,
@@ -177,10 +175,6 @@ export const useMessageQueue = ({
         queuedMsg.txHash = tx.hash;
         queuedMsg.status = "pending";
 
-        addLog(
-          `📤 Message sent: "${queuedMsg.plaintext.slice(0, 30)}..." (tx: ${tx.hash.slice(0, 10)}..., n=${prepared.messageNumber})`
-        );
-
         // Update contact with current topic (may have ratcheted)
         const session = await verbethClient.getSession(conversationId);
         if (session) {
@@ -207,7 +201,7 @@ export const useMessageQueue = ({
         // Note: Ratchet slot may already be burned (session was committed in prepareMessage)
         await updateMessageStatus(messageId, "failed", errorMessage);
 
-        addLog(`✗ Failed to send: "${queuedMsg.plaintext.slice(0, 20)}..." - ${errorMessage}`);
+        console.error(`[verbeth] send failed: ${errorMessage}`);
 
         // Store failed message for retry/cancel (use correct ID)
         queuedMsg.id = messageId;
@@ -219,7 +213,7 @@ export const useMessageQueue = ({
     }
 
     queue.isProcessing = false;
-  }, [verbethClient, addLog, addMessage, updateContact, updateMessageStatus]);
+  }, [verbethClient, addMessage, updateContact, updateMessageStatus]);
 
 
   /**
@@ -229,15 +223,7 @@ export const useMessageQueue = ({
     contact: Contact,
     messageText: string
   ): Promise<string | null> => {
-    if (!verbethClient) {
-      addLog("✗ Client not initialized");
-      return null;
-    }
-
-    if (!contact.conversationId) {
-      addLog("✗ Contact doesn't have a ratchet session");
-      return null;
-    }
+    if (!verbethClient || !contact.conversationId) return null;
 
     const conversationId = contact.conversationId;
     
@@ -262,14 +248,13 @@ export const useMessageQueue = ({
     }
 
     queue.messages.push(queuedMessage);
-
-    addLog(`📝 Message queued: "${messageText.slice(0, 30)}..."`);
+    console.log(`[verbeth] message queued (temp ID: ${tempId}) for conversation ${conversationId}`);
 
     // Trigger queue processing (non-blocking)
     setTimeout(() => processQueue(conversationId), 0);
 
     return tempId;
-  }, [verbethClient, addLog, processQueue]);
+  }, [verbethClient, processQueue]);
 
   const retryMessage = useCallback(async (messageId: string): Promise<boolean> => {
     const failedMessage = failedMessagesRef.current.get(messageId);
@@ -277,10 +262,7 @@ export const useMessageQueue = ({
     if (failedMessage) {
       const conversationId = failedMessage.conversationId;
       
-      // Remove from failed messages map
       failedMessagesRef.current.delete(messageId);
-      
-      // Delete the old failed message from DB
       await removeMessage(messageId);
       
       // Reset status for retry (will get new ID in processQueue)
@@ -289,7 +271,6 @@ export const useMessageQueue = ({
       failedMessage.error = undefined;
       failedMessage.createdAt = Date.now();
       
-      // Get or create queue
       let queue = queuesRef.current.get(conversationId);
       if (!queue) {
         queue = { messages: [], isProcessing: false };
@@ -298,8 +279,8 @@ export const useMessageQueue = ({
       
       // Add to end of queue
       queue.messages.push(failedMessage);
-      
-      addLog(`🔄 Retrying message: "${failedMessage.plaintext.slice(0, 30)}..."`);
+
+      console.log(`[verbeth] retrying message (temp ID: ${failedMessage.id}) for conversation ${conversationId}`);
       
       // Trigger processing
       setTimeout(() => processQueue(conversationId), 0);
@@ -307,9 +288,8 @@ export const useMessageQueue = ({
       return true;
     }
 
-    addLog(`✗ Could not find message ${messageId} to retry`);
     return false;
-  }, [addLog, removeMessage, processQueue]);
+  }, [removeMessage, processQueue]);
 
   /**
    * Cancel/delete a failed or queued message.
@@ -322,11 +302,9 @@ export const useMessageQueue = ({
       failedMessagesRef.current.delete(messageId);
       
       await removeMessage(messageId);
-      
-      addLog(`🗑️ Deleted message: "${failedMessage.plaintext.slice(0, 30)}..."`);
       return true;
     }
-    
+
     // Fallback: check active queues
     for (const [, queue] of queuesRef.current.entries()) {
       const messageIndex = queue.messages.findIndex(
@@ -338,15 +316,12 @@ export const useMessageQueue = ({
         queue.messages.splice(messageIndex, 1);
         
         await removeMessage(messageId);
-        
-        addLog(`🗑️ Deleted message: "${message.plaintext.slice(0, 30)}..."`);
         return true;
       }
     }
     
-    addLog(`✗ Could not find message ${messageId} to delete`);
     return false;
-  }, [addLog, removeMessage]);
+  }, [removeMessage]);
 
   /**
    * Get queue status for a conversation.
@@ -372,8 +347,7 @@ export const useMessageQueue = ({
    */
   const invalidateSessionCache = useCallback((conversationId: string) => {
     verbethClient?.invalidateSessionCache(conversationId);
-    addLog(`🔄 Session cache invalidated for ${conversationId.slice(0, 10)}...`);
-  }, [verbethClient, addLog]);
+  }, [verbethClient]);
 
   /**
    * Clear all queues (e.g., on logout).

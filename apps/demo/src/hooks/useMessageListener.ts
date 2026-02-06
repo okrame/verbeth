@@ -25,7 +25,6 @@ interface UseMessageListenerProps {
   address: string | undefined;
   /** Safe address in fast mode, EOA in classic mode. Used for outbound confirmations. */
   emitterAddress: string | undefined;
-  onLog: (message: string) => void;
   onEventsProcessed: (events: ProcessedEvent[]) => void;
   /** When provided, uses watchBlockNumber (WS subscription) instead of setInterval polling. */
   viemClient?: any;
@@ -35,7 +34,6 @@ export const useMessageListener = ({
   readProvider,
   address,
   emitterAddress,
-  onLog,
   onEventsProcessed,
   viemClient,
 }: UseMessageListenerProps): MessageListenerResult => {
@@ -61,10 +59,10 @@ export const useMessageListener = ({
     try {
       return await dbService.getAllContacts(address);
     } catch (error) {
-      onLog(`✗ Failed to load contacts: ${error}`);
+      console.error(`[verbeth] failed to load contacts:`, error);
       return [];
     }
-  }, [address, onLog]);
+  }, [address]);
 
   // RPC helper with retry logic
   const safeGetLogs = async (
@@ -79,7 +77,6 @@ export const useMessageListener = ({
     while (attempt < retries) {
       try {
         if (fromBlock > toBlock) {
-          onLog(`⚠️ Invalid block range: ${fromBlock} > ${toBlock}`);
           return [];
         }
 
@@ -110,9 +107,7 @@ export const useMessageListener = ({
           error.message?.includes("invalid block range")
         ) {
           if (attempt < retries) {
-            onLog(
-              `! RPC error, retrying in ${delay}ms... (attempt ${attempt}/${retries})`
-            );
+            console.warn(`RPC rate limit or block range error (attempt ${attempt} of ${retries}). Retrying in ${delay}ms...`);
             await new Promise((resolve) => setTimeout(resolve, delay));
             delay *= 1.5;
             continue;
@@ -123,18 +118,15 @@ export const useMessageListener = ({
           error.message?.includes("exceed") ||
           error.message?.includes("range")
         ) {
-          onLog(`✗ Block range error, skipping range ${fromBlock}-${toBlock}`);
+          console.warn(`RPC block range too large for provider. Attempting to skip range...`);
           return [];
         }
 
-        onLog(`✗ RPC error on range ${fromBlock}-${toBlock}: ${error.message}`);
         return [];
       }
     }
 
-    onLog(
-      `✗ Failed after ${retries} retries for range ${fromBlock}-${toBlock}`
-    );
+    console.error(`[verbeth] RPC failure after ${retries} retries for range ${fromBlock}-${toBlock}`);
     return [];
   };
 
@@ -182,7 +174,7 @@ export const useMessageListener = ({
           await new Promise((resolve) => setTimeout(resolve, 200));
         }
       } catch (error) {
-        onLog(`✗ Failed to scan range ${start}-${end}: ${error}`);
+        console.error(`[verbeth] scan failed for range ${start}-${end}:`, error);
       }
     }
 
@@ -280,10 +272,6 @@ export const useMessageListener = ({
           toBlock
         );
 
-        onLog(
-          `🔍 Found ${responseLogs.length} HSR events, checking against ${pendingContacts.length} pending contacts...`
-        );
-
         // Match by cryptographic tag (not address)
         for (const log of responseLogs) {
           const matchingContact = findMatchingContact(log, pendingContacts);
@@ -365,7 +353,7 @@ export const useMessageListener = ({
         }
       }
     } catch (error) {
-      onLog(`Error scanning block range ${fromBlock}-${toBlock}: ${error}`);
+      console.error(`[verbeth] scan failed for block range ${fromBlock}-${toBlock}:`, error);
     }
 
     return allEvents;
@@ -377,8 +365,6 @@ export const useMessageListener = ({
     // check if initial scan already completed for this address
     const initialScanComplete = await dbService.getInitialScanComplete(address);
     if (initialScanComplete) {
-      onLog(`Initial scan already completed for ${address.slice(0, 8)}...`);
-
       const savedLastBlock = await dbService.getLastKnownBlock(address);
       const savedOldestBlock = await dbService.getOldestScannedBlock(address);
 
@@ -392,7 +378,6 @@ export const useMessageListener = ({
     }
 
     setIsInitialLoading(true);
-    onLog(`...Starting initial scan of last ${INITIAL_SCAN_BLOCKS} blocks...`);
 
     try {
       const currentBlock = await readProvider.getBlockNumber();
@@ -423,12 +408,8 @@ export const useMessageListener = ({
       await dbService.setLastKnownBlock(address, currentBlock);
       await dbService.setOldestScannedBlock(address, startBlock);
       await dbService.setInitialScanComplete(address, true);
-
-      onLog(
-        `Initial scan complete: ${events.length} events found in blocks ${startBlock}-${currentBlock}`
-      );
     } catch (error) {
-      onLog(`✗ Initial scan failed: ${error}`);
+      console.error(`[verbeth] scan failed during initial sync:`, error);
     } finally {
       setIsInitialLoading(false);
     }
@@ -436,7 +417,6 @@ export const useMessageListener = ({
     readProvider,
     address,
     isInitialLoading,
-    onLog,
     onEventsProcessed,
     getCurrentContacts,
   ]);
@@ -453,7 +433,6 @@ export const useMessageListener = ({
     }
 
     setIsLoadingMore(true);
-    onLog(`...Loading more history...`);
 
     try {
       const endBlock = oldestScannedBlock - 1;
@@ -472,9 +451,6 @@ export const useMessageListener = ({
       }
 
       if (maxIndexedBlock < startBlock) {
-        onLog(
-          `⚠️ No indexed blocks found between ${startBlock} and ${endBlock}. Retrying later.`
-        );
         setIsLoadingMore(false);
         return;
       }
@@ -485,7 +461,6 @@ export const useMessageListener = ({
       const ranges = await findEventRanges(safeStartBlock, safeEndBlock);
 
       if (ranges.length === 0) {
-        onLog(`No more events found before block ${safeEndBlock}`);
         setCanLoadMore(false);
         setIsLoadingMore(false);
         return;
@@ -505,12 +480,8 @@ export const useMessageListener = ({
       setOldestScannedBlock(safeStartBlock);
       setCanLoadMore(safeStartBlock > CONTRACT_CREATION_BLOCK);
       await dbService.setOldestScannedBlock(address, safeStartBlock);
-
-      onLog(
-        `Loaded ${events.length} more events from blocks ${safeStartBlock}-${safeEndBlock}`
-      );
     } catch (error) {
-      onLog(`✗ Failed to load more history: ${error}`);
+      console.error(`[verbeth] failed to load more history:`, error);
     } finally {
       setIsLoadingMore(false);
     }
@@ -520,7 +491,6 @@ export const useMessageListener = ({
     isLoadingMore,
     canLoadMore,
     oldestScannedBlock,
-    onLog,
     onEventsProcessed,
   ]);
 
@@ -546,16 +516,13 @@ export const useMessageListener = ({
 
           if (events.length > 0) {
             onEventsProcessed(events);
-            onLog(
-              `Found ${events.length} new events in blocks ${startScanBlock}-${maxSafeBlock}`
-            );
           }
 
           setLastKnownBlock(maxSafeBlock);
           await dbService.setLastKnownBlock(address, maxSafeBlock);
         }
       } catch (error) {
-        onLog(`⚠️ Real-time scan error: ${error}`);
+        console.error(`[verbeth] real-time scan error:`, error);
       } finally {
         isScanningRef.current = false;
       }
@@ -579,12 +546,12 @@ export const useMessageListener = ({
         const currentBlock = await readProvider.getBlockNumber();
         handleNewBlock(currentBlock);
       } catch (error) {
-        onLog(`⚠️ Real-time scan error: ${error}`);
+        console.error(`[verbeth] real-time scan error:`, error);
       }
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [readProvider, address, lastKnownBlock, onLog, onEventsProcessed, viemClient]);
+  }, [readProvider, address, lastKnownBlock, onEventsProcessed, viemClient]);
 
   // clear state when address changes
   useEffect(() => {

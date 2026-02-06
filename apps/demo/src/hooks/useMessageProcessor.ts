@@ -33,7 +33,6 @@ interface UseMessageProcessorProps {
   identityKeyPair: IdentityKeyPair | null;
   identityContext: IdentityContext;
   verbethClient: VerbethClient | null;
-  onLog: (message: string) => void;
 }
 
 export const useMessageProcessor = ({
@@ -43,7 +42,6 @@ export const useMessageProcessor = ({
   identityKeyPair,
   identityContext,
   verbethClient,
-  onLog,
 }: UseMessageProcessorProps): MessageProcessorResult => {
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -67,14 +65,10 @@ export const useMessageProcessor = ({
       setContacts(dbContacts);
       setMessages(dbMessages);
       setPendingHandshakes(dbPendingHandshakes);
-
-      onLog(
-        `Loaded from DB for ${address.slice(0, 8)}...: ${dbContacts.length} contacts, ${dbMessages.length} messages, ${dbPendingHandshakes.length} pending handshakes`
-      );
     } catch (error) {
-      onLog(`✗ Failed to load from database: ${error}`);
+      console.error(`[verbeth] database load failed:`, error);
     }
-  }, [address, onLog]);
+  }, [address]);
 
   // ===========================================================================
   // Event Processing
@@ -84,21 +78,13 @@ export const useMessageProcessor = ({
     async (events: ProcessedEvent[]) => {
       if (!address) return;
 
-      const messageEvents = events.filter((e) => e.eventType === "message");
-      if (messageEvents.length > 1) {
-        onLog(`📨 Processing batch of ${messageEvents.length} messages...`);
-      }
-
       for (const event of events) {
         switch (event.eventType) {
           // -----------------------------------------------------------------
           // HANDSHAKE
           // -----------------------------------------------------------------
           case "handshake": {
-            if (!verbethClient) {
-              onLog(`❌ Cannot process handshake: VerbethClient not configured`);
-              break;
-            }
+            if (!verbethClient) break;
 
             const result = await processHandshakeEvent(
               event,
@@ -106,7 +92,6 @@ export const useMessageProcessor = ({
               readProvider,
               identityContext,
               verbethClient,
-              onLog
             );
 
             if (result) {
@@ -124,10 +109,7 @@ export const useMessageProcessor = ({
           // HANDSHAKE RESPONSE - requires verbethClient for session creation
           // -----------------------------------------------------------------
           case "handshake_response": {
-            if (!identityKeyPair || !verbethClient) {
-              onLog(`❌ Cannot process handshake response: missing dependencies`);
-              break;
-            }
+            if (!identityKeyPair || !verbethClient) break;
 
             const result = await processHandshakeResponseEvent(
               event,
@@ -135,7 +117,6 @@ export const useMessageProcessor = ({
               readProvider,
               identityContext,
               verbethClient,
-              onLog
             );
 
             if (result) {
@@ -155,17 +136,13 @@ export const useMessageProcessor = ({
           // MESSAGE - Uses VerbethClient for decryption
           // -----------------------------------------------------------------
           case "message": {
-            if (!verbethClient) {
-              onLog(`❌ Cannot process message: VerbethClient not configured`);
-              break;
-            }
+            if (!verbethClient) break;
 
             const result = await processMessageEvent(
               event,
               address,
               emitterAddress,
               verbethClient,
-              onLog
             );
 
             if (result) {
@@ -199,7 +176,7 @@ export const useMessageProcessor = ({
         }
       }
     },
-    [address, readProvider, identityKeyPair, identityContext, emitterAddress, verbethClient, onLog]
+    [address, readProvider, identityKeyPair, identityContext, emitterAddress, verbethClient]
   );
 
   // ===========================================================================
@@ -229,10 +206,10 @@ export const useMessageProcessor = ({
       );
 
       if (status === "failed" && error) {
-        onLog(`✗ Message ${messageId.slice(0, 8)}... failed: ${error}`);
+        console.error(`[verbeth] message ${messageId.slice(0, 8)}... failed: ${error}`);
       }
     },
-    [onLog]
+    []
   );
 
   const removeMessage = useCallback(async (messageId: string) => {

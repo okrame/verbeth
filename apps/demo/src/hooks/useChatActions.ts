@@ -25,7 +25,6 @@ import { useMessageQueue } from "./useMessageQueue.js";
 
 interface UseChatActionsProps {
   verbethClient: VerbethClient | null;
-  addLog: (message: string) => void;
   updateContact: (contact: Contact) => Promise<void>;
   addMessage: (message: any) => Promise<void>;
   updateMessageStatus: (id: string, status: "pending" | "confirmed" | "failed", error?: string) => Promise<void>;
@@ -40,7 +39,6 @@ interface UseChatActionsProps {
 
 export const useChatActions = ({
   verbethClient,
-  addLog,
   updateContact,
   addMessage,
   updateMessageStatus,
@@ -62,7 +60,6 @@ export const useChatActions = ({
     clearAllQueues,
   } = useMessageQueue({
     verbethClient,
-    addLog,
     addMessage,
     updateMessageStatus,
     removeMessage,
@@ -82,15 +79,8 @@ export const useChatActions = ({
    */
   const sendHandshake = useCallback(
     async (recipientAddress: string, message: string) => {
-      if (!verbethClient) {
-        addLog("✗ Client not initialized");
-        return;
-      }
-
-      if (!recipientAddress || !message) {
-        addLog("✗ Missing recipient address or message");
-        return;
-      }
+      if (!verbethClient) return;
+      if (!recipientAddress || !message) return;
 
       setLoading(true);
       try {
@@ -133,23 +123,16 @@ export const useChatActions = ({
 
         await addMessage(handshakeMessage);
 
-        addLog(
-          `Handshake sent to ${recipientAddress.slice(0, 8)}...: "${message}" (tx: ${tx.hash})`
-        );
         setMessage("");
         setRecipientAddress("");
       } catch (error) {
-        console.error("Failed to send handshake:", error);
-        addLog(
-          `✗ Failed to send handshake: ${error instanceof Error ? error.message : "Unknown error"}`
-        );
+        console.error("[verbeth] handshake failed:", error);
       } finally {
         setLoading(false);
       }
     },
     [
       verbethClient,
-      addLog,
       updateContact,
       addMessage,
       setSelectedContact,
@@ -174,7 +157,6 @@ export const useChatActions = ({
 
       if (!verbethClient) {
         acceptingHandshakesRef.current.delete(handshake.id);
-        addLog("✗ Client not initialized");
         return;
       }
 
@@ -224,7 +206,7 @@ export const useChatActions = ({
         if (handshake.isExistingContact && handshake.timestamp) {
           const lostCount = await markMessagesLost(handshake.sender, handshake.timestamp);
           if (lostCount > 0) {
-            addLog(`⚠️ ${lostCount} messages marked as lost`);
+            console.log(`${lostCount} messages marked as lost`);
           }
         }
 
@@ -251,22 +233,14 @@ export const useChatActions = ({
         };
 
         await addMessage(acceptanceMessage);
-
-        addLog(
-          `✅ Handshake accepted from ${handshake.sender.slice(0, 8)}... - ratchet session created`
-        );
       } catch (error) {
-        console.error("Failed to accept handshake:", error);
-        addLog(
-          `✗ Failed to accept handshake: ${error instanceof Error ? error.message : "Unknown error"}`
-        );
+        console.error("[verbeth] accept handshake failed:", error);
       } finally {
         acceptingHandshakesRef.current.delete(handshake.id);
       }
     },
     [
       verbethClient,
-      addLog,
       updateContact,
       removePendingHandshake,
       addMessage,
@@ -285,15 +259,7 @@ export const useChatActions = ({
    */
   const sendMessageToContact = useCallback(
     async (contact: Contact, messageText: string) => {
-      if (!verbethClient) {
-        addLog("✗ Client not initialized");
-        return;
-      }
-
-      if (!contact.conversationId) {
-        addLog("✗ Contact doesn't have a ratchet session");
-        return;
-      }
+      if (!verbethClient || !contact.conversationId) return;
 
       const messageId = await queueMessage(contact, messageText);
       
@@ -301,7 +267,7 @@ export const useChatActions = ({
         setMessage("");
       }
     },
-    [verbethClient, addLog, queueMessage, setMessage]
+    [verbethClient, queueMessage, setMessage]
   );
 
   /**
@@ -310,12 +276,9 @@ export const useChatActions = ({
    */
   const retryFailedMessage = useCallback(
     async (messageId: string) => {
-      const success = await retryMessage(messageId);
-      if (!success) {
-        addLog(`✗ Could not retry message`);
-      }
+      await retryMessage(messageId);
     },
-    [retryMessage, addLog]
+    [retryMessage]
   );
 
   /**
@@ -323,12 +286,9 @@ export const useChatActions = ({
    */
   const cancelQueuedMessage = useCallback(
     async (messageId: string) => {
-      const success = await cancelMessage(messageId);
-      if (!success) {
-        addLog(`✗ Could not cancel message`);
-      }
+      await cancelMessage(messageId);
     },
-    [cancelMessage, addLog]
+    [cancelMessage]
   );
 
   /**

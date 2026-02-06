@@ -34,7 +34,6 @@ interface UseInitIdentityParams {
   chainId: number;
   readProvider: any;
   ready: boolean;
-  addLog: (message: string) => void;
   onIdentityCreated?: () => void;
   onReset?: () => void;
 }
@@ -45,7 +44,6 @@ export function useInitIdentity({
   chainId,
   readProvider,
   ready,
-  addLog,
   onIdentityCreated,
   onReset,
 }: UseInitIdentityParams) {
@@ -114,15 +112,13 @@ export function useInitIdentity({
       setEmitterAddress(storedIdentity.emitterAddress ?? null);
       setNeedsIdentityCreation(false);
       setNeedsModeSelection(false);
-      addLog(`Identity restored (${storedIdentity.executionMode ?? 'fast'} mode)`);
     } else if (storedIdentity && !storedIdentity.sessionPrivateKey) {
       setNeedsModeSelection(true);
-      addLog(`Identity upgrade required`);
     } else {
       // Need mode selection before identity creation
       setNeedsModeSelection(true);
     }
-  }, [addLog]);
+  }, []);
 
   const initializeWagmiAccount = useCallback(async () => {
     if (!walletClient || !address || !readProvider) return;
@@ -137,14 +133,13 @@ export function useInitIdentity({
 
     const net = await ethersProvider.getNetwork();
     if (Number(net.chainId) !== chainId) {
-      addLog(`Wrong network: connected to chain ${Number(net.chainId)}, expected ${chainId}.`);
+      console.error(`[verbeth] wrong network: connected to chain ${Number(net.chainId)}, expected ${chainId}`);
       return;
     }
 
     const storedIdentity = await dbService.getIdentity(address);
 
     if (!storedIdentity || !storedIdentity.sessionPrivateKey) {
-      addLog(`Awaiting mode selection & identity creation...`);
       return;
     }
 
@@ -156,7 +151,6 @@ export function useInitIdentity({
     // CLASSIC MODE: EOA executor, no Safe setup needed
     // =========================================================================
     if (currentMode === 'classic') {
-      addLog(`Classic mode: using EOA executor`);
 
       const contractInstance = VerbethV1__factory.connect(VERBETH_SINGLETON_ADDR, ethersSigner as any);
       const executorInstance = ExecutorFactory.createEOA(contractInstance);
@@ -209,10 +203,6 @@ export function useInitIdentity({
     const balance = await readProvider.getBalance(sessionAddr);
     console.log(`   Session signer balance: ${Number(balance) / 1e18} ETH`);
 
-    if (balance === 0n) {
-      addLog(`Session signer needs funding: ${sessionAddr}`);
-    }
-
     const safeSessionSigner = new SafeSessionSigner({
       provider: readProvider,
       safeAddress,
@@ -228,10 +218,6 @@ export function useInitIdentity({
       console.log(`   Session valid: ${isValid}`);
       console.log(`   Target allowed: ${isTargetAllowed}`);
       setNeedsSessionSetup(!isValid || !isTargetAllowed);
-
-      if (!isValid || !isTargetAllowed) {
-        addLog(`Session needs setup (valid: ${isValid}, target: ${isTargetAllowed})`);
-      }
     }
 
     console.log(`=====================================================\n`);
@@ -241,16 +227,14 @@ export function useInitIdentity({
 
     setExecutor(executorInstance);
     setContract(contractInstance);
-  }, [walletClient, address, currentAccount, chainId, readProvider, addLog, switchToAccount]);
+  }, [walletClient, address, currentAccount, chainId, readProvider, switchToAccount]);
 
   const createIdentity = useCallback(async (selectedMode: ExecutionMode) => {
     if (!identitySigner || !address || !walletClient) {
-      addLog('✗ Missing signer/provider or address');
       return;
     }
 
     if (selectedMode === 'custom') {
-      addLog('Custom mode coming soon');
       return;
     }
 
@@ -261,7 +245,6 @@ export function useInitIdentity({
       // ================================================================
       // Step 1: Derive keys (same for all modes)
       // ================================================================
-      addLog('Deriving identity keys (signature 1/2)...');
 
       const derivedKeys: DerivedIdentityKeys = await deriveIdentityKeys(
         identitySigner,
@@ -293,7 +276,6 @@ export function useInitIdentity({
       // ================================================================
       // Step 3: Create binding proof with correct emitter
       // ================================================================
-      addLog('Creating binding proof (signature 2/2)...');
       setSigningStep(2);
 
       const proof = await createBindingProof(
@@ -329,24 +311,20 @@ export function useInitIdentity({
       setNeedsModeSelection(false);
       setSigningStep(null);
 
-      addLog(`✓ Identity created (${selectedMode} mode)`);
-      addLog(`  Emitter: ${emitter.slice(0, 10)}...`);
+      console.log(`[verbeth] identity created in ${selectedMode} mode for ${address.slice(0, 10)}...`);
 
       onIdentityCreated?.();
       setReinitTrigger((t) => t + 1);
 
     } catch (signError: any) {
-      if (signError.code === 4001) {
-        addLog('User rejected signing request.');
-      } else {
-        console.error('Identity creation error:', signError);
-        addLog(`✗ Failed: ${signError.message}`);
+      if (signError.code !== 4001) {
+        console.error('[verbeth] identity creation failed:', signError);
       }
     } finally {
       setLoading(false);
       setSigningStep(null);
     }
-  }, [identitySigner, address, walletClient, chainId, identityContext, addLog, onIdentityCreated]);
+  }, [identitySigner, address, walletClient, chainId, identityContext, onIdentityCreated]);
 
   // Handle initialization
   useEffect(() => {
@@ -360,8 +338,7 @@ export function useInitIdentity({
           resetState();
         }
       } catch (error) {
-        console.error('Failed to initialize:', error);
-        addLog(`✗ Failed to initialize: ${error instanceof Error ? error.message : 'Unknown'}`);
+        console.error('[verbeth] initialization failed:', error);
       }
     };
     handleInit();

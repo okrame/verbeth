@@ -14,7 +14,6 @@ interface UseSessionSetupParams {
   sessionSignerAddr: string | null;
   chainId: number;
   readProvider: any;
-  addLog: (message: string) => void;
   // State from useInitIdentity
   isSafeDeployed: boolean;
   isModuleEnabled: boolean;
@@ -31,7 +30,6 @@ export function useSessionSetup({
   sessionSignerAddr,
   chainId,
   readProvider,
-  addLog,
   isSafeDeployed,
   isModuleEnabled,
   setIsSafeDeployed,
@@ -75,15 +73,9 @@ export function useSessionSetup({
 
   const setupSession = useCallback(async () => {
     //Guard for classic mode
-    if (isClassicMode) {
-      addLog("Classic mode: no session setup needed");
-      return;
-    }
+    if (isClassicMode) return;
 
-    if (!walletClient || !address || !safeAddr || !sessionSignerAddr) {
-      addLog("Missing requirements for session setup");
-      return;
-    }
+    if (!walletClient || !address || !safeAddr || !sessionSignerAddr) return;
 
     setLoading(true);
     try {
@@ -98,7 +90,6 @@ export function useSessionSetup({
 
       // Case 1: Safe not deployed → Deploy + enable + configure (1 tx via helper)
       if (!isSafeDeployed) {
-        addLog("Deploying VerbEth Safe + enabling module + configuring session...");
 
         const { isDeployed, moduleEnabled, sessionConfigured } = await getOrCreateSafeForOwner({
           chainId,
@@ -121,8 +112,7 @@ export function useSessionSetup({
         setIsModuleEnabled(moduleEnabled);
 
         if (sessionConfigured) {
-          console.log(`✅ All configured in 1 tx`);
-          addLog("✓ Setup complete!");
+          console.log(`[verbeth] session setup complete in 1 tx`);
           setIsModuleEnabled(true);
           setNeedsSessionSetup(false);
           // Don't call onSessionSetupComplete - state already updated via setters.
@@ -135,7 +125,6 @@ export function useSessionSetup({
 
       // Case 2: Safe exists but module not enabled
       if (!isModuleEnabled) {
-        addLog("Enabling session module...");
 
         const { protocolKit } = await getOrCreateSafeForOwner({
           chainId,
@@ -152,7 +141,7 @@ export function useSessionSetup({
 
         await ensureModuleEnabled(protocolKit);
         setIsModuleEnabled(true);
-        console.log(`✅ Module enabled`);
+        console.log(`✓ Module enabled`);
       }
 
       // Case 3: Safe + module exist → Just setup session
@@ -162,7 +151,6 @@ export function useSessionSetup({
         ethersSigner
       );
 
-      addLog("Setting up session...");
       const tx = await moduleContract.setupSession(
         safeAddr,
         sessionSignerAddr,
@@ -171,15 +159,13 @@ export function useSessionSetup({
       );
       console.log(`TX: ${tx.hash}`);
       await tx.wait();
-      console.log(`✅ Session configured`);
+      console.log(`✓ Session configured`);
 
-      addLog("✓ Session setup complete!");
       console.log(`=====================================================\n`);
       setNeedsSessionSetup(false);
 
     } catch (err: any) {
-      console.error(`Session setup error:`, err);
-      addLog(`✗ Session setup failed: ${err.message}`);
+      console.error(`[verbeth] session setup failed:`, err);
     } finally {
       setLoading(false);
     }
@@ -192,7 +178,6 @@ export function useSessionSetup({
     isModuleEnabled,
     chainId,
     isClassicMode,
-    addLog,
     setIsSafeDeployed,
     setIsModuleEnabled,
     setNeedsSessionSetup,

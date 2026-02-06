@@ -45,7 +45,7 @@ export class DbService {
 
       const result = await this.db.identity.put(normalizedIdentity);
       console.log(
-        `✅ Identity saved successfully for ${normalizedAddress.slice(0, 8)}...`
+        `✓ Identity saved successfully for ${normalizedAddress.slice(0, 8)}...`
       );
 
       // Verify it was saved

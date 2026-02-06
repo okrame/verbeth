@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { Fingerprint, RotateCcw, X } from "lucide-react";
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWalletClient } from 'wagmi';
@@ -40,32 +40,12 @@ export default function App() {
   const [showHandshakeForm, setShowHandshakeForm] = useState(true);
   const [handshakeToasts, setHandshakeToasts] = useState<any[]>([]);
   const [showToast, setShowToast] = useState(false);
-  const [isActivityLogOpen, setIsActivityLogOpen] = useState(false);
-  const [activityLogs, setActivityLogs] = useState<string>("");
   const [verbethClient, setVerbethClient] = useState<VerbethClient | null>(null);
 
   const [healthBannerDismissed, setHealthBannerDismissed] = useState(false);
   const [isResettingContacts, setIsResettingContacts] = useState(false);
 
-  const logRef = useRef<HTMLTextAreaElement>(null);
   const chainId = Number(import.meta.env.VITE_CHAIN_ID);
-
-  const addLog = useCallback((message: string) => {
-    const timestamp = new Date().toLocaleTimeString();
-    const logEntry = `[${timestamp}] ${message}\n`;
-
-    setActivityLogs(prev => {
-      const newLogs = prev + logEntry;
-
-      setTimeout(() => {
-        if (logRef.current && isActivityLogOpen) {
-          logRef.current.scrollTop = logRef.current.scrollHeight;
-        }
-      }, 0);
-
-      return newLogs;
-    });
-  }, [isActivityLogOpen]);
 
 
   const {
@@ -97,7 +77,6 @@ export default function App() {
     chainId,
     readProvider,
     ready,
-    addLog,
     onIdentityCreated: () => setShowToast(true),
     onReset: () => {
       setSelectedContact(null);
@@ -117,7 +96,6 @@ export default function App() {
     sessionSignerAddr,
     chainId,
     readProvider,
-    addLog,
     isSafeDeployed,
     isModuleEnabled,
     setIsSafeDeployed,
@@ -144,11 +122,10 @@ export default function App() {
       });
 
       setVerbethClient(client);
-      addLog(`VerbethClient initialized for ${currentAddress.slice(0, 8)}...`);
     } else {
       setVerbethClient(null);
     }
-  }, [executor, identityKeyPair, identityProof, identitySigner, address, addLog]);
+  }, [executor, identityKeyPair, identityProof, identitySigner, address]);
 
   const {
     messages,
@@ -168,7 +145,6 @@ export default function App() {
     emitterAddress: emitterAddress ?? undefined,
     identityKeyPair,
     verbethClient,
-    onLog: addLog
   });
   const { hasPendingReset, pendingHandshake: pendingResetHandshake, limboAfterTimestamp } =
     usePendingSessionReset(selectedContact, pendingHandshakes);
@@ -183,7 +159,6 @@ export default function App() {
     readProvider,
     address: address ?? undefined,
     emitterAddress: emitterAddress ?? undefined,
-    onLog: addLog,
     onEventsProcessed: processEvents,
     viemClient,
   });
@@ -197,7 +172,6 @@ export default function App() {
     getContactQueueStatus, 
   } = useChatActions({
     verbethClient,
-    addLog,
     updateContact: async (contact: Contact) => { await updateContact(contact); },
     addMessage: async (message: any) => { await addMessage(message); },
     updateMessageStatus, 
@@ -617,85 +591,20 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Activity Log + Debug Info */}
-                {ready && (
-                  <div className="absolute bottom-[10px] left-0 right-0 w-full flex flex-col gap-1 sm:gap-2 px-1 sm:px-2 md:px-4 pointer-events-none z-50">
-                    <div className="max-w-6xl w-full pointer-events-auto">
-                      <div
-                        className="flex justify-between items-center p-2 sm:p-4 cursor-pointer hover:bg-gray-900/50 transition-colors"
-                        onClick={() => setIsActivityLogOpen(!isActivityLogOpen)}
-                      >
-                        <div className="flex items-center gap-2 sm:gap-4">
-                          <div className="flex items-center gap-1 sm:gap-2">
-                            <h2 className="text-sm sm:text-lg font-semibold">Activity Log</h2>
-                            <span className="text-gray-400 text-sm">
-                              {isActivityLogOpen ? '▼' : '▶'}
-                            </span>
-                          </div>
-                          {canLoadMore && ready && isActivityLogOpen && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                loadMoreHistory();
-                              }}
-                              disabled={isLoadingMore}
-                              className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded flex items-center gap-2"
-                            >
-                              {isLoadingMore ? (
-                                <>
-                                  <div className="animate-spin w-3 h-3 border border-gray-400 border-t-transparent rounded-full"></div>
-                                  <span>Loading blocks...</span>
-                                </>
-                              ) : (
-                                <>
-                                  <span>📂</span>
-                                  <span>Load More History</span>
-                                </>
-                              )}
-                            </button>
-                          )}
-                        </div>
-                        {(isInitialLoading || isLoadingMore) && isActivityLogOpen && (
-                          <div className="flex items-center gap-2 text-sm text-blue-400">
-                            <div className="animate-spin w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full"></div>
-                            <span>{isInitialLoading ? 'Initial sync...' : 'Loading more...'}</span>
-                            {syncProgress && (
-                              <span>({syncProgress.current}/{syncProgress.total})</span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      <div
-                        className={`overflow-hidden transition-all duration-300 ease-in-out ${isActivityLogOpen ? 'max-h-40 opacity-100' : 'max-h-0 opacity-0'}`}
-                      >
-                        <div className="p-4 pt-0">
-                          <textarea
-                            ref={logRef}
-                            readOnly
-                            value={activityLogs}
-                            className="w-full h-32 bg-gray-900 border border-gray-700 rounded p-2 text-sm font-mono text-gray-300 resize-none"
-                            placeholder="Activity will appear here..."
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {!isActivityLogOpen && (
-                      <div className="w-full bg-black/80 backdrop-blur-sm p-2 sm:p-3 text-xs text-gray-500 space-y-1 h-fit">
-                        <p>Contract: {VERBETH_SINGLETON_ADDR}</p>
-                        <p>Network: Base (Chain ID: {chainId})</p>
-                        <p>Contract creation block: {CONTRACT_CREATION_BLOCK}</p>
-                        <p>Status: {ready ? '🟢 Ready' : '🔴 Not Ready'} {(isInitialLoading || isLoadingMore) ? '⏳ Loading' : ''}</p>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {ready && (
+        <div className="fixed bottom-0 left-0 right-0 bg-black/80 backdrop-blur-sm p-2 sm:p-3 text-xs text-gray-500 space-y-1 z-50">
+          <p>Contract: {VERBETH_SINGLETON_ADDR}</p>
+          <p>Network: Base (Chain ID: {chainId})</p>
+          <p>Contract creation block: {CONTRACT_CREATION_BLOCK}</p>
+          <p>Status: {ready ? '🟢 Ready' : '🔴 Not Ready'} {(isInitialLoading || isLoadingMore) ? '⏳ Loading' : ''}</p>
+        </div>
+      )}
     </div>
   );
 }

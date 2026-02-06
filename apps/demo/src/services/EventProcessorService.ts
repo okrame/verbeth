@@ -67,7 +67,6 @@ export async function processHandshakeEvent(
   readProvider: any,
   identityContext: IdentityContext,
   verbethClient: VerbethClient,
-  onLog: (msg: string) => void
 ): Promise<HandshakeResult | null> {
   try {
     const log = event.rawLog;
@@ -79,7 +78,7 @@ export async function processHandshakeEvent(
     const decodedKeys = verbethClient.payload.decodeUnifiedPubKeys(unifiedPubKeys);
 
     if (!decodedKeys) {
-      onLog("✗ Failed to decode unified public keys");
+      console.error("[verbeth] failed to decode public keys");
       return null;
     }
 
@@ -128,7 +127,7 @@ export async function processHandshakeEvent(
           identityContext
         );
       } catch (error) {
-        onLog(`Failed to verify handshake identity: ${error}`);
+        // verification failure is non-critical, handshake still shown with unverified badge
       }
     }
 
@@ -188,16 +187,9 @@ export async function processHandshakeEvent(
     await dbService.savePendingHandshake(pendingHandshake);
     await dbService.saveMessage(systemMessage);
 
-    const logSuffix = isExistingEstablished ? " (session reset)" : "";
-    onLog(
-      `📨 Handshake received from ${identityAddress.slice(0, 8)}...${logSuffix} ${
-        isVerified ? "✅" : "⚠️"
-      }: "${handshakeContent.plaintextPayload}"`
-    );
-
     return { pendingHandshake, systemMessage };
   } catch (error) {
-    onLog(`✗ Failed to process handshake log: ${error}`);
+    console.error("[verbeth] handshake processing failed:", error);
     return null;
   }
 }
@@ -213,7 +205,6 @@ export async function processHandshakeResponseEvent(
   readProvider: any,
   identityContext: IdentityContext,
   verbethClient: VerbethClient,
-  onLog: (msg: string) => void
 ): Promise<HandshakeResponseResult | null> {
   try {
     const log = event.rawLog;
@@ -236,9 +227,6 @@ export async function processHandshakeResponseEvent(
     );
 
     if (!contact || !contact.handshakeEphemeralSecret) {
-      onLog(
-        `❓ Received handshake response but no matching pending contact found (responder: ${responder.slice(0, 8)}...)`
-      );
       return null;
     }
 
@@ -257,7 +245,6 @@ export async function processHandshakeResponseEvent(
       : undefined;
 
     if (!initiatorKemSecret) {
-      onLog(`✗ Missing KEM secret for contact ${contact.address.slice(0, 8)}...`);
       return null;
     }
 
@@ -270,7 +257,6 @@ export async function processHandshakeResponseEvent(
     );
 
     if (!result.isValid || !result.keys) {
-      onLog(`✗ Invalid handshake response from ${responder.slice(0, 8)}...`);
       return null;
     }
 
@@ -328,13 +314,11 @@ export async function processHandshakeResponseEvent(
 
     await dbService.saveMessage(systemMessage);
 
-    onLog(
-      `✅ Handshake response verified from ${contact.address.slice(0, 8)}... - ratchet session created`
-    );
+    console.log(`[verbeth] session established with ${contact.address.slice(0, 10)}...`);
 
     return { updatedContact, systemMessage };
   } catch (error) {
-    onLog(`✗ Failed to process handshake response: ${error}`);
+    console.error("[verbeth] handshake response failed:", error);
     return null;
   }
 }
@@ -356,7 +340,6 @@ export async function processMessageEvent(
   address: string,
   emitterAddress: string | undefined,
   verbethClient: VerbethClient,
-  onLog: (msg: string) => void
 ): Promise<MessageResult | null> {
   try {
     const log = event.rawLog;
@@ -380,15 +363,10 @@ export async function processMessageEvent(
       if (already) return null;
     }
 
-    onLog(
-      `🔍 Processing message: sender=${sender.slice(0, 8)}..., isOurMessage=${isOurMessage}, topic=${topic.slice(0, 10)}...`
-    );
-
     // =========================================================================
     // OUTGOING MESSAGE CONFIRMATION - Use txHash lookup
     // =========================================================================
     if (isOurMessage) {
-      onLog(`🔄 Confirming outgoing message: tx=${log.transactionHash.slice(0, 10)}...`);
 
       // Look up pending by txHash
       const pending = await dbService.getPendingOutboundByTxHash(log.transactionHash);
@@ -398,7 +376,6 @@ export async function processMessageEvent(
         const finalized = await dbService.finalizePendingOutbound(pending.id);
 
         if (!finalized) {
-          onLog(`⚠️ Failed to finalize pending outbound ${pending.id.slice(0, 8)}...`);
           return null;
         }
 
@@ -422,14 +399,11 @@ export async function processMessageEvent(
           blockNumber: log.blockNumber,
         });
 
-        onLog(`✅ Message confirmed: "${finalized.plaintext.slice(0, 30)}..." (${pending.id.slice(0, 8)}... → ${newId.slice(0, 8)}...)`);
-
         return {
           messageUpdate: [pending.id, updates],
         };
       }
 
-      onLog(`⚠️ Outgoing message on-chain but no pending record found`);
       return null;
     }
 
@@ -440,13 +414,11 @@ export async function processMessageEvent(
     // Get contact for signing key
     const session = await dbService.getRatchetSessionByAnyInboundTopic(topic);
     if (!session) {
-      onLog(`❓ Received message on unknown topic: ${topic.slice(0, 10)}...`);
       return null;
     }
 
     const contact = await dbService.getContact(session.contactAddress, address);
     if (!contact?.signingPubKey) {
-      onLog(`✗ No signing key for contact ${session.contactAddress.slice(0, 8)}...`);
       return null;
     }
 
@@ -459,7 +431,7 @@ export async function processMessageEvent(
     );
 
     if (!decrypted) {
-      onLog(`✗ Failed to decrypt message from ${contact.address.slice(0, 8)}...`);
+      console.error(`[verbeth] decryption failed for message from ${contact.address.slice(0, 10)}...`);
       return null;
     }
 
@@ -504,11 +476,9 @@ export async function processMessageEvent(
       await dbService.saveContact(updatedContact);
     }
 
-    onLog(`📩 Message from ${contact.address.slice(0, 8)}...: "${decrypted.plaintext}"`);
-
     return saved ? { newMessage: message, contactUpdate: updatedContact } : null;
   } catch (error) {
-    onLog(`✗ Failed to process message: ${error}`);
+    console.error("[verbeth] decryption failed:", error);
     return null;
   }
 }
