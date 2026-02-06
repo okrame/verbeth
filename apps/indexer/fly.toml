@@ -3,12 +3,12 @@ primary_region = "iad"
 
 [env]
   RUST_LOG = "info"
-  SERVER_PORT = "3000"
+  SERVER_PORT = "3002"
   CONTRACT_ADDRESS = "0x82C9c5475D63e4C9e959280e9066aBb24973a663"
   CREATION_BLOCK = "37097547"
 
 [http_service]
-  internal_port = 3000
+  internal_port = 3002
   force_https = true
   min_machines_running = 1
 

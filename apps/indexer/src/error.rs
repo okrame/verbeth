@@ -23,6 +23,9 @@ pub enum IndexerError {
 
     #[error("task join error: {0}")]
     Join(#[from] tokio::task::JoinError),
+
+    #[error("payload too large: {field} is {size} bytes (max: {max})")]
+    PayloadTooLarge { field: &'static str, size: usize, max: usize },
 }
 
 pub type Result<T> = std::result::Result<T, IndexerError>;

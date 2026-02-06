@@ -10,7 +10,7 @@ pub mod schema;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
-pub fn create_pool(database_path: &str) -> Result<DbPool> {
+pub fn create_pool(database_path: &str, sync_mode: &str) -> Result<DbPool> {
     if let Some(parent) = Path::new(database_path).parent() {
         std::fs::create_dir_all(parent).ok();
     }
@@ -19,11 +19,13 @@ pub fn create_pool(database_path: &str) -> Result<DbPool> {
     let pool = Pool::builder().max_size(4).build(manager)?;
 
     let conn = pool.get()?;
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
-         PRAGMA foreign_keys=ON;",
-    )?;
+    let pragmas = format!(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous={}; PRAGMA foreign_keys=ON;",
+        sync_mode
+    );
+    conn.execute_batch(&pragmas)?;
+
+    tracing::info!("SQLite initialized with synchronous={}", sync_mode);
 
     schema::run_migrations(&conn)?;
 

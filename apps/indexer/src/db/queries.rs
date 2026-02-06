@@ -9,22 +9,38 @@ pub fn get_and_increment_seq(
     key_type: &str,
     key_hash: Option<&[u8; 32]>,
 ) -> Result<i64> {
-    let seq: i64 = conn
-        .query_row(
-            "SELECT next_seq FROM seq_counters WHERE key_type = ?1 AND key_hash IS ?2",
-            params![key_type, key_hash.map(|h| h.as_slice())],
-            |row| row.get(0),
-        )
-        .optional()?
-        .unwrap_or(0);
+    // BEGIN IMMEDIATE acquires write lock immediately, preventing race conditions
+    conn.execute("BEGIN IMMEDIATE", [])?;
 
-    conn.execute(
-        "INSERT INTO seq_counters (key_type, key_hash, next_seq) VALUES (?1, ?2, ?3)
-         ON CONFLICT(key_type, key_hash) DO UPDATE SET next_seq = ?3",
-        params![key_type, key_hash.map(|h| h.as_slice()), seq + 1],
-    )?;
+    let result = (|| -> Result<i64> {
+        let seq: i64 = conn
+            .query_row(
+                "SELECT next_seq FROM seq_counters WHERE key_type = ?1 AND key_hash IS ?2",
+                params![key_type, key_hash.map(|h| h.as_slice())],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
 
-    Ok(seq)
+        conn.execute(
+            "INSERT INTO seq_counters (key_type, key_hash, next_seq) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key_type, key_hash) DO UPDATE SET next_seq = ?3",
+            params![key_type, key_hash.map(|h| h.as_slice()), seq + 1],
+        )?;
+
+        Ok(seq)
+    })();
+
+    match &result {
+        Ok(_) => {
+            conn.execute("COMMIT", [])?;
+        }
+        Err(_) => {
+            let _ = conn.execute("ROLLBACK", []);
+        }
+    }
+
+    result
 }
 
 pub fn insert_message(conn: &Connection, row: &MessageRow) -> Result<bool> {

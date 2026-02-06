@@ -6,10 +6,18 @@ use crate::db::queries::{
     get_and_increment_seq, insert_handshake, insert_hsr, insert_message,
 };
 use crate::db::DbPool;
-use crate::error::Result;
+use crate::error::{IndexerError, Result};
 
 use super::events::{Handshake, HandshakeResponse, MessageSent};
 
+// Payload size limits (reasonable for Verbeth protocol)
+const MAX_CIPHERTEXT_SIZE: usize = 64 * 1024;       // 64 KB per message
+const MAX_PUB_KEYS_SIZE: usize = 65;                // version + X25519 + Ed25519
+const MAX_EPHEMERAL_KEY_SIZE: usize = 1216;         // X25519 32 + ML-KEM 1184
+const MAX_PLAINTEXT_PAYLOAD_SIZE: usize = 1024;     // 1 KB metadata
+const MAX_HSR_CIPHERTEXT_SIZE: usize = 4 * 1024;    // 4 KB handshake response
+
+#[derive(Clone)]
 pub enum VerbethEvent {
     MessageSent {
         sender: Address,
@@ -33,11 +41,59 @@ pub enum VerbethEvent {
     },
 }
 
+#[derive(Clone)]
 pub struct LogWithMeta {
     pub event: VerbethEvent,
     pub block_number: u64,
     pub log_index: u64,
     pub block_timestamp: u64,
+}
+
+fn validate_payload_sizes(event: &VerbethEvent) -> Result<()> {
+    match event {
+        VerbethEvent::MessageSent { ciphertext, .. } => {
+            if ciphertext.len() > MAX_CIPHERTEXT_SIZE {
+                return Err(IndexerError::PayloadTooLarge {
+                    field: "ciphertext",
+                    size: ciphertext.len(),
+                    max: MAX_CIPHERTEXT_SIZE,
+                });
+            }
+        }
+        VerbethEvent::Handshake { pub_keys, ephemeral_pub_key, plaintext_payload, .. } => {
+            if pub_keys.len() > MAX_PUB_KEYS_SIZE {
+                return Err(IndexerError::PayloadTooLarge {
+                    field: "pubKeys",
+                    size: pub_keys.len(),
+                    max: MAX_PUB_KEYS_SIZE,
+                });
+            }
+            if ephemeral_pub_key.len() > MAX_EPHEMERAL_KEY_SIZE {
+                return Err(IndexerError::PayloadTooLarge {
+                    field: "ephemeralPubKey",
+                    size: ephemeral_pub_key.len(),
+                    max: MAX_EPHEMERAL_KEY_SIZE,
+                });
+            }
+            if plaintext_payload.len() > MAX_PLAINTEXT_PAYLOAD_SIZE {
+                return Err(IndexerError::PayloadTooLarge {
+                    field: "plaintextPayload",
+                    size: plaintext_payload.len(),
+                    max: MAX_PLAINTEXT_PAYLOAD_SIZE,
+                });
+            }
+        }
+        VerbethEvent::HandshakeResponse { ciphertext, .. } => {
+            if ciphertext.len() > MAX_HSR_CIPHERTEXT_SIZE {
+                return Err(IndexerError::PayloadTooLarge {
+                    field: "hsrCiphertext",
+                    size: ciphertext.len(),
+                    max: MAX_HSR_CIPHERTEXT_SIZE,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 pub struct EventProcessor {
@@ -50,6 +106,9 @@ impl EventProcessor {
     }
 
     pub fn process(&self, log: LogWithMeta) -> Result<bool> {
+        // Validate payload sizes before processing
+        validate_payload_sizes(&log.event)?;
+
         let conn = self.pool.get()?;
 
         match log.event {

@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
     tracing::info!("Database: {}", config.database_path);
     tracing::info!("RPC chunk size: {} blocks", config.rpc_chunk_size);
 
-    let pool = create_pool(&config.database_path)?;
+    let pool = create_pool(&config.database_path, &config.sqlite_sync_mode)?;
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
@@ -80,13 +80,12 @@ async fn main() -> Result<()> {
     let state = AppState::new(pool.clone(), config);
 
     let subscriber_handle = {
-        let ws_url = state.config.rpc_ws_url.clone();
-        let contract_address = state.config.contract_address;
+        let config = state.config.clone();
         let pool = pool.clone();
         let shutdown_rx = shutdown_rx.clone();
 
         tokio::spawn(async move {
-            subscriber::subscribe_with_reconnect(ws_url, contract_address, pool, shutdown_rx).await;
+            subscriber::subscribe_with_reconnect(config, pool, shutdown_rx).await;
         })
     };
 

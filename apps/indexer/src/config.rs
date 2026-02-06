@@ -3,6 +3,19 @@ use std::str::FromStr;
 
 use crate::error::{IndexerError, Result};
 
+/// Sanitize RPC URL by masking API keys.
+/// Common patterns: .../v2/abc123 (Alchemy), .../v3/abc123 (Infura)
+pub fn sanitize_rpc_url(url: &str) -> String {
+    if let Some(idx) = url.rfind('/') {
+        let (base, key) = url.split_at(idx + 1);
+        // API keys are typically long alphanumeric strings without dots or slashes
+        if key.len() > 8 && !key.contains('.') && !key.contains('/') {
+            return format!("{}***", base);
+        }
+    }
+    url.to_string()
+}
+
 #[allow(dead_code)]
 pub struct Config {
     pub rpc_ws_url: String,
@@ -14,6 +27,8 @@ pub struct Config {
     pub backfill_days: u32,
     pub retention_days: u32,
     pub rpc_chunk_size: u64,
+    /// SQLite synchronous mode: "OFF", "NORMAL", or "FULL" (default: NORMAL)
+    pub sqlite_sync_mode: String,
 }
 
 impl Config {
@@ -39,7 +54,7 @@ impl Config {
             .unwrap_or_else(|_| "./data/indexer.db".into());
 
         let server_port = std::env::var("SERVER_PORT")
-            .unwrap_or_else(|_| "3000".into())
+            .unwrap_or_else(|_| "3002".into())
             .parse::<u16>()
             .map_err(|e| IndexerError::Config(format!("Invalid SERVER_PORT: {e}")))?;
 
@@ -59,6 +74,14 @@ impl Config {
             .parse::<u64>()
             .map_err(|e| IndexerError::Config(format!("Invalid RPC_CHUNK_SIZE: {e}")))?;
 
+        // SQLite sync mode: NORMAL (default), FULL for extra local durability
+        let sqlite_sync_mode = std::env::var("SQLITE_SYNC_MODE").unwrap_or_else(|_| "NORMAL".into());
+        if !["OFF", "NORMAL", "FULL"].contains(&sqlite_sync_mode.as_str()) {
+            return Err(IndexerError::Config(format!(
+                "Invalid SQLITE_SYNC_MODE: {sqlite_sync_mode} (expected OFF, NORMAL, or FULL)"
+            )));
+        }
+
         Ok(Self {
             rpc_ws_url,
             rpc_http_url,
@@ -69,6 +92,7 @@ impl Config {
             backfill_days,
             retention_days,
             rpc_chunk_size,
+            sqlite_sync_mode,
         })
     }
 }
