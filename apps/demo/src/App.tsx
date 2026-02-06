@@ -184,7 +184,8 @@ export default function App() {
     address: address ?? undefined,
     emitterAddress: emitterAddress ?? undefined,
     onLog: addLog,
-    onEventsProcessed: processEvents
+    onEventsProcessed: processEvents,
+    viemClient,
   });
 
   const {

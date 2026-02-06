@@ -11,7 +11,7 @@ export function CelebrationToast({ show, onClose }: CelebrationToastProps) {
     if (!show) return;
     const t = setTimeout(onClose, 3000);
     return () => clearTimeout(t);
-  }, [show, onClose]);
+  }, [show]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const width = 320;
   const margin = 16;

@@ -27,6 +27,8 @@ interface UseMessageListenerProps {
   emitterAddress: string | undefined;
   onLog: (message: string) => void;
   onEventsProcessed: (events: ProcessedEvent[]) => void;
+  /** When provided, uses watchBlockNumber (WS subscription) instead of setInterval polling. */
+  viemClient?: any;
 }
 
 export const useMessageListener = ({
@@ -35,6 +37,7 @@ export const useMessageListener = ({
   emitterAddress,
   onLog,
   onEventsProcessed,
+  viemClient,
 }: UseMessageListenerProps): MessageListenerResult => {
   const [isInitialLoading, setIsInitialLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -522,13 +525,20 @@ export const useMessageListener = ({
   ]);
 
   // real time scanning for new blocks
+  // Uses watchBlockNumber (WS subscription) when viemClient is available,
+  // otherwise falls back to setInterval polling.
+  const isScanningRef = useRef(false);
+
   useEffect(() => {
     if (!readProvider || !address || !lastKnownBlock) return;
 
-    const interval = setInterval(async () => {
+    const handleNewBlock = async (blockNumber: number) => {
+      // Guard against overlapping scans (WS blocks can arrive faster than scans complete)
+      if (isScanningRef.current) return;
+      isScanningRef.current = true;
+
       try {
-        const currentBlock = await readProvider.getBlockNumber();
-        const maxSafeBlock = currentBlock - REAL_TIME_BUFFER;
+        const maxSafeBlock = blockNumber - REAL_TIME_BUFFER;
 
         if (maxSafeBlock > lastKnownBlock) {
           const startScanBlock = lastKnownBlock + 1;
@@ -546,11 +556,35 @@ export const useMessageListener = ({
         }
       } catch (error) {
         onLog(`⚠️ Real-time scan error: ${error}`);
+      } finally {
+        isScanningRef.current = false;
+      }
+    };
+
+    // Prefer WS subscription via viem's watchBlockNumber
+    if (viemClient) {
+      const unwatch = viemClient.watchBlockNumber({
+        onBlockNumber: (blockNumber: bigint) => {
+          handleNewBlock(Number(blockNumber));
+        },
+        emitOnBegin: false,
+        pollingInterval: 4_000, // fallback polling interval when WS is down
+      });
+      return unwatch;
+    }
+
+    // Fallback: HTTP polling (identical to original behavior)
+    const interval = setInterval(async () => {
+      try {
+        const currentBlock = await readProvider.getBlockNumber();
+        handleNewBlock(currentBlock);
+      } catch (error) {
+        onLog(`⚠️ Real-time scan error: ${error}`);
       }
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [readProvider, address, lastKnownBlock, onLog, onEventsProcessed]);
+  }, [readProvider, address, lastKnownBlock, onLog, onEventsProcessed, viemClient]);
 
   // clear state when address changes
   useEffect(() => {
