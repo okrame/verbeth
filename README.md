@@ -3,7 +3,7 @@
 </h1>
 
 <p align="center">
-  <i>E2EE messaging over Ethereum logs, using the blockchain as the only transport layer.</i>
+  <i>E2EE messaging over the blockchain, using EVM logs as the only transport layer.</i>
 </p>
 
 <p align="center">
@@ -16,11 +16,11 @@
     <a href="https://www.typescriptlang.org/">
         <img src="https://img.shields.io/badge/TypeScript-5.4+-blue?style=flat-square&logo=typescript">
     </a>
-    <a href="https://github.com/okrame/verbeth-sdk/actions/workflows/ci.yml">
-        <img src="https://github.com/okrame/verbeth-sdk/actions/workflows/ci.yml/badge.svg?branch=dev%2Fstealth-hsr&label=tests" />
+    <a href="https://github.com/okrame/verbeth/actions/workflows/ci.yml">
+        <img src="https://github.com/okrame/verbeth/actions/workflows/ci.yml/badge.svg?branch=dev%2Fstealth-hsr&label=tests" />
     </a>
-    <!-- <a href="https://codecov.io/gh/okrame/verbeth-sdk">
-        <img src="https://img.shields.io/codecov/c/github/okrame/verbeth-sdk?style=flat-square">
+    <!-- <a href="https://codecov.io/gh/okrame/verbeth">
+        <img src="https://img.shields.io/codecov/c/github/okrame/verbeth?style=flat-square">
     </a> -->
 </p>
 

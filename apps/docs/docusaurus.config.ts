@@ -15,7 +15,7 @@ const config: Config = {
   baseUrl: '/',
 
   organizationName: 'okrame',
-  projectName: 'verbeth-sdk',
+  projectName: 'verbeth',
 
   onBrokenLinks: 'throw',
 
@@ -36,7 +36,7 @@ const config: Config = {
       {
         docs: {
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://github.com/okrame/verbeth-sdk/tree/main/apps/docs/',
+          editUrl: 'https://github.com/okrame/verbeth/tree/main/apps/docs/',
         },
         blog: false,
         theme: {
@@ -61,7 +61,7 @@ const config: Config = {
           label: 'Docs',
         },
         {
-          href: 'https://github.com/okrame/verbeth-sdk',
+          href: 'https://github.com/okrame/verbeth',
           label: 'GitHub',
           position: 'right',
         },

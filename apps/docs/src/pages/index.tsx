@@ -12,7 +12,7 @@ export default function Home(): ReactNode {
         <p>End-to-end encrypted messaging over Ethereum</p>
         <div className="hero-buttons">
           <Link to="/docs/quick-start">Get Started</Link>
-          <Link href="https://github.com/okrame/verbeth-sdk">GitHub</Link>
+          <Link href="https://github.com/okrame/verbeth">GitHub</Link>
         </div>
       </main>
     </Layout>

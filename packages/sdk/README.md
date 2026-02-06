@@ -45,10 +45,10 @@ MPL-2.0
 
 ## Links
 
-- [GitHub Repository](https://github.com/okrame/verbeth-sdk)
+- [GitHub Repository](https://github.com/okrame/verbeth)
 - [Demo App](https://verbeth-demo.vercel.app/)
-- [Contract Source](https://github.com/okrame/verbeth-sdk/tree/main/packages/contracts)
+- [Contract Source](https://github.com/okrame/verbeth/tree/main/packages/contracts)
 
 ---
 
-**Questions or feedback?** Open an issue on [GitHub](https://github.com/okrame/verbeth-sdk/issues).
+**Questions or feedback?** Open an issue on [GitHub](https://github.com/okrame/verbeth/issues).
