@@ -1,498 +1,179 @@
-import { describe, it, expect } from "vitest";
-import nacl from "tweetnacl";
-import {
-  encryptStructuredPayload,
-  decryptStructuredPayload,
-  decryptHandshakeResponse,
-  decryptAndExtractHandshakeKeys,
-} from "../src/crypto.js";
-import {
-  HandshakeResponseContent,
-  encodeUnifiedPubKeys,
-  extractKeysFromHandshakeResponse,
-  parseHandshakeKeys,
-} from "../src/payload.js";
+// packages/sdk/test/verify.test.ts
 
-// Local type for test payloads
-interface MessagePayload {
-  content: string;
-  timestamp?: number;
-  messageType?: 'text' | 'file' | 'media';
-  metadata?: Record<string, any>;
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { hexlify, getAddress } from "ethers";
+import { verifyIdentityProof } from "../src/verify.js";
+import { parseBindingMessage } from "../src/utils.js";
+import type { IdentityProof, IdentityContext } from "../src/types.js";
+
+// Stub makeViemPublicClient so verifyIdentityProof uses our mock client
+vi.mock("../src/utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils.js")>();
+  return {
+    ...actual,
+    makeViemPublicClient: vi.fn(),
+  };
+});
+
+import { makeViemPublicClient } from "../src/utils.js";
+const mockedMakeClient = vi.mocked(makeViemPublicClient);
+
+// ── Test fixtures ──
+
+const TEST_ADDRESS = "0x1234567890abcdef1234567890abcdef12345678";
+const TEST_SAFE_ADDRESS = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+const pkX25519 = new Uint8Array(32).fill(0x22);
+const pkEd25519 = new Uint8Array(32).fill(0x11);
+
+function buildMessage(overrides?: {
+  header?: string;
+  address?: string;
+  executorSafeAddress?: string;
+  pkEd25519Hex?: string;
+  pkX25519Hex?: string;
+  chainId?: number;
+  rpId?: string;
+}): string {
+  const o = {
+    header: "VerbEth Key Binding v1",
+    address: TEST_ADDRESS,
+    executorSafeAddress: TEST_SAFE_ADDRESS,
+    pkEd25519Hex: hexlify(pkEd25519),
+    pkX25519Hex: hexlify(pkX25519),
+    ...overrides,
+  };
+  const lines = [
+    o.header,
+    `Address: ${o.address}`,
+    `PkEd25519: ${o.pkEd25519Hex}`,
+    `PkX25519: ${o.pkX25519Hex}`,
+    `ExecutorSafeAddress: ${o.executorSafeAddress}`,
+  ];
+  if (o.chainId !== undefined) lines.push(`ChainId: ${o.chainId}`);
+  if (o.rpId !== undefined) lines.push(`RpId: ${o.rpId}`);
+  return lines.join("\n");
 }
-import { IdentityProof } from "../src/types.js";
 
-describe("Encryption/Decryption", () => {
-  describe("Structured Payload Encryption", () => {
-    it("should encrypt and decrypt structured message format", () => {
-      const senderBoxKey = nacl.box.keyPair();
-      const senderSignKey = nacl.sign.keyPair();
-      const recipientKey = nacl.box.keyPair();
+function makeProof(messageOverrides?: Parameters<typeof buildMessage>[0]): IdentityProof {
+  return {
+    message: buildMessage(messageOverrides),
+    signature: "0x" + "ab".repeat(65),
+  };
+}
 
-      const messagePayload: MessagePayload = {
-        content: "Hello structured VerbEth!",
-        timestamp: Date.now(),
-        messageType: "text",
-      };
+const expectedKeys = {
+  identityPubKey: pkX25519,
+  signingPubKey: pkEd25519,
+};
 
-      const encrypted = encryptStructuredPayload(
-        messagePayload,
-        recipientKey.publicKey,
-        senderBoxKey.secretKey,
-        senderBoxKey.publicKey,
-        senderSignKey.secretKey,
-        senderSignKey.publicKey
-      );
+// A provider-like stub (only used to pass to verifyIdentityProof; the real
+// work is done by the mocked makeViemPublicClient)
+const fakeProvider = {
+  request: async () => "0x1",
+} as any;
 
-      const decrypted = decryptStructuredPayload(
-        encrypted,
-        recipientKey.secretKey,
-        (obj) => obj as MessagePayload,
-        senderSignKey.publicKey
-      );
-
-      expect(decrypted).toEqual(messagePayload);
-    });
-
-    it("should encrypt structured payload without signing keys", () => {
-      const senderBoxKey = nacl.box.keyPair();
-      const recipientKey = nacl.box.keyPair();
-
-      const messagePayload: MessagePayload = {
-        content: "Unsigned structured message",
-        timestamp: Date.now(),
-        messageType: "text",
-      };
-
-      const encrypted = encryptStructuredPayload(
-        messagePayload,
-        recipientKey.publicKey,
-        senderBoxKey.secretKey,
-        senderBoxKey.publicKey
-      );
-
-      const decrypted = decryptStructuredPayload(
-        encrypted,
-        recipientKey.secretKey,
-        (obj) => obj as MessagePayload
-      );
-
-      expect(decrypted).toEqual(messagePayload);
-    });
-
-    it("should return null on decryption with wrong recipient key", () => {
-      const senderBoxKey = nacl.box.keyPair();
-      const recipientKey = nacl.box.keyPair();
-      const wrongKey = nacl.box.keyPair();
-
-      const messagePayload: MessagePayload = {
-        content: "Test message",
-        timestamp: Date.now(),
-        messageType: "text",
-      };
-
-      const encrypted = encryptStructuredPayload(
-        messagePayload,
-        recipientKey.publicKey,
-        senderBoxKey.secretKey,
-        senderBoxKey.publicKey
-      );
-
-      const decrypted = decryptStructuredPayload(
-        encrypted,
-        wrongKey.secretKey,
-        (obj) => obj as MessagePayload
-      );
-
-      expect(decrypted).toBeNull();
-    });
+describe("verifyIdentityProof", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedMakeClient.mockResolvedValue({
+      verifyMessage: vi.fn().mockResolvedValue(true),
+    } as any);
   });
 
-  describe("Handshake Response Encryption", () => {
-    it("should encrypt and decrypt handshake response content", () => {
-      const initiatorEphemeralKey = nacl.box.keyPair();
-      const responderEphemeralKey = nacl.box.keyPair();
-
-      const identityPubKey = new Uint8Array(32).fill(3);
-      const signingPubKey = new Uint8Array(32).fill(7);
-      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
-
-      const ephemeralPubKey = new Uint8Array(32).fill(4);
-      const note = "here is my response";
-
-      const identityProof: IdentityProof = {
-        message: "VerbEth Identity Key Identity v1\nAddress: 0x1234...",
-        signature: "0x" + "1".repeat(130),
-      };
-
-      const responseContent: HandshakeResponseContent = {
-        unifiedPubKeys,
-        ephemeralPubKey,
-        note,
-        identityProof,
-      };
-
-      const encrypted = encryptStructuredPayload(
-        responseContent,
-        initiatorEphemeralKey.publicKey,
-        responderEphemeralKey.secretKey,
-        responderEphemeralKey.publicKey
-      );
-
-      const decrypted = decryptHandshakeResponse(
-        encrypted,
-        initiatorEphemeralKey.secretKey
-      );
-
-      expect(decrypted).not.toBeNull();
-      expect(decrypted!.unifiedPubKeys).toEqual(unifiedPubKeys);
-      expect(decrypted!.ephemeralPubKey).toEqual(ephemeralPubKey);
-      expect(decrypted!.note).toBe(note);
-      expect(decrypted!.identityProof).toEqual(identityProof);
-    });
-
-    it("should handle handshake response with identity proof", () => {
-      const initiatorEphemeralKey = nacl.box.keyPair();
-      const responderEphemeralKey = nacl.box.keyPair();
-
-      const identityPubKey = new Uint8Array(32).fill(5);
-      const signingPubKey = new Uint8Array(32).fill(8);
-      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
-
-      const ephemeralPubKey = new Uint8Array(32).fill(6);
-
-      const identityProof: IdentityProof = {
-        message: "VerbEth Identity Key identity v1\nAddress: 0xabcd...",
-        signature: "0x" + "2".repeat(130),
-      };
-
-      const responseContent: HandshakeResponseContent = {
-        unifiedPubKeys,
-        ephemeralPubKey,
-        note: "with identity proof",
-        identityProof,
-      };
-
-      const encrypted = encryptStructuredPayload(
-        responseContent,
-        initiatorEphemeralKey.publicKey,
-        responderEphemeralKey.secretKey,
-        responderEphemeralKey.publicKey
-      );
-
-      const decrypted = decryptHandshakeResponse(
-        encrypted,
-        initiatorEphemeralKey.secretKey
-      );
-
-      expect(decrypted).not.toBeNull();
-      expect(decrypted!.identityProof).toEqual(identityProof);
-    });
+  it("returns true for valid proof", async () => {
+    const result = await verifyIdentityProof(
+      makeProof(),
+      TEST_SAFE_ADDRESS,
+      expectedKeys,
+      fakeProvider,
+    );
+    expect(result).toBe(true);
   });
 
-  describe("decryptAndExtractHandshakeKeys", () => {
-    it("should decrypt and extract all keys from handshake response", () => {
-      const initiatorEphemeralKey = nacl.box.keyPair();
-      const responderEphemeralKey = nacl.box.keyPair();
+  it("returns false when signature verification fails", async () => {
+    mockedMakeClient.mockResolvedValue({
+      verifyMessage: vi.fn().mockResolvedValue(false),
+    } as any);
 
-      const identityPubKey = new Uint8Array(32).fill(10);
-      const signingPubKey = new Uint8Array(32).fill(11);
-      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
-      const ephemeralPubKey = new Uint8Array(32).fill(12);
-      const note = "convenience function test";
-
-      const identityProof: IdentityProof = {
-        message: "VerbEth Identity Key Identity v1\nAddress: 0xtest...",
-        signature: "0x" + "3".repeat(130),
-      };
-
-      const responseContent: HandshakeResponseContent = {
-        unifiedPubKeys,
-        ephemeralPubKey,
-        note,
-        identityProof,
-      };
-
-      const encrypted = encryptStructuredPayload(
-        responseContent,
-        initiatorEphemeralKey.publicKey,
-        responderEphemeralKey.secretKey,
-        responderEphemeralKey.publicKey
-      );
-
-      const result = decryptAndExtractHandshakeKeys(
-        encrypted,
-        initiatorEphemeralKey.secretKey
-      );
-
-      expect(result).not.toBeNull();
-      expect(result!.identityPubKey).toEqual(identityPubKey);
-      expect(result!.signingPubKey).toEqual(signingPubKey);
-      expect(result!.ephemeralPubKey).toEqual(ephemeralPubKey);
-      expect(result!.note).toBe(note);
-      expect(result!.identityProof).toEqual(identityProof);
-    });
-
-    it("should return null for invalid encrypted data", () => {
-      const initiatorEphemeralKey = nacl.box.keyPair();
-
-      const invalidPayload = {
-        v: 1,
-        epk: Buffer.from(new Uint8Array(32).fill(1)).toString("base64"),
-        n: Buffer.from(new Uint8Array(24).fill(2)).toString("base64"),
-        ct: Buffer.from(new Uint8Array(16).fill(3)).toString("base64"),
-      };
-      const invalidEncrypted = JSON.stringify(invalidPayload);
-
-      const result = decryptAndExtractHandshakeKeys(
-        invalidEncrypted,
-        initiatorEphemeralKey.secretKey
-      );
-
-      expect(result).toBeNull();
-    });
-
-    it("should return null with wrong decryption key", () => {
-      const initiatorEphemeralKey = nacl.box.keyPair();
-      const responderEphemeralKey = nacl.box.keyPair();
-      const wrongKey = nacl.box.keyPair();
-
-      const identityPubKey = new Uint8Array(32).fill(13);
-      const signingPubKey = new Uint8Array(32).fill(14);
-      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
-
-      const identityProof: IdentityProof = {
-        message: "Wrong key test",
-        signature: "0x" + "4".repeat(130),
-      };
-
-      const responseContent: HandshakeResponseContent = {
-        unifiedPubKeys,
-        ephemeralPubKey: new Uint8Array(32).fill(15),
-        note: "should fail",
-        identityProof,
-      };
-
-      const encrypted = encryptStructuredPayload(
-        responseContent,
-        initiatorEphemeralKey.publicKey,
-        responderEphemeralKey.secretKey,
-        responderEphemeralKey.publicKey
-      );
-
-      const result = decryptAndExtractHandshakeKeys(
-        encrypted,
-        wrongKey.secretKey
-      );
-
-      expect(result).toBeNull();
-    });
+    const result = await verifyIdentityProof(
+      makeProof(),
+      TEST_SAFE_ADDRESS,
+      expectedKeys,
+      fakeProvider,
+    );
+    expect(result).toBe(false);
   });
 
-  describe("Key Extraction Functions", () => {
-    it("should extract keys from handshake response content", () => {
-      const identityPubKey = new Uint8Array(32).fill(25);
-      const signingPubKey = new Uint8Array(32).fill(26);
-      const ephemeralPubKey = new Uint8Array(32).fill(27);
-      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
-
-      const identityProof: IdentityProof = {
-        message: "Extract test",
-        signature: "0x" + "5".repeat(130),
-      };
-
-      const content: HandshakeResponseContent = {
-        unifiedPubKeys,
-        ephemeralPubKey,
-        note: "extract test",
-        identityProof,
-      };
-
-      const extracted = extractKeysFromHandshakeResponse(content);
-
-      expect(extracted).not.toBeNull();
-      expect(extracted!.identityPubKey).toEqual(identityPubKey);
-      expect(extracted!.signingPubKey).toEqual(signingPubKey);
-      expect(extracted!.ephemeralPubKey).toEqual(ephemeralPubKey);
-    });
-
-    it("should return null for invalid unified keys in response content", () => {
-      const invalidUnifiedKeys = new Uint8Array(30).fill(1); // Wrong size
-
-      const identityProof: IdentityProof = {
-        message: "Invalid test",
-        signature: "0x" + "6".repeat(130),
-      };
-
-      const content: HandshakeResponseContent = {
-        unifiedPubKeys: invalidUnifiedKeys,
-        ephemeralPubKey: new Uint8Array(32).fill(2),
-        note: "invalid test",
-        identityProof,
-      };
-
-      const extracted = extractKeysFromHandshakeResponse(content);
-      expect(extracted).toBeNull();
-    });
+  it("returns false when ExecutorSafeAddress mismatches input address", async () => {
+    const otherAddress = "0x" + "99".repeat(20);
+    const result = await verifyIdentityProof(
+      makeProof(),
+      otherAddress,       // doesn't match executorSafeAddress in the message
+      expectedKeys,
+      fakeProvider,
+    );
+    expect(result).toBe(false);
   });
 
-  describe("Handshake Key Parsing", () => {
-    it("should parse handshake keys from event correctly", () => {
-      const identityPubKey = new Uint8Array(32).fill(30);
-      const signingPubKey = new Uint8Array(32).fill(31);
-      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
-
-      const event = {
-        pubKeys: "0x" + Buffer.from(unifiedPubKeys).toString("hex"),
-      };
-
-      const parsed = parseHandshakeKeys(event);
-
-      expect(parsed).not.toBeNull();
-      expect(parsed!.identityPubKey).toEqual(identityPubKey);
-      expect(parsed!.signingPubKey).toEqual(signingPubKey);
-    });
-
-    it("should return null for invalid hex in pubKeys", () => {
-      const event = {
-        pubKeys: "0xinvalidhex",
-      };
-
-      const parsed = parseHandshakeKeys(event);
-      expect(parsed).toBeNull();
-    });
-
-    it("should return null for wrong size pubKeys", () => {
-      const shortKeys = new Uint8Array(30).fill(1); // Wrong size
-
-      const event = {
-        pubKeys: "0x" + Buffer.from(shortKeys).toString("hex"),
-      };
-
-      const parsed = parseHandshakeKeys(event);
-      expect(parsed).toBeNull();
-    });
-
-    it("should handle pubKeys with 0x prefix", () => {
-      const identityPubKey = new Uint8Array(32).fill(35);
-      const signingPubKey = new Uint8Array(32).fill(36);
-      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
-
-      const event = {
-        pubKeys: "0x" + Buffer.from(unifiedPubKeys).toString("hex"),
-      };
-
-      const parsed = parseHandshakeKeys(event);
-
-      expect(parsed).not.toBeNull();
-      expect(parsed!.identityPubKey).toEqual(identityPubKey);
-      expect(parsed!.signingPubKey).toEqual(signingPubKey);
-    });
+  it("returns false when PkX25519 mismatches expected key", async () => {
+    const wrongKeys = {
+      identityPubKey: new Uint8Array(32).fill(0xff), // mismatch
+      signingPubKey: pkEd25519,
+    };
+    const result = await verifyIdentityProof(
+      makeProof(),
+      TEST_SAFE_ADDRESS,
+      wrongKeys,
+      fakeProvider,
+    );
+    expect(result).toBe(false);
   });
 
-  describe("Error Handling", () => {
-    it("should throw error for malformed JSON in decryptStructuredPayload", () => {
-      const recipientKey = nacl.box.keyPair();
-      const malformedJson = "invalid json";
-
-      expect(() => {
-        decryptStructuredPayload(
-          malformedJson,
-          recipientKey.secretKey,
-          (obj) => obj as MessagePayload
-        );
-      }).toThrow();
-    });
-
-    it("should throw error for missing fields in payload", () => {
-      const recipientKey = nacl.box.keyPair();
-      const incompletePayload = JSON.stringify({
-        epk: Buffer.from(new Uint8Array(32)).toString("base64"),
-        // Missing nonce and ciphertext
-      });
-
-      expect(() => {
-        decryptStructuredPayload(
-          incompletePayload,
-          recipientKey.secretKey,
-          (obj) => obj as MessagePayload
-        );
-      }).toThrow();
-    });
-
-    it("should throw error for invalid base64 in payload fields", () => {
-      const recipientKey = nacl.box.keyPair();
-      const invalidPayload = JSON.stringify({
-        epk: "invalid-base64!",
-        n: "invalid-base64!",
-        ct: "invalid-base64!",
-      });
-
-      expect(() => {
-        decryptStructuredPayload(
-          invalidPayload,
-          recipientKey.secretKey,
-          (obj) => obj as MessagePayload
-        );
-      }).toThrow();
-    });
-
-    it("should throw error when converter function throws error", () => {
-      const senderBoxKey = nacl.box.keyPair();
-      const recipientKey = nacl.box.keyPair();
-
-      const messagePayload: MessagePayload = {
-        content: "Test message",
-        timestamp: Date.now(),
-        messageType: "text",
-      };
-
-      const encrypted = encryptStructuredPayload(
-        messagePayload,
-        recipientKey.publicKey,
-        senderBoxKey.secretKey,
-        senderBoxKey.publicKey
-      );
-
-      const throwingConverter = () => {
-        throw new Error("Converter error");
-      };
-
-      expect(() => {
-        decryptStructuredPayload(
-          encrypted,
-          recipientKey.secretKey,
-          throwingConverter
-        );
-      }).toThrow("Converter error");
-    });
-
-    it("should throw error for decryptHandshakeResponse with missing identityProof", () => {
-      const initiatorEphemeralKey = nacl.box.keyPair();
-      const responderEphemeralKey = nacl.box.keyPair();
-
-      // Create content without identityProof
-      const invalidContent = {
-        unifiedPubKeys: encodeUnifiedPubKeys(
-          new Uint8Array(32).fill(40),
-          new Uint8Array(32).fill(41)
-        ),
-        ephemeralPubKey: new Uint8Array(32).fill(42),
-        note: "missing proof",
-        // No identityProof
-      };
-
-      const encrypted = encryptStructuredPayload(
-        invalidContent,
-        initiatorEphemeralKey.publicKey,
-        responderEphemeralKey.secretKey,
-        responderEphemeralKey.publicKey
-      );
-
-      expect(() => {
-        decryptHandshakeResponse(encrypted, initiatorEphemeralKey.secretKey);
-      }).toThrow("Invalid handshake response: missing identityProof");
-    });
+  it("returns false when PkEd25519 mismatches expected key", async () => {
+    const wrongKeys = {
+      identityPubKey: pkX25519,
+      signingPubKey: new Uint8Array(32).fill(0xff), // mismatch
+    };
+    const result = await verifyIdentityProof(
+      makeProof(),
+      TEST_SAFE_ADDRESS,
+      wrongKeys,
+      fakeProvider,
+    );
+    expect(result).toBe(false);
   });
 
+  it("returns false when ChainId mismatches context", async () => {
+    const ctx: IdentityContext = { chainId: 8453 };
+    const result = await verifyIdentityProof(
+      makeProof({ chainId: 1 }),  // message says chainId=1
+      TEST_SAFE_ADDRESS,
+      expectedKeys,
+      fakeProvider,
+      ctx,                        // expects 8453
+    );
+    expect(result).toBe(false);
+  });
+
+  it("returns false when RpId mismatches context", async () => {
+    const ctx: IdentityContext = { rpId: "example.com" };
+    const result = await verifyIdentityProof(
+      makeProof({ rpId: "evil.com" }),
+      TEST_SAFE_ADDRESS,
+      expectedKeys,
+      fakeProvider,
+      ctx,
+    );
+    expect(result).toBe(false);
+  });
+
+  it("returns false for wrong header", async () => {
+    const result = await verifyIdentityProof(
+      makeProof({ header: "Wrong Header v999" }),
+      TEST_SAFE_ADDRESS,
+      expectedKeys,
+      fakeProvider,
+    );
+    expect(result).toBe(false);
+  });
 });

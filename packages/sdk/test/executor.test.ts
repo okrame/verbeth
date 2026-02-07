@@ -10,8 +10,9 @@ import {
   respondToHandshake,
 } from "../src/index.js";
 import type { VerbethV1 } from "@verbeth/contracts/typechain-types";
-import { IdentityKeyPair, IdentityProof } from "../src/types.js";
+import { IdentityKeyPair } from "../src/types.js";
 import { kem } from "../src/pq/kem.js";
+import { createMockIdentityProof } from "./helpers.js";
 
 const TEST_SMART_ACCOUNT_ADDRESS = "0x" + "12".repeat(20);
 const TEST_ENTRYPOINT_ADDRESS = "0x" + "45".repeat(20);
@@ -66,10 +67,9 @@ const testIdentityKeyPair: IdentityKeyPair = {
   signingPublicKey: new Uint8Array(32).fill(3),
   signingSecretKey: new Uint8Array(32).fill(4),
 };
-const testIdentityProof: IdentityProof = {
+const testIdentityProof = createMockIdentityProof({
   message: "Test identity proof",
-  signature: "0x" + "1".repeat(130),
-};
+});
 
 describe("ExecutorFactory", () => {
   it("creates EOA executor correctly", () => {

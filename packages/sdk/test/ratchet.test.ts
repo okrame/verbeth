@@ -12,6 +12,7 @@ import {
   matchesSessionTopic,
   type RatchetSession,
 } from '../src/ratchet/index.js';
+import { createEphemeralPair, createSigningKeyPair, TOPIC_A, TOPIC_B } from './helpers.js';
 
 describe('deriveTopic (PQ-secure)', () => {
   it('derives deterministic topic from rootKey + dhOutput', () => {
@@ -63,12 +64,12 @@ describe('deriveTopic (PQ-secure)', () => {
 describe('initSessionAsResponder - topic ratcheting', () => {
   let responderEphemeral: { secretKey: Uint8Array; publicKey: Uint8Array };
   let initiatorEphemeral: { secretKey: Uint8Array; publicKey: Uint8Array };
-  const topicOutbound = '0x' + '1'.repeat(64) as `0x${string}`;
-  const topicInbound = '0x' + '2'.repeat(64) as `0x${string}`;
+  const topicOutbound = TOPIC_A;
+  const topicInbound = TOPIC_B;
 
   beforeEach(() => {
-    responderEphemeral = nacl.box.keyPair();
-    initiatorEphemeral = nacl.box.keyPair();
+    responderEphemeral = createEphemeralPair();
+    initiatorEphemeral = createEphemeralPair();
   });
 
   it('initializes at epoch 0 with handshake-derived topics', () => {
@@ -109,12 +110,12 @@ describe('initSessionAsResponder - topic ratcheting', () => {
 describe('initSessionAsInitiator - topic ratcheting', () => {
   let responderEphemeral: { secretKey: Uint8Array; publicKey: Uint8Array };
   let initiatorEphemeral: { secretKey: Uint8Array; publicKey: Uint8Array };
-  const topicOutbound = '0x' + '1'.repeat(64) as `0x${string}`;
-  const topicInbound = '0x' + '2'.repeat(64) as `0x${string}`;
+  const topicOutbound = TOPIC_A;
+  const topicInbound = TOPIC_B;
 
   beforeEach(() => {
-    responderEphemeral = nacl.box.keyPair();
-    initiatorEphemeral = nacl.box.keyPair();
+    responderEphemeral = createEphemeralPair();
+    initiatorEphemeral = createEphemeralPair();
   });
 
   it('initializes at epoch 0 with handshake topics as current, pre-computes next topics', () => {
@@ -159,16 +160,16 @@ describe('matchesSessionTopic', () => {
   let session: RatchetSession;
 
   beforeEach(() => {
-    const responderEphemeral = nacl.box.keyPair();
-    const initiatorEphemeral = nacl.box.keyPair();
+    const responderEphemeral = createEphemeralPair();
+    const initiatorEphemeral = createEphemeralPair();
 
     session = initSessionAsInitiator({
       myAddress: '0xInitiator',
       contactAddress: '0xResponder',
       myHandshakeEphemeralSecret: initiatorEphemeral.secretKey,
       theirResponderEphemeralPubKey: responderEphemeral.publicKey,
-      topicOutbound: '0x' + '1'.repeat(64) as `0x${string}`,
-      topicInbound: '0x' + '2'.repeat(64) as `0x${string}`,
+      topicOutbound: TOPIC_A,
+      topicInbound: TOPIC_B,
     });
   });
 
@@ -195,17 +196,17 @@ describe('ratchetEncrypt - topic in result', () => {
   let signingKeyPair: nacl.SignKeyPair;
 
   beforeEach(() => {
-    const responderEphemeral = nacl.box.keyPair();
-    const initiatorEphemeral = nacl.box.keyPair();
-    signingKeyPair = nacl.sign.keyPair();
+    const responderEphemeral = createEphemeralPair();
+    const initiatorEphemeral = createEphemeralPair();
+    signingKeyPair = createSigningKeyPair();
 
     session = initSessionAsInitiator({
       myAddress: '0xInitiator',
       contactAddress: '0xResponder',
       myHandshakeEphemeralSecret: initiatorEphemeral.secretKey,
       theirResponderEphemeralPubKey: responderEphemeral.publicKey,
-      topicOutbound: '0x' + '1'.repeat(64) as `0x${string}`,
-      topicInbound: '0x' + '2'.repeat(64) as `0x${string}`,
+      topicOutbound: TOPIC_A,
+      topicInbound: TOPIC_B,
     });
   });
 
@@ -218,8 +219,8 @@ describe('ratchetEncrypt - topic in result', () => {
   });
 
   it('returns handshake topic for responder at epoch 0', () => {
-    const responderEphemeral = nacl.box.keyPair();
-    const initiatorEphemeral = nacl.box.keyPair();
+    const responderEphemeral = createEphemeralPair();
+    const initiatorEphemeral = createEphemeralPair();
     const topicOutbound = '0x' + '3'.repeat(64) as `0x${string}`;
 
     const responderSession = initSessionAsResponder({
@@ -248,10 +249,10 @@ describe('DH ratchet step - topic rotation', () => {
 
   beforeEach(() => {
     // Simulate handshake
-    const aliceEphemeral = nacl.box.keyPair();
-    const bobEphemeral = nacl.box.keyPair();
-    aliceSigningKeyPair = nacl.sign.keyPair();
-    bobSigningKeyPair = nacl.sign.keyPair();
+    const aliceEphemeral = createEphemeralPair();
+    const bobEphemeral = createEphemeralPair();
+    aliceSigningKeyPair = createSigningKeyPair();
+    bobSigningKeyPair = createSigningKeyPair();
 
     const topicAliceToBob = '0x' + 'a'.repeat(64) as `0x${string}`;
     const topicBobToAlice = '0x' + 'b'.repeat(64) as `0x${string}`;
@@ -368,17 +369,17 @@ describe('DH ratchet step - topic rotation', () => {
 
 describe('topic continuity', () => {
   it('multiple messages in same direction use same topic', () => {
-    const responderEphemeral = nacl.box.keyPair();
-    const initiatorEphemeral = nacl.box.keyPair();
-    const signingKeyPair = nacl.sign.keyPair();
+    const responderEphemeral = createEphemeralPair();
+    const initiatorEphemeral = createEphemeralPair();
+    const signingKeyPair = createSigningKeyPair();
 
     let session = initSessionAsInitiator({
       myAddress: '0xAlice',
       contactAddress: '0xBob',
       myHandshakeEphemeralSecret: initiatorEphemeral.secretKey,
       theirResponderEphemeralPubKey: responderEphemeral.publicKey,
-      topicOutbound: '0x' + '1'.repeat(64) as `0x${string}`,
-      topicInbound: '0x' + '2'.repeat(64) as `0x${string}`,
+      topicOutbound: TOPIC_A,
+      topicInbound: TOPIC_B,
     });
 
     const topics: string[] = [];

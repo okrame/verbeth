@@ -22,7 +22,7 @@ interface MessagePayload {
   messageType?: 'text' | 'file' | 'media';
   metadata?: Record<string, any>;
 }
-import { IdentityProof } from "../src/types.js";
+import { createMockIdentityProof } from "./helpers.js";
 
 describe("Encryption/Decryption", () => {
   describe("Structured Payload Encryption", () => {
@@ -122,10 +122,7 @@ describe("Encryption/Decryption", () => {
       const ephemeralPubKey = new Uint8Array(32).fill(4);
       const note = "here is my response";
 
-      const identityProof: IdentityProof = {
-        message: "VerbEth Identity Key Identity v1\nAddress: 0x1234...",
-        signature: "0x" + "1".repeat(130),
-      };
+      const identityProof = createMockIdentityProof();
 
       const responseContent: HandshakeResponseContent = {
         unifiedPubKeys,
@@ -163,10 +160,10 @@ describe("Encryption/Decryption", () => {
 
       const ephemeralPubKey = new Uint8Array(32).fill(6);
 
-      const identityProof: IdentityProof = {
+      const identityProof = createMockIdentityProof({
         message: "VerbEth Identity Key identity v1\nAddress: 0xabcd...",
         signature: "0x" + "2".repeat(130),
-      };
+      });
 
       const responseContent: HandshakeResponseContent = {
         unifiedPubKeys,
@@ -203,10 +200,10 @@ describe("Encryption/Decryption", () => {
       const ephemeralPubKey = new Uint8Array(32).fill(12);
       const note = "convenience function test";
 
-      const identityProof: IdentityProof = {
+      const identityProof = createMockIdentityProof({
         message: "VerbEth Identity Key Identity v1\nAddress: 0xtest...",
         signature: "0x" + "3".repeat(130),
-      };
+      });
 
       const responseContent: HandshakeResponseContent = {
         unifiedPubKeys,
@@ -263,10 +260,10 @@ describe("Encryption/Decryption", () => {
       const signingPubKey = new Uint8Array(32).fill(14);
       const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
 
-      const identityProof: IdentityProof = {
+      const identityProof = createMockIdentityProof({
         message: "Wrong key test",
         signature: "0x" + "4".repeat(130),
-      };
+      });
 
       const responseContent: HandshakeResponseContent = {
         unifiedPubKeys,
@@ -298,10 +295,10 @@ describe("Encryption/Decryption", () => {
       const ephemeralPubKey = new Uint8Array(32).fill(27);
       const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
 
-      const identityProof: IdentityProof = {
+      const identityProof = createMockIdentityProof({
         message: "Extract test",
         signature: "0x" + "5".repeat(130),
-      };
+      });
 
       const content: HandshakeResponseContent = {
         unifiedPubKeys,
@@ -321,10 +318,10 @@ describe("Encryption/Decryption", () => {
     it("should return null for invalid unified keys in response content", () => {
       const invalidUnifiedKeys = new Uint8Array(30).fill(1); // Wrong size
 
-      const identityProof: IdentityProof = {
+      const identityProof = createMockIdentityProof({
         message: "Invalid test",
         signature: "0x" + "6".repeat(130),
-      };
+      });
 
       const content: HandshakeResponseContent = {
         unifiedPubKeys: invalidUnifiedKeys,

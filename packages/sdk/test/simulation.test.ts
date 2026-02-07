@@ -8,104 +8,13 @@
 import { describe, it, expect } from "vitest";
 import nacl from "tweetnacl";
 import {
-  initSessionAsResponder,
-  initSessionAsInitiator,
   ratchetEncrypt,
   ratchetDecrypt,
   pruneExpiredSkippedKeys,
-  hexToBytes,
-  bytesToHex,
-  generateDHKeyPair,
   RatchetSession,
   MAX_STORED_SKIPPED_KEYS,
 } from "../src/ratchet/index.js";
-
-function createTestTopics(): { topicOut: `0x${string}`; topicIn: `0x${string}` } {
-  const randomBytes = nacl.randomBytes(32);
-  const topicOut = bytesToHex(randomBytes) as `0x${string}`;
-  const topicIn = bytesToHex(nacl.randomBytes(32)) as `0x${string}`;
-  return { topicOut, topicIn };
-}
-
-function createSigningKeyPair() {
-  return nacl.sign.keyPair();
-}
-
-function createSessionPair(): {
-  aliceSession: RatchetSession;
-  bobSession: RatchetSession;
-  aliceSigning: nacl.SignKeyPair;
-  bobSigning: nacl.SignKeyPair;
-} {
-  const aliceEphemeral = generateDHKeyPair();
-  const bobEphemeral = generateDHKeyPair();
-  const topics = createTestTopics();
-
-  const bobSession = initSessionAsResponder({
-    myAddress: "0xBob",
-    contactAddress: "0xAlice",
-    myResponderEphemeralSecret: bobEphemeral.secretKey,
-    myResponderEphemeralPublic: bobEphemeral.publicKey,
-    theirHandshakeEphemeralPubKey: aliceEphemeral.publicKey,
-    topicOutbound: topics.topicIn,
-    topicInbound: topics.topicOut,
-  });
-
-  const aliceSession = initSessionAsInitiator({
-    myAddress: "0xAlice",
-    contactAddress: "0xBob",
-    myHandshakeEphemeralSecret: aliceEphemeral.secretKey,
-    theirResponderEphemeralPubKey: bobEphemeral.publicKey,
-    topicOutbound: topics.topicOut,
-    topicInbound: topics.topicIn,
-  });
-
-  return {
-    aliceSession,
-    bobSession,
-    aliceSigning: createSigningKeyPair(),
-    bobSigning: createSigningKeyPair(),
-  };
-}
-
-/**
- * Simulate serialization round-trip (as would happen with IndexedDB storage)
- */
-function simulateDbRoundTrip(session: RatchetSession): RatchetSession {
-  // Convert Uint8Arrays to hex (as StoredRatchetSession does)
-  const serialized = {
-    ...session,
-    rootKey: bytesToHex(session.rootKey),
-    dhMySecretKey: bytesToHex(session.dhMySecretKey),
-    dhMyPublicKey: bytesToHex(session.dhMyPublicKey),
-    dhTheirPublicKey: bytesToHex(session.dhTheirPublicKey),
-    sendingChainKey: session.sendingChainKey ? bytesToHex(session.sendingChainKey) : null,
-    receivingChainKey: session.receivingChainKey ? bytesToHex(session.receivingChainKey) : null,
-    skippedKeys: session.skippedKeys.map(sk => ({
-      ...sk,
-      messageKey: bytesToHex(sk.messageKey),
-    })),
-  };
-
-  // Simulate JSON serialization (what actually happens in storage)
-  const json = JSON.stringify(serialized);
-  const parsed = JSON.parse(json);
-
-  // Convert back to Uint8Arrays (as deserializeRatchetSession does)
-  return {
-    ...parsed,
-    rootKey: hexToBytes(parsed.rootKey),
-    dhMySecretKey: hexToBytes(parsed.dhMySecretKey),
-    dhMyPublicKey: hexToBytes(parsed.dhMyPublicKey),
-    dhTheirPublicKey: hexToBytes(parsed.dhTheirPublicKey),
-    sendingChainKey: parsed.sendingChainKey ? hexToBytes(parsed.sendingChainKey) : null,
-    receivingChainKey: parsed.receivingChainKey ? hexToBytes(parsed.receivingChainKey) : null,
-    skippedKeys: parsed.skippedKeys.map((sk: any) => ({
-      ...sk,
-      messageKey: hexToBytes(sk.messageKey),
-    })),
-  };
-}
+import { createSessionPair, simulateDbRoundTrip } from "./helpers.js";
 
 describe("App Layer Simulation", () => {
   describe("Burned Slots from Failed Sends", () => {

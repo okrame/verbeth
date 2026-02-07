@@ -11,6 +11,7 @@ import {
   ratchetEncrypt,
   ratchetDecrypt,
 } from '../src/ratchet/index.js';
+import { createEphemeralPair, createSigningKeyPair } from './helpers.js';
 
 describe('kem', () => {
   it('generates keypair with correct sizes', () => {
@@ -111,8 +112,8 @@ describe('PQ-hybrid session initialization', () => {
   const topicBobToAlice = '0x' + 'b'.repeat(64) as `0x${string}`;
 
   beforeEach(() => {
-    aliceEphemeral = nacl.box.keyPair();
-    bobEphemeral = nacl.box.keyPair();
+    aliceEphemeral = createEphemeralPair();
+    bobEphemeral = createEphemeralPair();
     kemKeyPair = kem.generateKeyPair();
 
     // Bob encapsulates to Alice's KEM public key
@@ -147,7 +148,7 @@ describe('PQ-hybrid session initialization', () => {
     });
 
     // Root keys should allow message exchange
-    const signingKeyPair = nacl.sign.keyPair();
+    const signingKeyPair = createSigningKeyPair();
 
     // Alice encrypts
     const plaintext = new TextEncoder().encode('Hello Bob with PQ security!');
@@ -214,7 +215,7 @@ describe('PQ-hybrid session initialization', () => {
       kemSecret: wrongKemSecret,
     });
 
-    const signingKeyPair = nacl.sign.keyPair();
+    const signingKeyPair = createSigningKeyPair();
     const plaintext = new TextEncoder().encode('This should fail');
     const encryptResult = ratchetEncrypt(aliceSession, plaintext, signingKeyPair.secretKey);
 
@@ -226,8 +227,8 @@ describe('PQ-hybrid session initialization', () => {
 
 describe('backward compatibility', () => {
   it('sessions without kemSecret still work', () => {
-    const aliceEphemeral = nacl.box.keyPair();
-    const bobEphemeral = nacl.box.keyPair();
+    const aliceEphemeral = createEphemeralPair();
+    const bobEphemeral = createEphemeralPair();
 
     const topicAliceToBob = '0x' + 'a'.repeat(64) as `0x${string}`;
     const topicBobToAlice = '0x' + 'b'.repeat(64) as `0x${string}`;
@@ -252,7 +253,7 @@ describe('backward compatibility', () => {
       topicInbound: topicBobToAlice,
     });
 
-    const signingKeyPair = nacl.sign.keyPair();
+    const signingKeyPair = createSigningKeyPair();
     const plaintext = new TextEncoder().encode('Classic X25519 only');
     const encryptResult = ratchetEncrypt(aliceSession, plaintext, signingKeyPair.secretKey);
 
