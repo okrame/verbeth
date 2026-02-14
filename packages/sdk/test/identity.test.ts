@@ -62,7 +62,7 @@ describe("identity", () => {
       expect(parsed.header).toBe("VerbEth Key Binding v1");
       expect(parsed.pkX25519).toBe(derived.pkX25519Hex);
       expect(parsed.pkEd25519).toBe(derived.pkEd25519Hex);
-      expect(parsed.executorSafeAddress?.toLowerCase()).toBe(safeAddr.toLowerCase());
+      expect(parsed.executorAddress?.toLowerCase()).toBe(safeAddr.toLowerCase());
     });
 
     it("includes chainId and rpId when context is provided", async () => {

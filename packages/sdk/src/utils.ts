@@ -21,7 +21,7 @@ export function parseBindingMessage(message: string): {
   address?: string;
   pkEd25519?: `0x${string}`;
   pkX25519?: `0x${string}`;
-  executorSafeAddress?: string;
+  executorAddress?: string;
   context?: string;
   version?: string;
   chainId?: number;
@@ -45,8 +45,8 @@ export function parseBindingMessage(message: string): {
     if (key === "pkx25519") {
       out.pkX25519 = hexlify(val) as `0x${string}`;
     }
-    if (key === "executorsafeaddress" || key === "executorsafe") {
-      if (val) out.executorSafeAddress = getAddress(val);
+    if (key === "executoraddress" || key === "executorsafe") {
+      if (val) out.executorAddress = getAddress(val);
     }
     if (key === "context") out.context = val;
     if (key === "version") out.version = val;

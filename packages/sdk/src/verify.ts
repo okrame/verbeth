@@ -159,8 +159,8 @@ export async function verifyIdentityProof(
     }
 
     if (
-      !parsed.executorSafeAddress ||
-      getAddress(parsed.executorSafeAddress) !== getAddress(inputAddress)
+      !parsed.executorAddress ||
+      getAddress(parsed.executorAddress) !== getAddress(inputAddress)
     ) {
       console.error("Binding message Safe address mismatch");
       return false;

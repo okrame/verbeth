@@ -28,7 +28,7 @@ const pkEd25519 = new Uint8Array(32).fill(0x11);
 function buildMessage(overrides?: {
   header?: string;
   address?: string;
-  executorSafeAddress?: string;
+  executorAddress?: string;
   pkEd25519Hex?: string;
   pkX25519Hex?: string;
   chainId?: number;
@@ -37,7 +37,7 @@ function buildMessage(overrides?: {
   const o = {
     header: "VerbEth Key Binding v1",
     address: TEST_ADDRESS,
-    executorSafeAddress: TEST_SAFE_ADDRESS,
+    executorAddress: TEST_SAFE_ADDRESS,
     pkEd25519Hex: hexlify(pkEd25519),
     pkX25519Hex: hexlify(pkX25519),
     ...overrides,
@@ -47,7 +47,7 @@ function buildMessage(overrides?: {
     `Address: ${o.address}`,
     `PkEd25519: ${o.pkEd25519Hex}`,
     `PkX25519: ${o.pkX25519Hex}`,
-    `ExecutorSafeAddress: ${o.executorSafeAddress}`,
+    `executorAddress: ${o.executorAddress}`,
   ];
   if (o.chainId !== undefined) lines.push(`ChainId: ${o.chainId}`);
   if (o.rpId !== undefined) lines.push(`RpId: ${o.rpId}`);
@@ -104,11 +104,11 @@ describe("verifyIdentityProof", () => {
     expect(result).toBe(false);
   });
 
-  it("returns false when ExecutorSafeAddress mismatches input address", async () => {
+  it("returns false when executorAddress mismatches input address", async () => {
     const otherAddress = "0x" + "99".repeat(20);
     const result = await verifyIdentityProof(
       makeProof(),
-      otherAddress,       // doesn't match executorSafeAddress in the message
+      otherAddress,       // doesn't match executorAddress in the message
       expectedKeys,
       fakeProvider,
     );

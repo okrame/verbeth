@@ -61,7 +61,7 @@ function buildBindingMessage(
   addrLower: string,
   pkEd25519Hex: string,
   pkX25519Hex: string,
-  executorSafeAddress?: string,
+  executorAddress?: string,
   ctx?: IdentityContext
 ): string {
   const lines = [
@@ -69,7 +69,7 @@ function buildBindingMessage(
     `Address: ${addrLower}`,
     `PkEd25519: ${pkEd25519Hex}`,
     `PkX25519: ${pkX25519Hex}`,
-    `ExecutorSafeAddress: ${executorSafeAddress ?? ""}`,
+    `ExecutorAddress: ${executorAddress ?? ""}`,
   ];
   if (typeof ctx?.chainId === "number") lines.push(`ChainId: ${ctx.chainId}`);
   if (ctx?.rpId) lines.push(`RpId: ${ctx.rpId}`);
@@ -177,17 +177,17 @@ export async function createBindingProof(
   signer: any,
   address: string,
   derivedKeys: DerivedIdentityKeys,
-  executorSafeAddress: string,
+  executorAddress: string,
   ctx?: IdentityContext
 ): Promise<IdentityProof> {
   const addrLower = address.toLowerCase();
-  const executorSafeAddressLower = executorSafeAddress.toLowerCase();
+  const executorAddressLower = executorAddress.toLowerCase();
 
   const message = buildBindingMessage(
     addrLower,
     derivedKeys.pkEd25519Hex,
     derivedKeys.pkX25519Hex,
-    executorSafeAddressLower,
+    executorAddressLower,
     ctx
   );
 
@@ -208,7 +208,7 @@ export async function createBindingProof(
 export async function deriveIdentityKeyPairWithProof(
   signer: any,
   address: string,
-  executorSafeAddress?: string,
+  executorAddress?: string,
   ctx?: IdentityContext
 ): Promise<DerivedIdentityWithProof> {
   const derivedKeys = await deriveIdentityKeys(signer, address);
@@ -216,7 +216,7 @@ export async function deriveIdentityKeyPairWithProof(
     signer,
     address,
     derivedKeys,
-    executorSafeAddress ?? "",
+    executorAddress ?? "",
     ctx
   );
 
@@ -229,7 +229,7 @@ export async function deriveIdentityKeyPairWithProof(
 export async function deriveIdentityWithUnifiedKeys(
   signer: Signer,
   address: string,
-  executorSafeAddress?: string,
+  executorAddress?: string,
   ctx?: IdentityContext
 ): Promise<{
   identityProof: IdentityProof;
@@ -242,7 +242,7 @@ export async function deriveIdentityWithUnifiedKeys(
   const result = await deriveIdentityKeyPairWithProof(
     signer,
     address,
-    executorSafeAddress,
+    executorAddress,
     ctx
   );
 
