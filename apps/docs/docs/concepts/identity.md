@@ -66,7 +66,7 @@ VerbEth Key Binding v1
 Address: 0xabc...
 PkEd25519: 0x123...
 PkX25519: 0x456...
-ExecutorSafeAddress: 0xdef...
+ExecutorAddres: 0xdef...
 ChainId: 8453
 ```
 
@@ -83,7 +83,7 @@ This message is signed by the wallet, creating proof that:
 | `Address` | Signer's Ethereum address |
 | `PkEd25519` | Ed25519 signing public key |
 | `PkX25519` | X25519 encryption public key |
-| `ExecutorSafeAddress` | Safe address that will send transactions |
+| `ExecutorAddres` | Safe address that will send transactions |
 | `ChainId` | Chain ID for replay protection |
 
 ## Verification Standards
@@ -121,7 +121,7 @@ Verification simulates deployment, then calls ERC-1271.
 
 ## Safe Account Integration
 
-When using a Safe account, the binding proof includes `ExecutorSafeAddress`:
+When using a Safe account, the binding proof includes `ExecutorAddres`:
 
 ```typescript
 const { keyPair, sessionPrivateKey, sessionAddress } =
@@ -131,7 +131,7 @@ const identityProof = await createBindingProof(
   signer,
   address,
   derivedKeys,
-  safeAddress  // ExecutorSafeAddress field
+  safeAddress  // ExecutorAddres field
 );
 ```
 
@@ -153,7 +153,7 @@ When receiving a handshake or message:
    - Smart Account: ERC-1271
    - Counterfactual: ERC-6492
 4. Compare extracted keys against message/handshake keys
-5. Validate ExecutorSafeAddress matches msg.sender
+5. Validate ExecutorAddres matches msg.sender
 6. Check ChainId matches current chain
 ```
 
@@ -165,5 +165,5 @@ If any step fails, the message is rejected.
 |----------|-----------|
 | **Key binding** | Keys are provably controlled by address owner |
 | **Replay protection** | ChainId prevents cross-chain replay |
-| **Executor binding** | ExecutorSafeAddress prevents unauthorized senders |
+| **Executor binding** | ExecutorAddres prevents unauthorized senders |
 | **Determinism** | Same inputs produce same keys (recovery) |

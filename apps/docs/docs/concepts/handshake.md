@@ -159,7 +159,7 @@ Handshake transactions can be sent via:
 - **EOA**: Direct wallet transaction
 - **Safe Module**: Session key authorized by Safe
 
-The identity proof's `ExecutorSafeAddress` field specifies which address will send the transaction, enabling verification regardless of executor type.
+The identity proof's `ExecutorAddres` field specifies which address will send the transaction, enabling verification regardless of executor type.
 
 ## Security Properties
 
