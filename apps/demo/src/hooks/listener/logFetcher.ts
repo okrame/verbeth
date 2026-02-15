@@ -3,11 +3,18 @@ import { splitRangeOnProviderLimit } from "./scanPlanner.js";
 
 type RpcFilter = Record<string, unknown>;
 
+export type FetcherTelemetryEvent =
+  | { type: "rate_limit"; attempt: number }
+  | { type: "retry"; attempt: number; error: string }
+  | { type: "range_split"; from: number; to: number }
+  | { type: "success"; from: number; to: number; logCount: number };
+
 interface LogFetcherConfig {
   provider: any;
   maxRetries: number;
   maxRangeProvider: number;
   baseDelayMs?: number;
+  onTelemetry?: (event: FetcherTelemetryEvent) => void;
 }
 
 function toMessage(error: unknown): string {
@@ -53,6 +60,7 @@ export function createLogFetcher(config: LogFetcherConfig) {
     maxRetries,
     maxRangeProvider,
     baseDelayMs = 900,
+    onTelemetry,
   } = config;
 
   async function getLogsForRange(
@@ -76,11 +84,13 @@ export function createLogFetcher(config: LogFetcherConfig) {
     }
 
     try {
-      return await provider.getLogs({
+      const logs = await provider.getLogs({
         ...filter,
         fromBlock: range.fromBlock,
         toBlock: range.toBlock,
       });
+      onTelemetry?.({ type: "success", from: range.fromBlock, to: range.toBlock, logCount: logs.length });
+      return logs;
     } catch (error) {
       if (isRangeError(error) && range.fromBlock < range.toBlock) {
         const [left, right] = splitRangeOnProviderLimit(
@@ -89,6 +99,7 @@ export function createLogFetcher(config: LogFetcherConfig) {
           Math.floor((range.toBlock - range.fromBlock) / 2)
         );
         if (left && right) {
+          onTelemetry?.({ type: "range_split", from: range.fromBlock, to: range.toBlock });
           const leftLogs = await getLogsForRange(filter, left, 0);
           const rightLogs = await getLogsForRange(filter, right, 0);
           return [...leftLogs, ...rightLogs];
@@ -96,11 +107,13 @@ export function createLogFetcher(config: LogFetcherConfig) {
       }
 
       if (isRateLimitError(error) && attempt < maxRetries) {
+        onTelemetry?.({ type: "rate_limit", attempt });
         const wait = backoffMs(baseDelayMs, attempt);
         await sleep(wait);
         return getLogsForRange(filter, range, attempt + 1);
       }
 
+      onTelemetry?.({ type: "retry", attempt, error: toMessage(error) });
       throw error;
     }
   }

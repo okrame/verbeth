@@ -11,10 +11,12 @@ import {
   ProcessedEvent,
   MessageListenerResult,
   ListenerSyncStatus,
+  ListenerHealthStatus,
   PendingRange,
 } from "../types.js";
 import { collectEventsForRange } from "./listener/eventQuerySpecs.js";
 import { createLogFetcher } from "./listener/logFetcher.js";
+import type { FetcherTelemetryEvent } from "./listener/logFetcher.js";
 import { clampCursorToTip, planRanges } from "./listener/scanPlanner.js";
 import {
   dequeueRetryableRanges,
@@ -23,6 +25,8 @@ import {
   saveSyncState,
   toSyncStatus,
 } from "./listener/syncStateStore.js";
+import { evaluateHealth, pruneWindow, OK_HEALTH } from "./listener/healthScore.js";
+import type { HealthMetrics } from "./listener/healthScore.js";
 
 interface UseMessageListenerProps {
   readProvider: any;
@@ -61,6 +65,7 @@ export const useMessageListener = ({
   const [syncStatus, setSyncStatus] = useState<ListenerSyncStatus>(IDLE_SYNC_STATUS);
   const [lastKnownBlock, setLastKnownBlock] = useState<number | null>(null);
   const [oldestScannedBlock, setOldestScannedBlock] = useState<number | null>(null);
+  const [health, setHealth] = useState<ListenerHealthStatus>(OK_HEALTH);
 
   const lastKnownBlockRef = useRef<number | null>(null);
   const onEventsProcessedRef = useRef(onEventsProcessed);
@@ -68,7 +73,36 @@ export const useMessageListener = ({
   const isBackfillWorkerRunningRef = useRef(false);
   const hasBootstrappedRef = useRef(false);
 
+  // Health metric refs
+  const rateLimitTimestampsRef = useRef<number[]>([]);
+  const wsErrorTimestampsRef = useRef<number[]>([]);
+  const tipLagStateRef = useRef<{ blocks: number; since: number | null }>({ blocks: 0, since: null });
+  const pendingRangeStateRef = useRef<{ count: number; since: number | null }>({ count: 0, since: null });
+
   onEventsProcessedRef.current = onEventsProcessed;
+
+  const recomputeHealth = useCallback(() => {
+    rateLimitTimestampsRef.current = pruneWindow(rateLimitTimestampsRef.current, 60_000);
+    wsErrorTimestampsRef.current = pruneWindow(wsErrorTimestampsRef.current, 60_000);
+
+    const metrics: HealthMetrics = {
+      rateLimitEvents: rateLimitTimestampsRef.current,
+      wsErrors: wsErrorTimestampsRef.current,
+      pendingRanges: pendingRangeStateRef.current.count,
+      pendingRangesSince: pendingRangeStateRef.current.since,
+      tipLagBlocks: tipLagStateRef.current.blocks,
+      tipLagSince: tipLagStateRef.current.since,
+      syncMode: syncStatus.mode,
+    };
+    setHealth(evaluateHealth(metrics));
+  }, [syncStatus.mode]);
+
+  const handleTelemetry = useCallback((event: FetcherTelemetryEvent) => {
+    if (event.type === "rate_limit") {
+      rateLimitTimestampsRef.current.push(Date.now());
+      recomputeHealth();
+    }
+  }, [recomputeHealth]);
 
   const logFetcher = useMemo(() => {
     if (!readProvider) return null;
@@ -76,8 +110,9 @@ export const useMessageListener = ({
       provider: readProvider,
       maxRetries: MAX_RETRIES,
       maxRangeProvider: MAX_RANGE_PROVIDER,
+      onTelemetry: handleTelemetry,
     });
-  }, [readProvider]);
+  }, [readProvider, handleTelemetry]);
 
   const refreshSyncStatus = useCallback(async () => {
     if (!address) {
@@ -85,7 +120,18 @@ export const useMessageListener = ({
       return;
     }
     const state = await loadSyncState(address);
-    setSyncStatus(toSyncStatus(state));
+    const status = toSyncStatus(state);
+    setSyncStatus(status);
+
+    const prevCount = pendingRangeStateRef.current.count;
+    const newCount = status.pendingRanges;
+    if (newCount > 0 && prevCount === 0) {
+      pendingRangeStateRef.current = { count: newCount, since: Date.now() };
+    } else if (newCount === 0) {
+      pendingRangeStateRef.current = { count: 0, since: null };
+    } else {
+      pendingRangeStateRef.current = { ...pendingRangeStateRef.current, count: newCount };
+    }
   }, [address]);
 
   const getCurrentContacts = useCallback(async (): Promise<Contact[]> => {
@@ -420,6 +466,19 @@ export const useMessageListener = ({
       try {
         const readTip = Number(await readProvider.getBlockNumber());
         const maxSafeBlock = Math.min(blockNumber, readTip) - REAL_TIME_BUFFER;
+
+        // Track tip lag for health scoring
+        const lag = blockNumber - readTip;
+        if (lag >= 1) {
+          if (tipLagStateRef.current.since === null) {
+            tipLagStateRef.current = { blocks: lag, since: Date.now() };
+          } else {
+            tipLagStateRef.current = { ...tipLagStateRef.current, blocks: lag };
+          }
+        } else {
+          tipLagStateRef.current = { blocks: 0, since: null };
+        }
+
         if (maxSafeBlock <= currentLastKnown) return;
 
         await processRange(currentLastKnown + 1, maxSafeBlock);
@@ -431,6 +490,7 @@ export const useMessageListener = ({
         console.error("[verbeth] real-time scan error:", error);
       } finally {
         isRealtimeScanRunningRef.current = false;
+        recomputeHealth();
       }
     };
 
@@ -438,6 +498,10 @@ export const useMessageListener = ({
       const unwatch = viemClient.watchBlockNumber({
         onBlockNumber: (blockNumber: bigint) => {
           void handleNewBlock(Number(blockNumber));
+        },
+        onError: () => {
+          wsErrorTimestampsRef.current.push(Date.now());
+          recomputeHealth();
         },
         emitOnBegin: false,
         pollingInterval: 4_000,
@@ -455,7 +519,7 @@ export const useMessageListener = ({
     }, 5_000);
 
     return () => clearInterval(interval);
-  }, [address, processRange, readProvider, viemClient]);
+  }, [address, processRange, readProvider, recomputeHealth, viemClient]);
 
   useEffect(() => {
     hasBootstrappedRef.current = false;
@@ -467,6 +531,11 @@ export const useMessageListener = ({
     setLastKnownBlock(null);
     lastKnownBlockRef.current = null;
     setOldestScannedBlock(null);
+    setHealth(OK_HEALTH);
+    rateLimitTimestampsRef.current = [];
+    wsErrorTimestampsRef.current = [];
+    tipLagStateRef.current = { blocks: 0, since: null };
+    pendingRangeStateRef.current = { count: 0, since: null };
 
     if (!address) return;
 
@@ -494,5 +563,6 @@ export const useMessageListener = ({
     loadMoreHistory,
     lastKnownBlock,
     oldestScannedBlock,
+    health,
   };
 };

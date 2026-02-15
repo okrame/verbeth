@@ -11,7 +11,6 @@ import { useMessageListener } from './hooks/useMessageListener.js';
 import { useMessageProcessor } from './hooks/useMessageProcessor.js';
 import {
   VERBETH_SINGLETON_ADDR,
-  CONTRACT_CREATION_BLOCK,
   Contact,
   Message,
 } from './types.js';
@@ -28,7 +27,7 @@ import { PinnedResetRequest } from './components/PinnedResetRequest.js';
 import { sessionStore, pendingStore } from './services/StorageAdapters.js';
 
 export default function App() {
-  const { ethers: readProvider, viem: viemClient } = useRpcClients();
+  const { ethers: readProvider, viem: viemClient, transportStatus } = useRpcClients();
   const { address, isConnected } = useAccount();
   const { data: walletClient } = useWalletClient();
 
@@ -156,6 +155,7 @@ export default function App() {
     syncProgress,
     syncStatus,
     loadMoreHistory,
+    health,
   } = useMessageListener({
     readProvider,
     address: address ?? undefined,
@@ -212,6 +212,26 @@ export default function App() {
   const removeToast = (id: string) => {
     setHandshakeToasts((prev) => prev.filter((n) => n.id !== id));
   };
+
+  // Auto-reset health banner when health recovers to "ok"
+  useEffect(() => {
+    if (health.level === "ok" && healthBannerDismissed) {
+      setHealthBannerDismissed(false);
+    }
+  }, [health.level, healthBannerDismissed]);
+
+  const providerLabel = (() => {
+    switch (transportStatus) {
+      case "ws":
+        return "Alchemy WS + HTTP";
+      case "http-alchemy":
+        return "Alchemy HTTP";
+      case "http-public":
+        return "Public HTTP";
+      case "disconnected":
+        return "Disconnected";
+    }
+  })();
 
   const syncStatusLabel = (() => {
     switch (syncStatus.mode) {
@@ -614,15 +634,30 @@ export default function App() {
         </div>
       </div>
 
+      {ready && health.level === "warning" && !healthBannerDismissed && (
+        <div className="fixed bottom-[120px] sm:bottom-[100px] left-0 right-0 z-50 px-2 sm:px-4">
+          <div className="max-w-6xl mx-auto flex items-center gap-3 px-4 py-2 bg-amber-900/80 border border-amber-700 rounded-lg text-amber-200 text-sm backdrop-blur-sm">
+            <span className="flex-1">{health.message}</span>
+            <button
+              onClick={() => setHealthBannerDismissed(true)}
+              className="text-amber-400 hover:text-amber-200 font-bold px-2"
+              aria-label="Dismiss"
+            >
+              &times;
+            </button>
+          </div>
+        </div>
+      )}
+
       {ready && (
         <div className="fixed bottom-0 left-0 right-0 bg-black/80 backdrop-blur-sm p-2 sm:p-3 text-xs text-gray-500 space-y-1 z-50">
           <p>Contract: {VERBETH_SINGLETON_ADDR}</p>
-          <p>Network: Base (Chain ID: {chainId})</p>
-          <p>Contract creation block: {CONTRACT_CREATION_BLOCK}</p>
+          <p>Network: Base ({chainId}) · {providerLabel}</p>
           <p>Status: {ready ? '🟢 Ready' : '🔴 Not Ready'} {(isInitialLoading || isLoadingMore) ? '⏳ Loading' : ''}</p>
           <p>
             Sync: {syncStatusLabel}
             {syncStatus.lastError ? ` · Last error: ${syncStatus.lastError}` : ""}
+            {" · Health: "}{health.level === "ok" ? "OK" : "Warning"}
           </p>
         </div>
       )}

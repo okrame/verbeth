@@ -87,3 +87,4 @@ Every processed event is tracked by a persistent receipt key (`event:<owner>:<ty
 - `listener/logFetcher.ts` -- `getLogs` with retries and automatic range splitting
 - `listener/eventQuerySpecs.ts` -- event filters and log-to-ProcessedEvent mapping
 - `listener/syncStateStore.ts` -- persisted sync state helpers (load, save, enqueue, dequeue)
+- `listener/healthScore.ts` -- pure health scoring functions

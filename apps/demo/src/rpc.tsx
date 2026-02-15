@@ -5,16 +5,25 @@ import { baseSepolia } from "viem/chains";
 
 
 const WS_URL = import.meta.env.VITE_RPC_WS_URL as string | undefined;
+const ALCHEMY_HTTP_URL = import.meta.env.VITE_RPC_HTTP_URL as string | undefined;
 
 const PUBLIC_HTTP_1 = "https://sepolia.base.org";
 const PUBLIC_HTTP_2 = "https://base-sepolia-rpc.publicnode.com";
-export const BASESEPOLIA_HTTP_URLS = [PUBLIC_HTTP_1, PUBLIC_HTTP_2] as const;
+
+const HTTP_URLS: readonly string[] = [
+  ...(ALCHEMY_HTTP_URL ? [ALCHEMY_HTTP_URL] : []),
+  PUBLIC_HTTP_1,
+  PUBLIC_HTTP_2,
+];
+
+export const BASESEPOLIA_HTTP_URLS = HTTP_URLS;
 
 /** Browser-safe read RPC URL for Base Sepolia. */
-export const BASESEPOLIA_HTTP_URL = PUBLIC_HTTP_1;
+export const BASESEPOLIA_HTTP_URL = HTTP_URLS[0];
 
 export type TransportStatus =
   | "ws"
+  | "http-alchemy"
   | "http-public"
   | "disconnected";
 
@@ -26,18 +35,20 @@ type RpcState = {
 
 const RpcCtx = createContext<RpcState | null>(null);
 
+function isAlchemyUrl(url: string): boolean {
+  return url.includes("alchemy.com");
+}
+
 export function RpcProvider({ children }: { children: React.ReactNode }) {
   const [ethersProvider, setEthersProvider] = useState<JsonRpcProvider | null>(null);
   const [transportStatus, setTransportStatus] = useState<TransportStatus>(
-    WS_URL ? "ws" : "http-public"
+    WS_URL ? "ws" : ALCHEMY_HTTP_URL ? "http-alchemy" : "http-public"
   );
 
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const urls = [...BASESEPOLIA_HTTP_URLS];
-
-      for (const url of urls) {
+      for (const url of HTTP_URLS) {
         try {
           const p = new JsonRpcProvider(url, undefined, {
             polling: true,
@@ -47,7 +58,7 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
           if (mounted) {
             setEthersProvider(p);
             if (!WS_URL) {
-              setTransportStatus("http-public");
+              setTransportStatus(isAlchemyUrl(url) ? "http-alchemy" : "http-public");
             }
           }
           return;
@@ -72,6 +83,9 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
           reconnect: { attempts: 5, delay: 2_000 },
         })
       );
+    }
+    if (ALCHEMY_HTTP_URL) {
+      transports.push(http(ALCHEMY_HTTP_URL));
     }
     transports.push(http(PUBLIC_HTTP_1));
     transports.push(http(PUBLIC_HTTP_2));

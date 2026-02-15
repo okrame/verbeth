@@ -233,6 +233,21 @@ export interface ProcessedEvent {
   matchedContactAddress?: string;
 }
 
+export type ListenerHealthLevel = "ok" | "warning";
+
+export type ListenerHealthReason =
+  | "rate_limit"
+  | "backlog"
+  | "tip_lag"
+  | "ws_error";
+
+export interface ListenerHealthStatus {
+  level: ListenerHealthLevel;
+  reasons: ListenerHealthReason[];
+  message: string;
+  updatedAt: number;
+}
+
 export interface MessageListenerResult {
   isInitialLoading: boolean;
   isLoadingMore: boolean;
@@ -242,6 +257,7 @@ export interface MessageListenerResult {
   loadMoreHistory: () => Promise<void>;
   lastKnownBlock: number | null;
   oldestScannedBlock: number | null;
+  health: ListenerHealthStatus;
 }
 
 export interface MessageProcessorResult {
