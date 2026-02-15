@@ -23,6 +23,9 @@ ignition/deployments/chain-84532
 .envrc
 .python-version
 
+*scripts/
+*.vscode/
+
 *apps/notes/
 .claudeignore
 *.claude/

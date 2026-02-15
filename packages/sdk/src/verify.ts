@@ -1,5 +1,4 @@
 // packages/sdk/src/verify.ts
-// test bump
 
 import { JsonRpcProvider, getBytes, hexlify, getAddress } from "ethers";
 import { decryptAndExtractHandshakeKeys, computeHybridTagFromInitiator } from "./crypto.js";
