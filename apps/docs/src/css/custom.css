@@ -1,0 +1,238 @@
+/**
+ * Verbeth SDK Documentation
+ * Brutalist minimal theme
+ */
+
+:root {
+  /* Electric blue accent */
+  --ifm-color-primary: #3B82F6;
+  --ifm-color-primary-dark: #2563EB;
+  --ifm-color-primary-darker: #1D4ED8;
+  --ifm-color-primary-darkest: #1E40AF;
+  --ifm-color-primary-light: #60A5FA;
+  --ifm-color-primary-lighter: #93C5FD;
+  --ifm-color-primary-lightest: #BFDBFE;
+
+  /* Light mode */
+  --ifm-background-color: #FAFAFA;
+  --ifm-background-surface-color: #FFFFFF;
+  --ifm-font-color-base: #171717;
+
+  /* Typography */
+  --ifm-font-family-base: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --ifm-font-family-monospace: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+  --ifm-code-font-size: 0.875rem;
+  --ifm-heading-font-weight: 600;
+
+  /* Layout */
+  --ifm-navbar-background-color: transparent;
+  --ifm-footer-background-color: transparent;
+  --ifm-global-radius: 0;
+
+  /* Code highlighting */
+  --docusaurus-highlighted-code-line-bg: rgba(59, 130, 246, 0.1);
+}
+
+[data-theme='dark'] {
+  /* Dark mode - crypto-native default */
+  --ifm-background-color: #0A0A0A;
+  --ifm-background-surface-color: #171717;
+  --ifm-font-color-base: #E5E5E5;
+  --ifm-color-primary: #60A5FA;
+  --ifm-color-primary-dark: #3B82F6;
+  --ifm-color-primary-darker: #2563EB;
+  --ifm-color-primary-darkest: #1D4ED8;
+  --ifm-color-primary-light: #93C5FD;
+  --ifm-color-primary-lighter: #BFDBFE;
+  --ifm-color-primary-lightest: #DBEAFE;
+  --ifm-color-emphasis-200: #262626;
+  --ifm-color-emphasis-300: #404040;
+
+  --docusaurus-highlighted-code-line-bg: rgba(96, 165, 250, 0.15);
+}
+
+/* Brutalist touches */
+.navbar {
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+  backdrop-filter: blur(8px);
+}
+
+[data-theme='dark'] .navbar {
+  background: rgba(10, 10, 10, 0.8);
+}
+
+[data-theme='light'] .navbar {
+  background: rgba(250, 250, 250, 0.8);
+}
+
+/* No rounded corners - brutalist */
+code {
+  border-radius: 0;
+}
+
+pre {
+  border-radius: 0;
+  border: 1px solid var(--ifm-color-emphasis-200);
+}
+
+/* Buttons */
+.button {
+  border-radius: 0;
+}
+
+/* Cards and containers */
+.card {
+  border-radius: 0;
+}
+
+/* Table of contents */
+.table-of-contents {
+  border-left: 1px solid var(--ifm-color-emphasis-200);
+}
+
+/* Sidebar */
+.menu__link {
+  border-radius: 0;
+}
+
+/* Hero section for landing page */
+.hero-verbeth {
+  min-height: calc(100vh - 60px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 4rem 2rem;
+}
+
+.hero-verbeth h1 {
+  font-size: 4rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  letter-spacing: -0.02em;
+}
+
+.hero-verbeth p {
+  font-size: 1.25rem;
+  color: var(--ifm-color-emphasis-700);
+  margin-bottom: 2rem;
+  max-width: 500px;
+}
+
+[data-theme='dark'] .hero-verbeth p {
+  color: var(--ifm-color-emphasis-600);
+}
+
+.hero-buttons {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.hero-buttons a {
+  padding: 0.75rem 1.5rem;
+  font-weight: 500;
+  text-decoration: none;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  transition: all 0.15s ease;
+}
+
+.hero-buttons a:first-child {
+  background: var(--ifm-color-primary);
+  color: white;
+  border-color: var(--ifm-color-primary);
+}
+
+.hero-buttons a:first-child:hover {
+  background: var(--ifm-color-primary-dark);
+  border-color: var(--ifm-color-primary-dark);
+}
+
+.hero-buttons a:not(:first-child) {
+  background: transparent;
+  color: var(--ifm-font-color-base);
+}
+
+.hero-buttons a:not(:first-child):hover {
+  background: var(--ifm-color-emphasis-100);
+}
+
+[data-theme='dark'] .hero-buttons a:not(:first-child):hover {
+  background: var(--ifm-color-emphasis-200);
+}
+
+/* Responsive hero */
+@media screen and (max-width: 768px) {
+  .hero-verbeth h1 {
+    font-size: 2.5rem;
+  }
+
+  .hero-verbeth p {
+    font-size: 1rem;
+  }
+}
+
+/* Footer minimal */
+.footer {
+  border-top: 1px solid var(--ifm-color-emphasis-200);
+  padding: 1.5rem;
+}
+
+.footer__copyright {
+  font-size: 0.875rem;
+  color: var(--ifm-color-emphasis-600);
+}
+
+/* Code blocks - more prominent */
+pre code {
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+/* Inline code */
+:not(pre) > code {
+  background: var(--ifm-color-emphasis-100);
+  padding: 0.125rem 0.375rem;
+  font-size: 0.875em;
+}
+
+[data-theme='dark'] :not(pre) > code {
+  background: var(--ifm-color-emphasis-200);
+}
+
+/* Markdown content */
+.markdown h1 {
+  font-size: 2.25rem;
+}
+
+.markdown h2 {
+  font-size: 1.75rem;
+  margin-top: 2.5rem;
+}
+
+.markdown h3 {
+  font-size: 1.25rem;
+  margin-top: 2rem;
+}
+
+/* Admonitions - brutalist style */
+.admonition {
+  border-radius: 0;
+  border-left-width: 3px;
+}
+
+/* Links */
+a {
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Doc page layout */
+.docMainContainer {
+  max-width: 800px;
+}

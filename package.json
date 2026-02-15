@@ -1,5 +1,5 @@
 {
-  "name": "verbeth-sdk",
+  "name": "verbeth",
   "private": true,
   "scripts": {
     "test:integration": "./packages/sdk/node_modules/.bin/vitest run tests/*.test.ts --config vitest.integration.config.mjs --pool=threads",

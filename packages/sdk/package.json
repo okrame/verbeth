@@ -1,6 +1,6 @@
 {
   "name": "@verbeth/sdk",
-  "version": "0.1.4",
+  "version": "0.1.10",
   "private": false,
   "main": "dist/src/index.js",
   "module": "dist/esm/src/index.js",
@@ -17,6 +17,7 @@
   "dependencies": {
     "@noble/curves": "^1.8.1",
     "@noble/hashes": "^1.8.0",
+    "@noble/post-quantum": "^0.5.4",
     "@noble/secp256k1": "^2.2.3",
     "ethers": "^6.7.0",
     "tweetnacl": "^1.0.3",

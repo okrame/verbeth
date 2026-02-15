@@ -27,6 +27,7 @@ interface SideToastNotificationsProps {
         sender: string;
         message: string;
         verified: boolean;
+        isExistingContact?: boolean;
         onAccept: (msg: string) => void;
         onReject: () => void;
     }[];
@@ -122,11 +123,10 @@ export function SideToastNotifications({
 
             {/* Notifications container */}
             <div
-                className={`fixed left-1/2 z-[9999] w-full flex flex-col items-center pointer-events-none transition-opacity duration-300 ${
-                    shouldShowNotifications && (mobileVisible || window.innerWidth >= 640) ? 'opacity-100' : 'opacity-0 sm:opacity-100'
-                }`}
-                style={{ 
-                    top: "5px", 
+                className={`fixed left-1/2 z-[9999] w-full flex flex-col items-center pointer-events-none transition-opacity duration-300 ${shouldShowNotifications && (mobileVisible || window.innerWidth >= 640) ? 'opacity-100' : 'opacity-0 sm:opacity-100'
+                    }`}
+                style={{
+                    top: "5px",
                     transform: "translateX(-50%)",
                     visibility: shouldShowNotifications && (mobileVisible || window.innerWidth >= 640) ? 'visible' : 'hidden'
                 }}
@@ -207,6 +207,11 @@ export function SideToastNotifications({
                                                                 <span className="text-sm">⚠️</span> Unverified
                                                             </span>
                                                         )}
+                                                        {notif.isExistingContact && (
+                                                            <span className="px-2 py-0.5 text-xs bg-blue-600/40 text-blue-200 rounded-full border border-blue-500/50">
+                                                                🔄 Session reset
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     <p className="text-xs sm:text-sm text-gray-200 mb-2">"{notif.message}"</p>
                                                 </div>
@@ -239,7 +244,7 @@ export function SideToastNotifications({
                                                         const input = document.getElementById(
                                                             `side-toast-response-${notif.id}`
                                                         ) as HTMLInputElement;
-                                                        const note = input?.value ?? ""; 
+                                                        const note = input?.value ?? "";
                                                         notif.onAccept(note.trim());
                                                         if (input) input.value = "";
                                                         removeNotification(notif.id);

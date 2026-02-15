@@ -1,16 +1,24 @@
+// src/services/DbService.ts
+
 import { VerbEthDatabase } from "./schema.js";
 import type {
   StoredIdentity,
   Contact,
+  ContactStatus,
   Message,
+  EventType,
   PendingHandshake,
+  PersistedSyncState,
 } from "../types.js";
+import { RatchetDbService } from "./RatchetDbService.js";
 
 export class DbService {
   private readonly db: VerbEthDatabase;
+  public readonly ratchet: RatchetDbService;
 
   constructor() {
     this.db = new VerbEthDatabase();
+    this.ratchet = new RatchetDbService(this.db);
   }
 
   /* ----------------------------- ADDRESS HELPERS --------------------------- */
@@ -21,84 +29,23 @@ export class DbService {
   /* ----------------------------- IDENTITIES -------------------------------- */
   async saveIdentity(identity: StoredIdentity) {
     const normalizedAddress = this.normalizeAddress(identity.address);
-    console.log(
-      `Saving identity for ${normalizedAddress.slice(
-        0,
-        8
-      )}... (original: ${identity.address.slice(0, 8)})`
-    );
-
-    try {
-      // Normalize the address before saving
-      const normalizedIdentity = {
-        ...identity,
-        address: normalizedAddress,
-      };
-
-      const result = await this.db.identity.put(normalizedIdentity);
-      console.log(
-        `✅ Identity saved successfully for ${normalizedAddress.slice(0, 8)}...`
-      );
-
-      // Verify it was saved
-      const verification = await this.db.identity.get(normalizedAddress);
-      if (verification) {
-        console.log(
-          `Identity verified in DB for ${normalizedAddress.slice(0, 8)}...`
-        );
-      } else {
-        console.error(
-          `✗ Identity NOT found after save for ${normalizedAddress.slice(
-            0,
-            8
-          )}...`
-        );
-      }
-
-      return result;
-    } catch (error) {
-      console.error(
-        `✗ Failed to save identity for ${normalizedAddress.slice(0, 8)}...:`,
-        error
-      );
-      throw error;
-    }
+    const normalizedIdentity = { ...identity, address: normalizedAddress };
+    console.debug(`[db] saveIdentity ${normalizedAddress.slice(0, 8)}...`);
+    return this.db.identity.put(normalizedIdentity);
   }
 
   async getIdentity(address: string) {
     const normalizedAddress = this.normalizeAddress(address);
-    console.log(
-      `Looking for identity: ${normalizedAddress.slice(
-        0,
-        8
-      )}... (original: ${address.slice(0, 8)})`
-    );
-
     try {
-      const result = await this.db.identity.get(normalizedAddress);
-      if (result) {
-      } else {
-        // Debug: show all identities in DB
-        const allIdentities = await this.db.identity.toArray();
-        console.log(`Available identities in DB: ${allIdentities.length}`);
-        allIdentities.forEach((id) => {
-          console.log(`  - ${id.address} (${id.address.slice(0, 8)}...)`);
-        });
-      }
-      return result;
+      return await this.db.identity.get(normalizedAddress);
     } catch (error) {
-      console.error(
-        `✗ Error getting identity for ${normalizedAddress.slice(0, 8)}...:`,
-        error
-      );
+      console.error(`[db] getIdentity failed for ${normalizedAddress.slice(0, 8)}...:`, error);
       return null;
     }
   }
 
   deleteIdentity(address: string) {
-    const normalizedAddress = this.normalizeAddress(address);
-    console.log(`Deleting identity for ${normalizedAddress.slice(0, 8)}...`);
-    return this.db.identity.delete(normalizedAddress);
+    return this.db.identity.delete(this.normalizeAddress(address));
   }
 
   /* ------------------------------ CONTACTS --------------------------------- */
@@ -108,12 +55,6 @@ export class DbService {
       address: this.normalizeAddress(contact.address),
       ownerAddress: this.normalizeAddress(contact.ownerAddress),
     };
-    console.log(
-      `👤 Saving contact ${normalizedContact.address.slice(
-        0,
-        8
-      )}... for owner ${normalizedContact.ownerAddress.slice(0, 8)}...`
-    );
     return this.db.contacts.put(normalizedContact);
   }
 
@@ -152,7 +93,7 @@ export class DbService {
 
   async upsertDedup(entry: {
     key: string; // `${ownerAddress}:${txHash}-${logIndex}`
-    messageId: string; 
+    messageId: string;
     txHash: string;
     blockNumber: number;
   }) {
@@ -166,9 +107,55 @@ export class DbService {
     return this.db.dedup.get(key);
   }
 
+  private buildEventReceiptKey(
+    ownerAddress: string,
+    eventType: EventType,
+    txHash: string,
+    logIndex: number
+  ): string {
+    const normalizedOwner = this.normalizeAddress(ownerAddress);
+    return `event:${normalizedOwner}:${eventType}:${txHash.toLowerCase()}-${logIndex}`;
+  }
+
+  async hasProcessedEvent(
+    ownerAddress: string,
+    eventType: EventType,
+    txHash: string,
+    logIndex: number
+  ): Promise<boolean> {
+    const key = this.buildEventReceiptKey(
+      ownerAddress,
+      eventType,
+      txHash,
+      logIndex
+    );
+    const existing = await this.db.dedup.get(key);
+    return !!existing;
+  }
+
+  async markEventProcessed(
+    ownerAddress: string,
+    eventType: EventType,
+    txHash: string,
+    logIndex: number,
+    blockNumber: number
+  ): Promise<void> {
+    const key = this.buildEventReceiptKey(
+      ownerAddress,
+      eventType,
+      txHash,
+      logIndex
+    );
+    await this.upsertDedup({
+      key,
+      messageId: key,
+      txHash: txHash.toLowerCase(),
+      blockNumber,
+    });
+  }
+
   /* ------------------------------ MESSAGES --------------------------------- */
   async saveMessage(message: Message): Promise<boolean> {
-
     if (await this.db.messages.get(message.id)) {
       console.debug(`Message ${message.id} already in DB`);
       return false;
@@ -202,12 +189,6 @@ export class DbService {
       );
     }
 
-    console.log(
-      `Saving new message from ${normalizedMessage.sender.slice(
-        0,
-        8
-      )}... for owner ${normalizedMessage.ownerAddress.slice(0, 8)}...`
-    );
     await this.db.messages.put(normalizedMessage);
     return true;
   }
@@ -224,25 +205,15 @@ export class DbService {
           const newMessage = { ...oldMessage, ...updates };
           await this.deleteMessage(messageId);
           await this.saveMessage(newMessage);
-          console.log(
-            `Replaced message ${messageId.slice(
-              0,
-              8
-            )}... with new ID ${updates.id?.slice(0, 8)}...`
-          );
           return true;
         }
         return false;
       }
 
       const result = await this.db.messages.update(messageId, updates);
-      console.log(`Updated message ${messageId.slice(0, 8)}... with:`, updates);
       return result > 0;
     } catch (error) {
-      console.error(
-        `✗ Failed to update message ${messageId.slice(0, 8)}...:`,
-        error
-      );
+      console.error(`[db] updateMessage failed for ${messageId.slice(0, 8)}...:`, error);
       return false;
     }
   }
@@ -262,14 +233,7 @@ export class DbService {
       .equals([normalizedOwner, normalizedSender, topic, nonce, "pending"])
       .first();
 
-    if (exactMatch) {
-      console.log(`Found exact match!`, {
-        messageId: exactMatch.id,
-        messageTopic: exactMatch.topic.slice(0, 20) + "...",
-        messageNonce: exactMatch.nonce,
-      });
-      return exactMatch;
-    }
+    if (exactMatch) return exactMatch;
 
     // FALLBACK: Find by content and recent timestamp
     const recentPendingMessages = await this.db.messages
@@ -279,14 +243,7 @@ export class DbService {
       .limit(3)
       .toArray();
 
-    if (recentPendingMessages.length > 0) {
-      console.log(
-        `Using fallback matching: found ${recentPendingMessages.length} recent pending messages`
-      );
-      return recentPendingMessages[0]; // Most recent
-    }
-
-    return undefined;
+    return recentPendingMessages[0];
   }
 
   async findMessageByDedupKey(dedupKey: string): Promise<Message | undefined> {
@@ -338,7 +295,6 @@ export class DbService {
 
   async getAllMessages(ownerAddress: string, limit = 100) {
     const normalizedOwner = this.normalizeAddress(ownerAddress);
-    console.log(`Loading messages for owner ${normalizedOwner.slice(0, 8)}...`);
     const messages = await this.db.messages
       .where("ownerAddress")
       .equals(normalizedOwner)
@@ -352,6 +308,33 @@ export class DbService {
 
   markMessageAsRead(id: string) {
     return this.db.messages.update(id, { read: true });
+  }
+
+  async markMessagesAsLost(
+    ownerAddress: string,
+    contactAddress: string,
+    afterTimestamp: number
+  ): Promise<number> {
+    const normalizedOwner = this.normalizeAddress(ownerAddress);
+    const normalizedContact = this.normalizeAddress(contactAddress);
+
+    const messages = await this.db.messages
+      .where("ownerAddress")
+      .equals(normalizedOwner)
+      .filter(
+        (m) =>
+          m.direction === "outgoing" &&
+          m.recipient?.toLowerCase() === normalizedContact &&
+          m.timestamp > afterTimestamp &&
+          m.type !== "system"
+      )
+      .toArray();
+
+    for (const msg of messages) {
+      await this.db.messages.update(msg.id, { isLost: true });
+    }
+
+    return messages.length;
   }
 
   getUnreadMessagesCount() {
@@ -369,12 +352,6 @@ export class DbService {
       sender: this.normalizeAddress(h.sender),
       ownerAddress: this.normalizeAddress(h.ownerAddress),
     };
-    console.log(
-      `...Saving pending handshake from ${normalizedHandshake.sender.slice(
-        0,
-        8
-      )}... for owner ${normalizedHandshake.ownerAddress.slice(0, 8)}...`
-    );
     return this.db.pendingHandshakes.put(normalizedHandshake);
   }
 
@@ -394,7 +371,6 @@ export class DbService {
   }
 
   deletePendingHandshake(id: string) {
-    console.log(`Deleting pending handshake ${id.slice(0, 8)}...`);
     return this.db.pendingHandshakes.delete(id);
   }
 
@@ -411,21 +387,21 @@ export class DbService {
 
   /* --------------------------------- SYNC --------------------------------- */
   getLastKnownBlock(addr: string) {
-  const normalizedAddr = this.normalizeAddress(addr);
-  return this.getSetting(`lastKnownBlock_${normalizedAddr}`);
-}
+    const normalizedAddr = this.normalizeAddress(addr);
+    return this.getSetting(`lastKnownBlock_${normalizedAddr}`);
+  }
   setLastKnownBlock(addr: string, n: number) {
-  const normalizedAddr = this.normalizeAddress(addr);
-  return this.setSetting(`lastKnownBlock_${normalizedAddr}`, n);
-}
+    const normalizedAddr = this.normalizeAddress(addr);
+    return this.setSetting(`lastKnownBlock_${normalizedAddr}`, n);
+  }
   getOldestScannedBlock(addr: string) {
-  const normalizedAddr = this.normalizeAddress(addr);
-  return this.getSetting(`oldestScannedBlock_${normalizedAddr}`);
-}
+    const normalizedAddr = this.normalizeAddress(addr);
+    return this.getSetting(`oldestScannedBlock_${normalizedAddr}`);
+  }
   setOldestScannedBlock(addr: string, n: number) {
-  const normalizedAddr = this.normalizeAddress(addr);
-  return this.setSetting(`oldestScannedBlock_${normalizedAddr}`, n);
-}
+    const normalizedAddr = this.normalizeAddress(addr);
+    return this.setSetting(`oldestScannedBlock_${normalizedAddr}`, n);
+  }
   getInitialScanComplete(addr: string) {
     const normalizedAddr = this.normalizeAddress(addr);
     return this.getSetting(`initialScanComplete_${normalizedAddr}`);
@@ -433,6 +409,27 @@ export class DbService {
   setInitialScanComplete(addr: string, ok: boolean) {
     const normalizedAddr = this.normalizeAddress(addr);
     return this.setSetting(`initialScanComplete_${normalizedAddr}`, ok);
+  }
+
+  private getSyncStateKey(addr: string): string {
+    const normalizedAddr = this.normalizeAddress(addr);
+    return `syncState_${normalizedAddr}`;
+  }
+
+  async getSyncState(addr: string): Promise<PersistedSyncState | null> {
+    const key = this.getSyncStateKey(addr);
+    const value = await this.getSetting(key);
+    return value ?? null;
+  }
+
+  async setSyncState(addr: string, state: PersistedSyncState): Promise<void> {
+    const key = this.getSyncStateKey(addr);
+    await this.setSetting(key, state);
+  }
+
+  async clearSyncState(addr: string): Promise<void> {
+    const key = this.getSyncStateKey(addr);
+    await this.deleteSetting(key);
   }
 
   /* ------------------------------ UTILITIES ------------------------------- */
@@ -446,6 +443,8 @@ export class DbService {
         this.db.messages,
         this.db.pendingHandshakes,
         this.db.settings,
+        this.db.ratchetSessions,
+        this.db.pendingOutbound,
       ],
       async () => {
         await this.db.identity.clear();
@@ -453,6 +452,8 @@ export class DbService {
         await this.db.messages.clear();
         await this.db.pendingHandshakes.clear();
         await this.db.settings.clear();
+        await this.db.ratchetSessions.clear();
+        await this.db.pendingOutbound.clear();
       }
     );
     console.log("All database data cleared");
@@ -469,6 +470,8 @@ export class DbService {
         this.db.messages,
         this.db.pendingHandshakes,
         this.db.settings,
+        this.db.ratchetSessions,
+        this.db.pendingOutbound,
       ],
       async () => {
         await this.db.identity.delete(normalizedAddr);
@@ -487,6 +490,19 @@ export class DbService {
           .equals(normalizedAddr)
           .delete();
 
+        //Delete ratchet data
+        const sessions = await this.db.ratchetSessions
+          .where("myAddress")
+          .equals(normalizedAddr)
+          .toArray();
+        for (const s of sessions) {
+          await this.db.ratchetSessions.delete(s.conversationId);
+          await this.db.pendingOutbound
+            .where("conversationId")
+            .equals(s.conversationId)
+            .delete();
+        }
+
         const staleSettings = await this.db.settings
           .where("name")
           .startsWith(`initialScanComplete_${normalizedAddr}`)
@@ -496,10 +512,53 @@ export class DbService {
         }
         await this.db.settings.delete(`lastKnownBlock_${normalizedAddr}`);
         await this.db.settings.delete(`oldestScannedBlock_${normalizedAddr}`);
+        await this.db.settings.delete(`syncState_${normalizedAddr}`);
+
+        const dedupForOwner = await this.db.dedup
+          .where("key")
+          .startsWith(`${normalizedAddr}:`)
+          .toArray();
+        for (const row of dedupForOwner) {
+          await this.db.dedup.delete(row.key);
+        }
+
+        const eventReceiptsForOwner = await this.db.dedup
+          .where("key")
+          .startsWith(`event:${normalizedAddr}:`)
+          .toArray();
+        for (const row of eventReceiptsForOwner) {
+          await this.db.dedup.delete(row.key);
+        }
       }
     );
     //this.deduplicator.clear();
     console.log(`User data cleared for ${normalizedAddr.slice(0, 8)}...`);
+  }
+  /* ----------------------------- SESSION ----------------------------- */
+
+  /**
+   * Check if a sender is an existing contact.
+   * Used during handshake processing for receiver hints.
+   */
+  async isExistingContact(
+    senderAddress: string,
+    ownerAddress: string
+  ): Promise<{
+    exists: boolean;
+    previousStatus?: ContactStatus;
+    previousConversationId?: string;
+  }> {
+    const contact = await this.getContact(senderAddress, ownerAddress);
+
+    if (!contact) {
+      return { exists: false };
+    }
+
+    return {
+      exists: true,
+      previousStatus: contact.status,
+      previousConversationId: contact.conversationId,
+    };
   }
 
   /* ---------------------------- BACKUP / IMPORT --------------------------- */
@@ -511,11 +570,13 @@ export class DbService {
       messages: await this.db.messages.toArray(),
       pendingHandshakes: await this.db.pendingHandshakes.toArray(),
       settings: await this.db.settings.toArray(),
+      ratchetSessions: await this.db.ratchetSessions.toArray(),
+      pendingOutbound: await this.db.pendingOutbound.toArray(),
       exportedAt: Date.now(),
     } as const;
 
     console.log(
-      `Exported ${payload.identity.length} identities, ${payload.contacts.length} contacts, ${payload.messages.length} messages`
+      `Exported ${payload.identity.length} identities, ${payload.contacts.length} contacts, ${payload.messages.length} messages, ${payload.ratchetSessions.length} ratchet sessions`
     );
     return JSON.stringify(payload);
   }
@@ -532,6 +593,8 @@ export class DbService {
         this.db.messages,
         this.db.pendingHandshakes,
         this.db.settings,
+        this.db.ratchetSessions,
+        this.db.pendingOutbound,
       ],
       async () => {
         if (data.identity) await this.db.identity.bulkPut(data.identity);
@@ -540,6 +603,10 @@ export class DbService {
         if (data.pendingHandshakes)
           await this.db.pendingHandshakes.bulkPut(data.pendingHandshakes);
         if (data.settings) await this.db.settings.bulkPut(data.settings);
+        if (data.ratchetSessions)
+          await this.db.ratchetSessions.bulkPut(data.ratchetSessions);
+        if (data.pendingOutbound)
+          await this.db.pendingOutbound.bulkPut(data.pendingOutbound);
       }
     );
     console.log("✅ Database import completed");
@@ -548,37 +615,17 @@ export class DbService {
   /* -------------------------------- ACCOUNT SWITCH -------------------------------- */
   async switchAccount(newAddress: string) {
     const normalizedAddress = this.normalizeAddress(newAddress);
+    console.debug(`[db] switchAccount ${normalizedAddress.slice(0, 8)}...`);
 
-    //this.deduplicator.clear();
-
-    const allIdentities = await this.db.identity.toArray();
-    console.log(`Database state: ${allIdentities.length} total identities`);
-    allIdentities.forEach((id) => {
-      console.log(
-        `  - ${id.address} (derived: ${new Date(
-          id.derivedAt
-        ).toLocaleString()})`
-      );
-    });
-
-    const [contacts, messages, handshakes] = await Promise.all([
+    await Promise.all([
       this.getAllContacts(normalizedAddress),
       this.getAllMessages(normalizedAddress, 1000),
       this.getAllPendingHandshakes(normalizedAddress),
     ]);
-
-    console.log(
-      `Data for ${normalizedAddress.slice(0, 8)}...: ${
-        contacts.length
-      } contacts, ${messages.length} messages, ${
-        handshakes.length
-      } pending handshakes`
-    );
   }
 
   /* ------------------------------ CLEANUP --------------------------------- */
   close() {
-    console.log("Closing database connection...");
     this.db.close();
   }
 }

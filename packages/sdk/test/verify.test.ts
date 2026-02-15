@@ -1,327 +1,179 @@
-import { describe, it, expect } from "vitest";
-import { Wallet, HDNodeWallet, keccak256, toUtf8Bytes, hexlify } from "ethers";
-import nacl from "tweetnacl";
+// packages/sdk/test/verify.test.ts
 
-import {
-  verifyIdentityProof,
-  verifyHandshakeIdentity,
-  verifyHandshakeResponseIdentity,
-  verifyDerivedDuplexTopics,
-} from "../src/verify.js";
-import { encryptStructuredPayload, deriveDuplexTopics } from "../src/crypto.js";
-import {
-  HandshakeResponseContent,
-  encodeUnifiedPubKeys,
-  parseHandshakeKeys,
-} from "../src/payload.js";
-import {
-  IdentityProof,
-  HandshakeLog,
-  HandshakeResponseLog,
-} from "../src/types.js";
-import { deriveIdentityWithUnifiedKeys } from "../src/identity.js";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { hexlify, getAddress } from "ethers";
+import { verifyIdentityProof } from "../src/verify.js";
+import { parseBindingMessage } from "../src/utils.js";
+import type { IdentityProof, IdentityContext } from "../src/types.js";
 
-const mockProvider: any = {
-  async request({ method, params }: { method: string; params?: any[] }) {
-    if (method === "eth_getCode") {
-      const address = params?.[0];
-      return address && address.startsWith("0xCc") ? "0x60016000" : "0x";
-    }
-    if (method === "eth_call") {
-      return "0x1";
-    }
-    if (method === "eth_chainId") {
-      return "0x1";
-    }
-    throw new Error("Unsupported method: " + method);
-  },
+// Stub makeViemPublicClient so verifyIdentityProof uses our mock client
+vi.mock("../src/utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils.js")>();
+  return {
+    ...actual,
+    makeViemPublicClient: vi.fn(),
+  };
+});
+
+import { makeViemPublicClient } from "../src/utils.js";
+const mockedMakeClient = vi.mocked(makeViemPublicClient);
+
+// ── Test fixtures ──
+
+const TEST_ADDRESS = "0x1234567890abcdef1234567890abcdef12345678";
+const TEST_SAFE_ADDRESS = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+const pkX25519 = new Uint8Array(32).fill(0x22);
+const pkEd25519 = new Uint8Array(32).fill(0x11);
+
+function buildMessage(overrides?: {
+  header?: string;
+  address?: string;
+  executorAddress?: string;
+  pkEd25519Hex?: string;
+  pkX25519Hex?: string;
+  chainId?: number;
+  rpId?: string;
+}): string {
+  const o = {
+    header: "VerbEth Key Binding v1",
+    address: TEST_ADDRESS,
+    executorAddress: TEST_SAFE_ADDRESS,
+    pkEd25519Hex: hexlify(pkEd25519),
+    pkX25519Hex: hexlify(pkX25519),
+    ...overrides,
+  };
+  const lines = [
+    o.header,
+    `Address: ${o.address}`,
+    `PkEd25519: ${o.pkEd25519Hex}`,
+    `PkX25519: ${o.pkX25519Hex}`,
+    `executorAddress: ${o.executorAddress}`,
+  ];
+  if (o.chainId !== undefined) lines.push(`ChainId: ${o.chainId}`);
+  if (o.rpId !== undefined) lines.push(`RpId: ${o.rpId}`);
+  return lines.join("\n");
+}
+
+function makeProof(messageOverrides?: Parameters<typeof buildMessage>[0]): IdentityProof {
+  return {
+    message: buildMessage(messageOverrides),
+    signature: "0x" + "ab".repeat(65),
+  };
+}
+
+const expectedKeys = {
+  identityPubKey: pkX25519,
+  signingPubKey: pkEd25519,
 };
 
-function toBytes(hex: `0x${string}`): Uint8Array {
-  return Uint8Array.from(Buffer.from(hex.slice(2), "hex"));
-}
-function randomTagHex(): `0x${string}` {
-  const b = nacl.randomBytes(32);
-  return ("0x" + Buffer.from(b).toString("hex")) as `0x${string}`;
-}
+// A provider-like stub (only used to pass to verifyIdentityProof; the real
+// work is done by the mocked makeViemPublicClient)
+const fakeProvider = {
+  request: async () => "0x1",
+} as any;
 
-describe("Verify Identity & Handshake (Unified)", () => {
-  describe("Identity Proof Verification", () => {
-    it("OK with correct unified keys", async () => {
-      const wallet: HDNodeWallet = Wallet.createRandom();
-      const { identityProof, identityPubKey, signingPubKey } =
-        await deriveIdentityWithUnifiedKeys(wallet, wallet.address);
-
-      const result = await verifyIdentityProof(
-        identityProof,
-        wallet.address,
-        { identityPubKey, signingPubKey },
-        mockProvider
-      );
-
-      expect(result).toBe(true);
-    });
-
-    it("KO with wrong address", async () => {
-      const wallet1: HDNodeWallet = Wallet.createRandom();
-      const wallet2: HDNodeWallet = Wallet.createRandom();
-      const { identityProof, identityPubKey, signingPubKey } =
-        await deriveIdentityWithUnifiedKeys(wallet1, wallet1.address);
-
-      const result = await verifyIdentityProof(
-        identityProof,
-        wallet2.address,
-        { identityPubKey, signingPubKey },
-        mockProvider
-      );
-
-      expect(result).toBe(false);
-    });
-
-    it("KO with wrong keys", async () => {
-      const wallet: HDNodeWallet = Wallet.createRandom();
-      const { identityProof } = await deriveIdentityWithUnifiedKeys(
-        wallet,
-        wallet.address
-      );
-
-      const wrongKeys = {
-        identityPubKey: new Uint8Array(32).fill(0xaa),
-        signingPubKey: new Uint8Array(32).fill(0xbb),
-      };
-
-      const result = await verifyIdentityProof(
-        identityProof,
-        wallet.address,
-        wrongKeys,
-        mockProvider
-      );
-
-      expect(result).toBe(false);
-    });
+describe("verifyIdentityProof", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedMakeClient.mockResolvedValue({
+      verifyMessage: vi.fn().mockResolvedValue(true),
+    } as any);
   });
 
-  describe("Handshake Verification", () => {
-    it("EOA flow with unified keys", async () => {
-      const wallet: HDNodeWallet = Wallet.createRandom();
-      const { identityProof, unifiedPubKeys } =
-        await deriveIdentityWithUnifiedKeys(wallet, wallet.address);
-
-      const handshakeEvent: HandshakeLog = {
-        recipientHash: keccak256(toUtf8Bytes("contact:0xdead")),
-        sender: wallet.address,
-        pubKeys: hexlify(unifiedPubKeys),
-        ephemeralPubKey: hexlify(nacl.box.keyPair().publicKey),
-        plaintextPayload: JSON.stringify({
-          plaintextPayload: "Hi VerbEth",
-          identityProof,
-        }),
-      };
-
-      const result = await verifyHandshakeIdentity(
-        handshakeEvent,
-        mockProvider
-      );
-      expect(result).toBe(true);
-    });
-
-    it("fails with invalid identity proof", async () => {
-      const wallet: HDNodeWallet = Wallet.createRandom();
-      const { unifiedPubKeys } = await deriveIdentityWithUnifiedKeys(
-        wallet,
-        wallet.address
-      );
-
-      const differentWallet: HDNodeWallet = Wallet.createRandom();
-      const invalidMessage = "Invalid message for verification";
-      const invalidSignature = await differentWallet.signMessage(
-        invalidMessage
-      );
-
-      const invalidIdentityProof: IdentityProof = {
-        message: invalidMessage,
-        signature: invalidSignature,
-      };
-
-      const handshakeEvent: HandshakeLog = {
-        recipientHash: keccak256(toUtf8Bytes("contact:0xdead")),
-        sender: wallet.address,
-        pubKeys: hexlify(unifiedPubKeys),
-        ephemeralPubKey: hexlify(nacl.box.keyPair().publicKey),
-        plaintextPayload: JSON.stringify({
-          plaintextPayload: "Hi VerbEth",
-          identityProof: invalidIdentityProof,
-        }),
-      };
-
-      const result = await verifyHandshakeIdentity(
-        handshakeEvent,
-        mockProvider
-      );
-      expect(result).toBe(false);
-    });
-  });
-
-  describe("Handshake Response Verification", () => {
-    it("EOA flow with unified keys", async () => {
-      const responderWallet: HDNodeWallet = Wallet.createRandom();
-      const { identityProof, identityPubKey, unifiedPubKeys } =
-        await deriveIdentityWithUnifiedKeys(
-          responderWallet,
-          responderWallet.address
-        );
-
-      const aliceEphemeral = nacl.box.keyPair();
-      const responderEphemeral = nacl.box.keyPair();
-
-      const responseContent: HandshakeResponseContent = {
-        unifiedPubKeys,
-        ephemeralPubKey: responderEphemeral.publicKey,
-        note: "pong",
-        identityProof,
-      };
-
-      const payload = encryptStructuredPayload(
-        responseContent,
-        aliceEphemeral.publicKey,
-        responderEphemeral.secretKey,
-        responderEphemeral.publicKey
-      );
-
-      const responseEvent: HandshakeResponseLog = {
-        inResponseTo: keccak256(toUtf8Bytes("test-handshake")),
-        responder: responderWallet.address,
-        responderEphemeralR: hexlify(responderEphemeral.publicKey),
-        ciphertext: payload,
-      };
-
-      const result = await verifyHandshakeResponseIdentity(
-        responseEvent,
-        identityPubKey,
-        aliceEphemeral.secretKey,
-        mockProvider
-      );
-
-      expect(result).toBe(true);
-    });
-
-    it("fails with wrong identity key", async () => {
-      const responderWallet: HDNodeWallet = Wallet.createRandom();
-      const { identityProof, unifiedPubKeys } =
-        await deriveIdentityWithUnifiedKeys(
-          responderWallet,
-          responderWallet.address
-        );
-
-      const aliceEphemeral = nacl.box.keyPair();
-      const responderEphemeral = nacl.box.keyPair();
-
-      const responseContent: HandshakeResponseContent = {
-        unifiedPubKeys,
-        ephemeralPubKey: responderEphemeral.publicKey,
-        note: "pong",
-        identityProof,
-      };
-
-      const payload = encryptStructuredPayload(
-        responseContent,
-        aliceEphemeral.publicKey,
-        responderEphemeral.secretKey,
-        responderEphemeral.publicKey
-      );
-
-      const responseEvent: HandshakeResponseLog = {
-        inResponseTo: keccak256(toUtf8Bytes("test-handshake")),
-        responder: responderWallet.address,
-        responderEphemeralR: hexlify(responderEphemeral.publicKey),
-        ciphertext: payload,
-      };
-
-      const wrongIdentityKey = new Uint8Array(32).fill(0xff);
-
-      const result = await verifyHandshakeResponseIdentity(
-        responseEvent,
-        wrongIdentityKey,
-        aliceEphemeral.secretKey,
-        mockProvider
-      );
-
-      expect(result).toBe(false);
-    });
-  });
-
-  describe("Key Parsing", () => {
-    it("parseHandshakeKeys extracts unified keys correctly", () => {
-      const identityPubKey = new Uint8Array(32).fill(1);
-      const signingPubKey = new Uint8Array(32).fill(2);
-      const unifiedPubKeys = encodeUnifiedPubKeys(
-        identityPubKey,
-        signingPubKey
-      );
-
-      const event = { pubKeys: hexlify(unifiedPubKeys) };
-      const parsed = parseHandshakeKeys(event);
-
-      expect(parsed).not.toBeNull();
-      expect(parsed!.identityPubKey).toEqual(identityPubKey);
-      expect(parsed!.signingPubKey).toEqual(signingPubKey);
-    });
-
-    it("parseHandshakeKeys returns null for invalid keys", () => {
-      const event = { pubKeys: "0x1234" };
-      const parsed = parseHandshakeKeys(event);
-      expect(parsed).toBeNull();
-    });
-  });
-
-  it("verifyDerivedDuplexTopics accepts tag hex and validates checksum from TopicInfo", () => {
-    const alice = nacl.box.keyPair();
-    const bob = nacl.box.keyPair();
-
-    const tag = randomTagHex();
-    const salt = toBytes(tag);
-
-    // Bob would embed TopicInfo in HSR 
-    const { topicOut, topicIn, checksum } = deriveDuplexTopics(
-      bob.secretKey,
-      alice.publicKey,
-      salt
+  it("returns true for valid proof", async () => {
+    const result = await verifyIdentityProof(
+      makeProof(),
+      TEST_SAFE_ADDRESS,
+      expectedKeys,
+      fakeProvider,
     );
-    const topicInfo = { out: topicOut, in: topicIn, chk: checksum };
-
-    // Alice verifies after decrypting HSR 
-    const { topics, ok } = verifyDerivedDuplexTopics({
-      myIdentitySecretKey: alice.secretKey,
-      theirIdentityPubKey: bob.publicKey,
-      tag,
-      topicInfo,
-    });
-
-    expect(ok).toBe(true);
-    expect(topics.topicOut).toBe(topicOut);
-    expect(topics.topicIn).toBe(topicIn);
+    expect(result).toBe(true);
   });
 
-  it("verifyDerivedDuplexTopics works with raw salt (no tag) and throws with neither", () => {
-    const alice = nacl.box.keyPair();
-    const bob = nacl.box.keyPair();
+  it("returns false when signature verification fails", async () => {
+    mockedMakeClient.mockResolvedValue({
+      verifyMessage: vi.fn().mockResolvedValue(false),
+    } as any);
 
-    const salt = toBytes(randomTagHex());
+    const result = await verifyIdentityProof(
+      makeProof(),
+      TEST_SAFE_ADDRESS,
+      expectedKeys,
+      fakeProvider,
+    );
+    expect(result).toBe(false);
+  });
 
-    const { topics } = verifyDerivedDuplexTopics({
-      myIdentitySecretKey: alice.secretKey,
-      theirIdentityPubKey: bob.publicKey,
-      salt,
-    });
+  it("returns false when executorAddress mismatches input address", async () => {
+    const otherAddress = "0x" + "99".repeat(20);
+    const result = await verifyIdentityProof(
+      makeProof(),
+      otherAddress,       // doesn't match executorAddress in the message
+      expectedKeys,
+      fakeProvider,
+    );
+    expect(result).toBe(false);
+  });
 
-    expect(topics.topicOut.startsWith("0x")).toBe(true);
-    expect(topics.topicIn.startsWith("0x")).toBe(true);
+  it("returns false when PkX25519 mismatches expected key", async () => {
+    const wrongKeys = {
+      identityPubKey: new Uint8Array(32).fill(0xff), // mismatch
+      signingPubKey: pkEd25519,
+    };
+    const result = await verifyIdentityProof(
+      makeProof(),
+      TEST_SAFE_ADDRESS,
+      wrongKeys,
+      fakeProvider,
+    );
+    expect(result).toBe(false);
+  });
 
-    expect(() =>
-      verifyDerivedDuplexTopics({
-        myIdentitySecretKey: alice.secretKey,
-        theirIdentityPubKey: bob.publicKey,
-      } as any)
-    ).toThrow();
+  it("returns false when PkEd25519 mismatches expected key", async () => {
+    const wrongKeys = {
+      identityPubKey: pkX25519,
+      signingPubKey: new Uint8Array(32).fill(0xff), // mismatch
+    };
+    const result = await verifyIdentityProof(
+      makeProof(),
+      TEST_SAFE_ADDRESS,
+      wrongKeys,
+      fakeProvider,
+    );
+    expect(result).toBe(false);
+  });
+
+  it("returns false when ChainId mismatches context", async () => {
+    const ctx: IdentityContext = { chainId: 8453 };
+    const result = await verifyIdentityProof(
+      makeProof({ chainId: 1 }),  // message says chainId=1
+      TEST_SAFE_ADDRESS,
+      expectedKeys,
+      fakeProvider,
+      ctx,                        // expects 8453
+    );
+    expect(result).toBe(false);
+  });
+
+  it("returns false when RpId mismatches context", async () => {
+    const ctx: IdentityContext = { rpId: "example.com" };
+    const result = await verifyIdentityProof(
+      makeProof({ rpId: "evil.com" }),
+      TEST_SAFE_ADDRESS,
+      expectedKeys,
+      fakeProvider,
+      ctx,
+    );
+    expect(result).toBe(false);
+  });
+
+  it("returns false for wrong header", async () => {
+    const result = await verifyIdentityProof(
+      makeProof({ header: "Wrong Header v999" }),
+      TEST_SAFE_ADDRESS,
+      expectedKeys,
+      fakeProvider,
+    );
+    expect(result).toBe(false);
   });
 });

@@ -1,7 +1,9 @@
 // packages/sdk/src/verify.ts
+
 import { JsonRpcProvider, getBytes, hexlify, getAddress } from "ethers";
-import { decryptAndExtractHandshakeKeys, computeTagFromInitiator, verifyDuplexTopicsChecksum, deriveDuplexTopics } from "./crypto.js";
-import { HandshakeLog, HandshakeResponseLog, IdentityProof, TopicInfoWire, DuplexTopics, IdentityContext } from "./types.js";
+import { decryptAndExtractHandshakeKeys, computeHybridTagFromInitiator } from "./crypto.js";
+import { kem } from "./pq/kem.js";
+import { HandshakeLog, HandshakeResponseLog, IdentityProof, IdentityContext } from "./types.js";
 import { parseHandshakePayload, parseHandshakeKeys } from "./payload.js";
 import {
   Rpcish,
@@ -44,14 +46,6 @@ export async function verifyHandshakeIdentity(
       console.error("Failed to parse unified pubKeys from handshake event");
       return false;
     }
-
-    // // 6492 awareness
-    // const dp: any = content.identityProof;
-    // const sigPrimary: string = dp.signature;
-    // const sig6492: string | undefined = dp.signature6492 ?? dp.erc6492;
-    // const uses6492 = hasERC6492Suffix(sigPrimary) || !!sig6492;
-
-    // const isContract1271 = await isSmartContract1271(handshakeEvent.sender, provider);
 
     return await verifyIdentityProof(
       content.identityProof,
@@ -98,17 +92,11 @@ export async function verifyHandshakeResponseIdentity(
       return false;
     }
 
-    // 6492 awareness
     const dpAny: any = extractedResponse.identityProof;
     if (!dpAny) {
       console.error("Missing identityProof in handshake response payload");
       return false;
     }
-    // const sigPrimary: string = dpAny.signature;
-    // const sig6492: string | undefined = dpAny.signature6492 ?? dpAny.erc6492;
-    // const uses6492 = hasERC6492Suffix(sigPrimary) || !!sig6492;
-
-    // const isContract1271 = await isSmartContract1271(responseEvent.responder,provider);
 
     const expectedKeys = {
       identityPubKey: extractedResponse.identityPubKey,
@@ -129,13 +117,13 @@ export async function verifyHandshakeResponseIdentity(
 }
 
 /**
- * Verify "IdentityProof" for EOAs and smart accounts.
+ * Verify IdentityProof for EOAs and smart accounts.
  * - Verifies the signature with viem (EOA / ERC-1271 / ERC-6492).
  * - Parses and checks the expected address and public key against the message content.
  */
 export async function verifyIdentityProof(
   identityProof: IdentityProof,
-  smartAccountAddress: string,
+  address: string,
   expectedUnifiedKeys: {
     identityPubKey: Uint8Array; 
     signingPubKey: Uint8Array; 
@@ -145,31 +133,36 @@ export async function verifyIdentityProof(
 ): Promise<boolean> {
   try {
     const client = await makeViemPublicClient(provider);
-    const address = smartAccountAddress as `0x${string}`;
+    const inputAddress = address as `0x${string}`;
+
+    const parsed = parseBindingMessage(identityProof.message);
+
+    if (!parsed.address) {
+      console.error("Parsed address is undefined");
+      return false;
+    }
+    const signerAddress = getAddress(parsed.address) as `0x${string}`;
 
     const okSig = await client.verifyMessage({
-      address,
+      address: signerAddress,
       message: identityProof.message,
       signature: identityProof.signature as `0x${string}`,
     });
     if (!okSig) {
-      console.error("Binding signature invalid for address");
+      console.error("Binding signature invalid for signer address");
       return false;
     }
-
-    const parsed = parseBindingMessage(identityProof.message);
 
     if (parsed.header && parsed.header !== "VerbEth Key Binding v1") {
       console.error("Unexpected binding header:", parsed.header);
       return false;
     }
 
-
     if (
-      !parsed.address ||
-      getAddress(parsed.address) !== getAddress(smartAccountAddress)
+      !parsed.executorAddress ||
+      getAddress(parsed.executorAddress) !== getAddress(inputAddress)
     ) {
-      console.error("Binding message address mismatch");
+      console.error("Binding message Safe address mismatch");
       return false;
     }
 
@@ -199,7 +192,6 @@ export async function verifyIdentityProof(
     }
 
     // anti replay cross chain or cross dapp:
-    // if ctx.* is provided, require it to be present in the signed message and match.
     if (typeof ctx?.chainId === "number") {
       if (typeof parsed.chainId !== "number" || parsed.chainId !== ctx.chainId) {
         console.error("ChainId mismatch");
@@ -253,6 +245,7 @@ export async function verifyAndExtractHandshakeKeys(
 export async function verifyAndExtractHandshakeResponseKeys(
   responseEvent: HandshakeResponseLog,
   initiatorEphemeralSecretKey: Uint8Array,
+  initiatorKemSecretKey: Uint8Array,
   provider: JsonRpcProvider,
   ctx?: IdentityContext
 ): Promise<{
@@ -261,25 +254,34 @@ export async function verifyAndExtractHandshakeResponseKeys(
     identityPubKey: Uint8Array;
     signingPubKey: Uint8Array;
     ephemeralPubKey: Uint8Array;
+    kemCiphertext?: Uint8Array;
     note?: string;
   };
 }> {
-
-  const Rbytes = getBytes(responseEvent.responderEphemeralR); // hex -> Uint8Array
-  const expectedTag = computeTagFromInitiator(
-    initiatorEphemeralSecretKey,
-    Rbytes
-  );
-  if (expectedTag !== responseEvent.inResponseTo) {
-    return { isValid: false };
-  }
-
+  // Decrypt first to get kemCiphertext
   const extractedResponse = decryptAndExtractHandshakeKeys(
     responseEvent.ciphertext,
     initiatorEphemeralSecretKey
   );
 
   if (!extractedResponse) {
+    return { isValid: false };
+  }
+
+  if (!extractedResponse.kemCiphertext) {
+    return { isValid: false };
+  }
+
+  // Decapsulate and verify hybrid tag
+  const Rbytes = getBytes(responseEvent.responderEphemeralR);
+  const kemSecret = kem.decapsulate(extractedResponse.kemCiphertext, initiatorKemSecretKey);
+  const expectedTag = computeHybridTagFromInitiator(
+    initiatorEphemeralSecretKey,
+    Rbytes,
+    kemSecret
+  );
+
+  if (expectedTag !== responseEvent.inResponseTo) {
     return { isValid: false };
   }
 
@@ -301,40 +303,8 @@ export async function verifyAndExtractHandshakeResponseKeys(
       identityPubKey: extractedResponse.identityPubKey,
       signingPubKey: extractedResponse.signingPubKey,
       ephemeralPubKey: extractedResponse.ephemeralPubKey,
+      kemCiphertext: extractedResponse.kemCiphertext,
       note: extractedResponse.note,
     },
   };
-}
-
-/**
- * Verify and derive duplex topics from a long-term DH secret.
- * - Accepts either `tag` (inResponseTo) or a raw salt as KDF input.
- * - Recomputes topicOut/topicIn deterministically from the identity DH.
- * - If topicInfo is provided (from HSR), also verify the checksum.
- * - Used by the initiator after decrypting a HandshakeResponse to confirm responder’s topics.
- */
-export function verifyDerivedDuplexTopics({
-  myIdentitySecretKey,
-  theirIdentityPubKey,     
-  tag,            
-  salt,                     
-  topicInfo
-}: {
-  myIdentitySecretKey: Uint8Array;
-  theirIdentityPubKey: Uint8Array;
-  tag?: `0x${string}`;
-  salt?: Uint8Array;
-  topicInfo?: TopicInfoWire;
-}): { topics: DuplexTopics; ok?: boolean } {
-  const s = salt ?? (tag ? getBytes(tag) : undefined);
-  if (!s) throw new Error("Provide either salt or inResponseTo");
-
-  const { topicOut, topicIn, checksum } = deriveDuplexTopics(
-    myIdentitySecretKey,
-    theirIdentityPubKey,
-    s
-  );
-
-  const ok = topicInfo ? verifyDuplexTopicsChecksum(topicOut, topicIn, topicInfo.chk) : undefined;
-  return { topics: { topicOut, topicIn }, ok };
 }

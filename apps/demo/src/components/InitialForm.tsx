@@ -72,17 +72,17 @@ export function InitialForm({
                 onClick={onBackToChats}
                 className="text-sm text-gray-400 hover:text-white flex items-center gap-1 transition-colors"
               >
-                ← Back to chats
+                Go to chats
               </button>
             </>
           ) : (
             <div className="w-full text-center">
               <h2 className="text-2xl font-semibold">
-                {isAnyConnected ? "Hi, start your first chat" : "Have Your Say"}
+                {isAnyConnected ? "Hi, start your first chat" : "Send a message ina block"}
               </h2>
               <div className="mt-2">
                 <span className="text-sm text-gray-400">
-                  Uncensorable. Private by design.
+                  Private, unstoppable digital correspondence. 
                 </span>
               </div>
             </div>

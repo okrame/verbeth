@@ -1,6 +1,6 @@
 // packages/sdk/src/payload.ts
-import { IdentityProof, TopicInfoWire } from './types.js'; 
 
+import { IdentityProof } from './types.js'; 
 
 export interface EncryptedPayload {
   v: number; // version
@@ -8,17 +8,6 @@ export interface EncryptedPayload {
   n: string;   // base64 of nonce
   ct: string;  // base64 of ciphertext
   sig?: string; // base64 of detached signature over (epk || n || ct)
-}
-
-// Unified message payload
-export interface MessagePayload {
-  content: string;
-  timestamp?: number;
-  messageType?: 'text' | 'file' | 'media';
-  metadata?: Record<string, any>;
-}
-
-export interface HandshakeResponsePayload extends EncryptedPayload {
 }
 
 export interface HandshakeContent {
@@ -132,7 +121,6 @@ export function decodeUnifiedPubKeys(pubKeys: Uint8Array): {
   signingPubKey: Uint8Array;
 } | null {
   if (pubKeys.length === 64) {
-    // Legacy
     return {
       version: 0,
       identityPubKey: pubKeys.slice(0, 32),
@@ -141,7 +129,6 @@ export function decodeUnifiedPubKeys(pubKeys: Uint8Array): {
   }
   
   if (pubKeys.length === 65 && pubKeys[0] === 0x01) {
-    // V1: with versioning
     return {
       version: 1,
       identityPubKey: pubKeys.slice(1, 33),
@@ -153,127 +140,37 @@ export function decodeUnifiedPubKeys(pubKeys: Uint8Array): {
 }
 
 export interface HandshakePayload {
-  unifiedPubKeys: Uint8Array;      // 65 bytes: version + X25519 + Ed25519
+  unifiedPubKeys: Uint8Array;   
   ephemeralPubKey: Uint8Array;
   plaintextPayload: string;
 }
 
 export interface HandshakeResponseContent {
-  unifiedPubKeys: Uint8Array;      // 65 bytes: version + X25519 + Ed25519
+  unifiedPubKeys: Uint8Array;    
   ephemeralPubKey: Uint8Array;
+  kemCiphertext?: Uint8Array;   
   note?: string;
   identityProof: IdentityProof;
-  topicInfo?: TopicInfoWire; 
 }
 
-export function encodeHandshakePayload(payload: HandshakePayload): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify({
-    unifiedPubKeys: Buffer.from(payload.unifiedPubKeys).toString('base64'),
-    ephemeralPubKey: Buffer.from(payload.ephemeralPubKey).toString('base64'),
-    plaintextPayload: payload.plaintextPayload
-  }));
-}
-
-export function decodeHandshakePayload(encoded: Uint8Array): HandshakePayload {
-  const json = new TextDecoder().decode(encoded);
-  const parsed = JSON.parse(json);
-  return {
-    unifiedPubKeys: Uint8Array.from(Buffer.from(parsed.unifiedPubKeys, 'base64')),
-    ephemeralPubKey: Uint8Array.from(Buffer.from(parsed.ephemeralPubKey, 'base64')),
-    plaintextPayload: parsed.plaintextPayload
-  };
-}
-
-export function encodeHandshakeResponseContent(content: HandshakeResponseContent): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify({
-    unifiedPubKeys: Buffer.from(content.unifiedPubKeys).toString('base64'),
-    ephemeralPubKey: Buffer.from(content.ephemeralPubKey).toString('base64'),
-    note: content.note,
-    identityProof: content.identityProof,  
-    topicInfo: content.topicInfo ? {
-        out: content.topicInfo.out,
-        in: content.topicInfo.in,
-        chk: content.topicInfo.chk
-      } : undefined
-    }));
-  }
-
-export function decodeHandshakeResponseContent(encoded: Uint8Array): HandshakeResponseContent {
-  const json = new TextDecoder().decode(encoded);
-  const obj = JSON.parse(json);
-  
-  if (!obj.identityProof) {
-    throw new Error("Invalid handshake response: missing identityProof");
-  }
-  
-  return {
-    unifiedPubKeys: Uint8Array.from(Buffer.from(obj.unifiedPubKeys, 'base64')),
-    ephemeralPubKey: Uint8Array.from(Buffer.from(obj.ephemeralPubKey, 'base64')),
-    note: obj.note,
-    identityProof: obj.identityProof,
-    topicInfo: obj.topicInfo ? {
-      out: obj.topicInfo.out,
-      in: obj.topicInfo.in,
-      chk: obj.topicInfo.chk
-    } : undefined
-  };
-}
-
-/**
- * Creates HandshakePayload from separate identity keys
- */
-export function createHandshakePayload(
-  identityPubKey: Uint8Array,
-  signingPubKey: Uint8Array,
-  ephemeralPubKey: Uint8Array,
-  plaintextPayload: string
-): HandshakePayload {
-  return {
-    unifiedPubKeys: encodeUnifiedPubKeys(identityPubKey, signingPubKey),
-    ephemeralPubKey,
-    plaintextPayload
-  };
-}
-
-/**
- * Creates HandshakeResponseContent from separate identity keys
- */
 export function createHandshakeResponseContent(
   identityPubKey: Uint8Array,
   signingPubKey: Uint8Array,
   ephemeralPubKey: Uint8Array,
   note?: string,
   identityProof?: IdentityProof,
-  topicInfo?: TopicInfoWire 
+  kemCiphertext?: Uint8Array,
 ): HandshakeResponseContent {
   if (!identityProof) {
     throw new Error("Identity proof is now mandatory for handshake responses");
   }
-  
+
   return {
     unifiedPubKeys: encodeUnifiedPubKeys(identityPubKey, signingPubKey),
     ephemeralPubKey,
+    ...(kemCiphertext && { kemCiphertext }),
     note,
     identityProof,
-    topicInfo
-  };
-}
-
-/**
- * Extracts individual keys from HandshakePayload
- */
-export function extractKeysFromHandshakePayload(payload: HandshakePayload): {
-  identityPubKey: Uint8Array;
-  signingPubKey: Uint8Array;
-  ephemeralPubKey: Uint8Array;
-} | null {
-  const decoded = decodeUnifiedPubKeys(payload.unifiedPubKeys);
-  if (!decoded) return null;
-  
-  return {
-    identityPubKey: decoded.identityPubKey,
-    signingPubKey: decoded.signingPubKey,
-    ephemeralPubKey: payload.ephemeralPubKey
   };
 }
 

@@ -28,8 +28,8 @@ import {
   ERC1967Proxy__factory,
   EntryPoint__factory,
   type EntryPoint,
-  LogChainV1__factory,
-  type LogChainV1,
+  VerbethV1__factory,
+  type VerbethV1,
   TestSmartAccount__factory,
   type TestSmartAccount,
 } from "../packages/contracts/typechain-types/index.js";
@@ -67,7 +67,7 @@ describe("End-to-End Handshake and Messaging Tests", () => {
   let anvil: AnvilSetup;
   let provider: JsonRpcProvider;
   let entryPoint: EntryPoint;
-  let logChain: LogChainV1;
+  let VERBETH: VerbethV1;
   let smartAccount: TestSmartAccount;
   let deployer: Wallet;
   let smartAccountOwner: Wallet;
@@ -109,25 +109,25 @@ describe("End-to-End Handshake and Messaging Tests", () => {
 
     entryPoint = EntryPoint__factory.connect(ENTRYPOINT_ADDR, provider);
 
-    const logChainFactory = new LogChainV1__factory(deployer);
-    const logChainImpl = await logChainFactory.deploy();
-    await logChainImpl.deploymentTransaction()?.wait();
+    const VERBETHFactory = new VerbethV1__factory(deployer);
+    const VERBETHImpl = await VERBETHFactory.deploy();
+    await VERBETHImpl.deploymentTransaction()?.wait();
 
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    const initData = logChainFactory.interface.encodeFunctionData(
+    const initData = VERBETHFactory.interface.encodeFunctionData(
       "initialize",
       []
     );
 
     const proxyFactory = new ERC1967Proxy__factory(deployer);
     const proxy = await proxyFactory.deploy(
-      await logChainImpl.getAddress(),
+      await VERBETHImpl.getAddress(),
       initData
     );
     await proxy.deploymentTransaction()?.wait();
 
-    logChain = LogChainV1__factory.connect(await proxy.getAddress(), deployer);
+    VERBETH = VERBETHV1__factory.connect(await proxy.getAddress(), deployer);
 
     await new Promise((resolve) => setTimeout(resolve, 200));
 
@@ -169,15 +169,19 @@ describe("End-to-End Handshake and Messaging Tests", () => {
     await fundTx3.wait();
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // derive identity keys using the correct SDK function with full keypairs
+    // Derive identity keys with executorAddres for binding proof
+    const smartAccountAddr = await smartAccount.getAddress();
     smartAccountIdentityKeys = await deriveIdentityKeyPairWithProof(
       smartAccountOwner,
-      await smartAccount.getAddress()
+      smartAccountAddr,
+      smartAccountAddr // executorAddres = smart account address
     );
 
+    // For EOA, the executor is the EOA itself (no Safe in this test)
     eoaAccount1IdentityKeys = await deriveIdentityKeyPairWithProof(
       eoaAccount1,
-      eoaAccount1.address
+      eoaAccount1.address,
+      eoaAccount1.address // executorAddres = EOA address (acts as its own executor)
     );
 
   }, 180000);
@@ -202,17 +206,17 @@ describe("End-to-End Handshake and Messaging Tests", () => {
     smartAccountExecutor = ExecutorFactory.createDirectEntryPoint(
       await smartAccount.getAddress(),
       entryPoint.connect(bundler) as unknown as Contract,
-      await logChain.getAddress(),
+      await VERBETH.getAddress(),
       createMockSmartAccountClient(smartAccount, smartAccountOwner),
       bundler
     ) as DirectEntryPointExecutor;
 
     eoaAccount1Executor = ExecutorFactory.createEOA(
-      logChain.connect(eoaAccount1)
+      VERBETH.connect(eoaAccount1)
     ) as EOAExecutor;
 
     eoaAccount2Executor = ExecutorFactory.createEOA(
-      logChain.connect(eoaAccount2)
+      VERBETH.connect(eoaAccount2)
     ) as EOAExecutor;
   });
 
@@ -238,8 +242,8 @@ describe("End-to-End Handshake and Messaging Tests", () => {
       }
 
       // 2. Verify handshake identity
-      const handshakeFilter = logChain.filters.Handshake();
-      const handshakeEvents = await logChain.queryFilter(
+      const handshakeFilter = VERBETH.filters.Handshake();
+      const handshakeEvents = await VERBETH.queryFilter(
         handshakeFilter,
         initiateReceipt.blockNumber,
         initiateReceipt.blockNumber
@@ -281,8 +285,8 @@ describe("End-to-End Handshake and Messaging Tests", () => {
       }
 
       // 4. Verify handshake response identity
-      const responseFilter = logChain.filters.HandshakeResponse();
-      const responseEvents = await logChain.queryFilter(
+      const responseFilter = VERBETH.filters.HandshakeResponse();
+      const responseEvents = await VERBETH.queryFilter(
         responseFilter,
         respondReceipt.blockNumber,
         respondReceipt.blockNumber
@@ -298,11 +302,10 @@ describe("End-to-End Handshake and Messaging Tests", () => {
         ciphertext: responseEvent.args.ciphertext,
       };
 
-      // Derive duplex topics dal long-term DH e salt = inResponseTo
       const { topicOut: saToEoaTopic, topicIn: eoaToSaTopic } = deriveDuplex(
-        smartAccountIdentityKeys.keyPair.secretKey, // Alice (initiator) secret
-        eoaAccount1IdentityKeys.keyPair.publicKey, // Bob (responder) pub
-        responseEvent.args.inResponseTo as `0x${string}` // salt
+        smartAccountIdentityKeys.keyPair.secretKey, // Alice (initiator)
+        eoaAccount1IdentityKeys.keyPair.publicKey, // Bob (responder)
+        responseEvent.args.inResponseTo as `0x${string}`
       );
 
       const isValidResponse = await verifyHandshakeResponseIdentity(
@@ -311,7 +314,6 @@ describe("End-to-End Handshake and Messaging Tests", () => {
         ephemeralKeys.secretKey,
         provider
       );
-      console.log("debug isValidResponse:", isValidResponse);
       expect(isValidResponse).toBe(true);
 
       // 5. Smart Account sends message to EOA
@@ -319,7 +321,7 @@ describe("End-to-End Handshake and Messaging Tests", () => {
 
       const sendTx1 = await sendEncryptedMessage({
         executor: smartAccountExecutor,
-        topic: saToEoaTopic, // Initiator→Responder
+        topic: saToEoaTopic, // Initiator to Responder
         message: message1,
         recipientPubKey: eoaAccount1IdentityKeys.keyPair.publicKey,
         senderAddress: await smartAccount.getAddress(),
@@ -361,17 +363,15 @@ describe("End-to-End Handshake and Messaging Tests", () => {
       }
 
       // 7. Verify both messages can be decrypted
-      const messageFilter = logChain.filters.MessageSent();
+      const messageFilter = VERBETH.filters.MessageSent();
 
-      // Get Smart Account's message
-      const saMessageEvents = await logChain.queryFilter(
+      const saMessageEvents = await VERBETH.queryFilter(
         messageFilter,
         sendReceipt1.blockNumber,
         sendReceipt1.blockNumber
       );
 
-      // Get EOA's message
-      const eoaMessageEvents = await logChain.queryFilter(
+      const eoaMessageEvents = await VERBETH.queryFilter(
         messageFilter,
         sendReceipt2.blockNumber,
         sendReceipt2.blockNumber
@@ -399,8 +399,7 @@ describe("End-to-End Handshake and Messaging Tests", () => {
             Buffer.from(saMessageEvent!.args.ciphertext.slice(2), "hex")
           );
           saCiphertextJson = new TextDecoder().decode(bytes);
-        } catch (err) {
-        }
+        } catch (err) {}
       }
 
       const eoaDecryptedMessage = decryptMessage(
@@ -455,8 +454,8 @@ describe("End-to-End Handshake and Messaging Tests", () => {
       }
 
       // 2. Verify handshake identity
-      const handshakeFilter = logChain.filters.Handshake();
-      const handshakeEvents = await logChain.queryFilter(
+      const handshakeFilter = VERBETH.filters.Handshake();
+      const handshakeEvents = await VERBETH.queryFilter(
         handshakeFilter,
         initiateReceipt.blockNumber,
         initiateReceipt.blockNumber
@@ -498,8 +497,8 @@ describe("End-to-End Handshake and Messaging Tests", () => {
       }
 
       // 4. Verify handshake response identity
-      const responseFilter = logChain.filters.HandshakeResponse();
-      const responseEvents = await logChain.queryFilter(
+      const responseFilter = VERBETH.filters.HandshakeResponse();
+      const responseEvents = await VERBETH.queryFilter(
         responseFilter,
         respondReceipt.blockNumber,
         respondReceipt.blockNumber
@@ -576,15 +575,15 @@ describe("End-to-End Handshake and Messaging Tests", () => {
       }
 
       // 7. Verify both messages can be decrypted
-      const messageFilter = logChain.filters.MessageSent();
+      const messageFilter = VERBETH.filters.MessageSent();
 
-      const eoaMessageEvents = await logChain.queryFilter(
+      const eoaMessageEvents = await VERBETH.queryFilter(
         messageFilter,
         sendReceipt1.blockNumber,
         sendReceipt1.blockNumber
       );
 
-      const saMessageEvents = await logChain.queryFilter(
+      const saMessageEvents = await VERBETH.queryFilter(
         messageFilter,
         sendReceipt2.blockNumber,
         sendReceipt2.blockNumber

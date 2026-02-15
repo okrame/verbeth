@@ -14,13 +14,12 @@ import {
   UserOpV07,
   PackedUserOperation,
 } from "./types.js";
-import type { LogChainV1 } from "@verbeth/contracts/typechain-types";
+import type { VerbethV1 } from "@verbeth/contracts/typechain-types";
 
 function pack128x128(high: bigint, low: bigint): bigint {
   return (high << 128n) | (low & ((1n << 128n) - 1n));
 }
 
-// Unpack a packed 256-bit value into two 128-bit values
 export function split128x128(word: bigint): readonly [bigint, bigint] {
   const lowMask = (1n << 128n) - 1n;
   return [word >> 128n, word & lowMask] as const;
@@ -74,7 +73,7 @@ export interface IExecutor {
 
 // EOA Executor - Direct contract calls via wallet signer
 export class EOAExecutor implements IExecutor {
-  constructor(private contract: LogChainV1) {}
+  constructor(private contract: VerbethV1) {}
 
   async sendMessage(
     ciphertext: Uint8Array,
@@ -110,23 +109,22 @@ export class EOAExecutor implements IExecutor {
 
 // Base Smart Account Executor - Uses wallet_sendCalls for sponsored transactions
 export class BaseSmartAccountExecutor implements IExecutor {
-  private logChainInterface: Interface;
+  private verbEthInterface: Interface;
   private chainId: string;
 
   constructor(
     private baseAccountProvider: any,
-    private logChainAddress: string,
-    chainId = 8453, // Base mainnet by default
+    private verbEthAddress: string,
+    chainId = 8453,
     private paymasterServiceUrl?: string,
     private subAccountAddress?: string
   ) {
-    this.logChainInterface = new Interface([
+    this.verbEthInterface = new Interface([
       "function sendMessage(bytes calldata ciphertext, bytes32 topic, uint256 timestamp, uint256 nonce)",
       "function initiateHandshake(bytes32 recipientHash, bytes pubKeys, bytes ephemeralPubKey, bytes plaintextPayload)",
       "function respondToHandshake(bytes32 inResponseTo, bytes32 responderEphemeralR, bytes ciphertext)",
     ]);
 
-    // Convert chainId to hex
     this.chainId =
       chainId === 8453
         ? "0x2105" // Base mainnet
@@ -141,7 +139,7 @@ export class BaseSmartAccountExecutor implements IExecutor {
     timestamp: number,
     nonce: bigint
   ): Promise<any> {
-    const callData = this.logChainInterface.encodeFunctionData("sendMessage", [
+    const callData = this.verbEthInterface.encodeFunctionData("sendMessage", [
       ciphertext,
       topic,
       timestamp,
@@ -150,7 +148,7 @@ export class BaseSmartAccountExecutor implements IExecutor {
 
     return this.executeCalls([
       {
-        to: this.logChainAddress,
+        to: this.verbEthAddress,
         value: "0x0",
         data: callData,
       },
@@ -163,14 +161,14 @@ export class BaseSmartAccountExecutor implements IExecutor {
     ephemeralPubKey: string,
     plaintextPayload: Uint8Array
   ): Promise<any> {
-    const callData = this.logChainInterface.encodeFunctionData(
+    const callData = this.verbEthInterface.encodeFunctionData(
       "initiateHandshake",
       [recipientHash, pubKeys, ephemeralPubKey, plaintextPayload]
     );
 
     return this.executeCalls([
       {
-        to: this.logChainAddress,
+        to: this.verbEthAddress,
         value: "0x0",
         data: callData,
       },
@@ -182,14 +180,14 @@ export class BaseSmartAccountExecutor implements IExecutor {
     responderEphemeralR: string,
     ciphertext: Uint8Array
   ): Promise<any> {
-    const callData = this.logChainInterface.encodeFunctionData(
+    const callData = this.verbEthInterface.encodeFunctionData(
       "respondToHandshake",
       [inResponseTo, responderEphemeralR, ciphertext]
     );
 
     return this.executeCalls([
       {
-        to: this.logChainAddress,
+        to: this.verbEthAddress,
         value: "0x0",
         data: callData,
       },
@@ -200,7 +198,6 @@ export class BaseSmartAccountExecutor implements IExecutor {
     calls: Array<{ to: string; value: string; data: string }>
   ) {
     try {
-      //console.log("DEBUG: Sub account address:", this.subAccountAddress);
       const requestParams: any = {
         version: "1.0",
         chainId: this.chainId,
@@ -210,7 +207,6 @@ export class BaseSmartAccountExecutor implements IExecutor {
       //** WORK IN PROGRESS */
       if (this.subAccountAddress) {
         requestParams.from = this.subAccountAddress;
-        //console.log("DEBUG: Using sub account for transaction");
       }
 
       if (this.paymasterServiceUrl) {
@@ -219,24 +215,19 @@ export class BaseSmartAccountExecutor implements IExecutor {
             url: this.paymasterServiceUrl,
           },
         };
-        //console.log("DEBUG: Using paymaster for gas sponsorship");
       }
-
-      //console.log("DEBUG: Request params:", requestParams);
 
       const result = await this.baseAccountProvider.request({
         method: "wallet_sendCalls",
         params: [requestParams],
       });
 
-      // first 32 bytes are the actual userop hash
       if (
         typeof result === "string" &&
         result.startsWith("0x") &&
         result.length > 66
       ) {
-        const actualTxHash = "0x" + result.slice(2, 66); // Extract first 32 bytes
-        //console.log("DEBUG: extracted tx hash:", actualTxHash);
+        const actualTxHash = "0x" + result.slice(2, 66); 
         return { hash: actualTxHash };
       }
 
@@ -250,22 +241,21 @@ export class BaseSmartAccountExecutor implements IExecutor {
 
 // UserOp Executor - Account Abstraction via bundler
 export class UserOpExecutor implements IExecutor {
-  private logChainInterface: Interface;
+  private verbEthInterface: Interface;
   private smartAccountInterface: Interface;
 
   constructor(
     private smartAccountAddress: string,
-    private logChainAddress: string,
+    private verbEthAddress: string,
     private bundlerClient: any,
     private smartAccountClient: any
   ) {
-    this.logChainInterface = new Interface([
+    this.verbEthInterface = new Interface([
       "function sendMessage(bytes calldata ciphertext, bytes32 topic, uint256 timestamp, uint256 nonce)",
       "function initiateHandshake(bytes32 recipientHash, bytes pubKeys, bytes ephemeralPubKey, bytes plaintextPayload)",
       "function respondToHandshake(bytes32 inResponseTo, bytes32 responderEphemeralR, bytes ciphertext)",
     ]);
 
-    // Smart account interface for executing calls to other contracts
     this.smartAccountInterface = new Interface([
       "function execute(address target, uint256 value, bytes calldata data) returns (bytes)",
     ]);
@@ -277,7 +267,7 @@ export class UserOpExecutor implements IExecutor {
     timestamp: number,
     nonce: bigint
   ): Promise<any> {
-    const logChainCallData = this.logChainInterface.encodeFunctionData(
+    const verbEthCallData = this.verbEthInterface.encodeFunctionData(
       "sendMessage",
       [ciphertext, topic, timestamp, nonce]
     );
@@ -285,9 +275,9 @@ export class UserOpExecutor implements IExecutor {
     const smartAccountCallData = this.smartAccountInterface.encodeFunctionData(
       "execute",
       [
-        this.logChainAddress,
-        0, // value
-        logChainCallData,
+        this.verbEthAddress,
+        0, 
+        verbEthCallData,
       ]
     );
 
@@ -300,7 +290,7 @@ export class UserOpExecutor implements IExecutor {
     ephemeralPubKey: string,
     plaintextPayload: Uint8Array
   ): Promise<any> {
-    const logChainCallData = this.logChainInterface.encodeFunctionData(
+    const verbEthCallData = this.verbEthInterface.encodeFunctionData(
       "initiateHandshake",
       [recipientHash, pubKeys, ephemeralPubKey, plaintextPayload]
     );
@@ -308,9 +298,9 @@ export class UserOpExecutor implements IExecutor {
     const smartAccountCallData = this.smartAccountInterface.encodeFunctionData(
       "execute",
       [
-        this.logChainAddress,
-        0, // value
-        logChainCallData,
+        this.verbEthAddress,
+        0, 
+        verbEthCallData,
       ]
     );
 
@@ -322,7 +312,7 @@ export class UserOpExecutor implements IExecutor {
     responderEphemeralR: string,
     ciphertext: Uint8Array
   ): Promise<any> {
-    const logChainCallData = this.logChainInterface.encodeFunctionData(
+    const verbEthCallData = this.verbEthInterface.encodeFunctionData(
       "respondToHandshake",
       [inResponseTo, responderEphemeralR, ciphertext]
     );
@@ -330,9 +320,9 @@ export class UserOpExecutor implements IExecutor {
     const smartAccountCallData = this.smartAccountInterface.encodeFunctionData(
       "execute",
       [
-        this.logChainAddress,
-        0, // value
-        logChainCallData,
+        this.verbEthAddress,
+        0, 
+        verbEthCallData,
       ]
     );
 
@@ -371,9 +361,9 @@ export class UserOpExecutor implements IExecutor {
   }
 }
 
-// Direct EntryPoint Executor - for local testing (bypasses bundler)
+// Direct EntryPoint Executor (bypasses bundler for local testing)
 export class DirectEntryPointExecutor implements IExecutor {
-  private logChainInterface: Interface;
+  private verbEthInterface: Interface;
   private smartAccountInterface: Interface;
   private entryPointContract: Contract;
   private spec: AASpecVersion;
@@ -381,17 +371,16 @@ export class DirectEntryPointExecutor implements IExecutor {
   constructor(
     private smartAccountAddress: string,
     entryPointContract: Contract | BaseContract,
-    private logChainAddress: string,
+    private verbEthAddress: string,
     private smartAccountClient: any,
     private signer: Signer
   ) {
-    this.logChainInterface = new Interface([
+    this.verbEthInterface = new Interface([
       "function sendMessage(bytes calldata ciphertext, bytes32 topic, uint256 timestamp, uint256 nonce)",
       "function initiateHandshake(bytes32 recipientHash, bytes pubKeys, bytes ephemeralPubKey, bytes plaintextPayload)",
       "function respondToHandshake(bytes32 inResponseTo, bytes32 responderEphemeralR, bytes ciphertext)",
     ]);
 
-    // Smart account interface for executing calls to other contracts
     this.smartAccountInterface = new Interface([
       "function execute(address target, uint256 value, bytes calldata data) returns (bytes)",
     ]);
@@ -406,7 +395,7 @@ export class DirectEntryPointExecutor implements IExecutor {
     timestamp: number,
     nonce: bigint
   ): Promise<any> {
-    const logChainCallData = this.logChainInterface.encodeFunctionData(
+    const verbEthCallData = this.verbEthInterface.encodeFunctionData(
       "sendMessage",
       [ciphertext, topic, timestamp, nonce]
     );
@@ -414,9 +403,9 @@ export class DirectEntryPointExecutor implements IExecutor {
     const smartAccountCallData = this.smartAccountInterface.encodeFunctionData(
       "execute",
       [
-        this.logChainAddress,
+        this.verbEthAddress,
         0, // value
-        logChainCallData,
+        verbEthCallData,
       ]
     );
 
@@ -429,7 +418,7 @@ export class DirectEntryPointExecutor implements IExecutor {
     ephemeralPubKey: string,
     plaintextPayload: Uint8Array
   ): Promise<any> {
-    const logChainCallData = this.logChainInterface.encodeFunctionData(
+    const verbEthCallData = this.verbEthInterface.encodeFunctionData(
       "initiateHandshake",
       [recipientHash, pubKeys, ephemeralPubKey, plaintextPayload]
     );
@@ -437,9 +426,9 @@ export class DirectEntryPointExecutor implements IExecutor {
     const smartAccountCallData = this.smartAccountInterface.encodeFunctionData(
       "execute",
       [
-        this.logChainAddress,
-        0, // value
-        logChainCallData,
+        this.verbEthAddress,
+        0, 
+        verbEthCallData,
       ]
     );
 
@@ -451,7 +440,7 @@ export class DirectEntryPointExecutor implements IExecutor {
     responderEphemeralR: string,
     ciphertext: Uint8Array
   ): Promise<any> {
-    const logChainCallData = this.logChainInterface.encodeFunctionData(
+    const verbEthCallData = this.verbEthInterface.encodeFunctionData(
       "respondToHandshake",
       [inResponseTo, responderEphemeralR, ciphertext]
     );
@@ -459,9 +448,9 @@ export class DirectEntryPointExecutor implements IExecutor {
     const smartAccountCallData = this.smartAccountInterface.encodeFunctionData(
       "execute",
       [
-        this.logChainAddress,
-        0, // value
-        logChainCallData,
+        this.verbEthAddress,
+        0,
+        verbEthCallData,
       ]
     );
 
@@ -505,15 +494,12 @@ export class DirectEntryPointExecutor implements IExecutor {
       } as UserOpV07;
     }
 
-    // Pad bigints, bytes32 before signing
     const paddedUserOp = padBigints(userOp);
-    //console.log("Padded UserOp:", paddedUserOp);
 
     const signed = await this.smartAccountClient.signUserOperation(
       paddedUserOp
     );
 
-    // Direct submit to EntryPoint
     const tx = await this.entryPointContract.handleOps(
       [signed],
       await this.signer.getAddress()
@@ -523,20 +509,20 @@ export class DirectEntryPointExecutor implements IExecutor {
 }
 
 export class ExecutorFactory {
-  static createEOA(contract: LogChainV1): IExecutor {
+  static createEOA(contract: VerbethV1): IExecutor {
     return new EOAExecutor(contract);
   }
 
   static createBaseSmartAccount(
     baseAccountProvider: any,
-    logChainAddress: string,
+    verbEthAddress: string,
     chainId = 8453,
     paymasterServiceUrl?: string,
     subAccountAddress?: string
   ): IExecutor {
     return new BaseSmartAccountExecutor(
       baseAccountProvider,
-      logChainAddress,
+      verbEthAddress,
       chainId,
       paymasterServiceUrl,
       subAccountAddress
@@ -546,13 +532,13 @@ export class ExecutorFactory {
   static createUserOp(
     smartAccountAddress: string,
     _entryPointAddress: string,
-    logChainAddress: string,
+    verbEthAddress: string,
     bundlerClient: any,
     smartAccountClient: any
   ): IExecutor {
     return new UserOpExecutor(
       smartAccountAddress,
-      logChainAddress,
+      verbEthAddress,
       bundlerClient,
       smartAccountClient
     );
@@ -561,14 +547,14 @@ export class ExecutorFactory {
   static createDirectEntryPoint(
     smartAccountAddress: string,
     entryPointContract: Contract | BaseContract,
-    logChainAddress: string,
+    verbEthAddress: string,
     smartAccountClient: any,
     signer: Signer
   ): IExecutor {
     return new DirectEntryPointExecutor(
       smartAccountAddress,
       entryPointContract,
-      logChainAddress,
+      verbEthAddress,
       smartAccountClient,
       signer
     );
@@ -577,21 +563,21 @@ export class ExecutorFactory {
   // Auto-detect executor based on environment and signer type
   static async createAuto(
     signerOrAccount: any,
-    contract: LogChainV1,
+    contract: VerbethV1,
     options?: {
       entryPointAddress?: string;
       entryPointContract?: Contract | BaseContract;
-      logChainAddress?: string;
+      verbEthAddress?: string;
       bundlerClient?: any;
       baseAccountProvider?: any;
       chainId?: number;
       isTestEnvironment?: boolean;
     }
   ): Promise<IExecutor> {
-    if (options?.baseAccountProvider && options?.logChainAddress) {
+    if (options?.baseAccountProvider && options?.verbEthAddress) {
       return new BaseSmartAccountExecutor(
         options.baseAccountProvider,
-        options.logChainAddress,
+        options.verbEthAddress,
         options.chainId || 8453
       );
     }
@@ -599,7 +585,6 @@ export class ExecutorFactory {
     try {
       const provider = signerOrAccount?.provider || signerOrAccount;
       if (provider && typeof provider.request === "function") {
-        // test if provider supports wallet_sendCalls
         const capabilities = await provider
           .request({
             method: "wallet_getCapabilities",
@@ -607,11 +592,11 @@ export class ExecutorFactory {
           })
           .catch(() => null);
 
-        if (capabilities && options?.logChainAddress) {
+        if (capabilities && options?.verbEthAddress) {
           // if wallet supports capabilities, it's likely a Base Smart Account
           return new BaseSmartAccountExecutor(
             provider,
-            options.logChainAddress,
+            options.verbEthAddress,
             options.chainId || 8453
           );
         }
@@ -625,12 +610,12 @@ export class ExecutorFactory {
       if (
         options.isTestEnvironment &&
         options.entryPointContract &&
-        options.logChainAddress
+        options.verbEthAddress
       ) {
         return new DirectEntryPointExecutor(
           signerOrAccount.address,
           options.entryPointContract,
-          options.logChainAddress,
+          options.verbEthAddress,
           signerOrAccount,
           signerOrAccount.signer || signerOrAccount
         );
@@ -639,18 +624,17 @@ export class ExecutorFactory {
       if (
         options.bundlerClient &&
         options.entryPointAddress &&
-        options.logChainAddress
+        options.verbEthAddress
       ) {
         return new UserOpExecutor(
           signerOrAccount.address,
-          options.logChainAddress,
+          options.verbEthAddress,
           options.bundlerClient,
           signerOrAccount
         );
       }
     }
 
-    // default to EOA executor
     return new EOAExecutor(contract);
   }
 }

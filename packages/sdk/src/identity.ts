@@ -1,10 +1,10 @@
+// packages/sdk/src/utils/identity.ts
 import { sha256 } from "@noble/hashes/sha2";
 import { hkdf } from "@noble/hashes/hkdf";
-import { Signer, concat, hexlify, getBytes } from "ethers";
+import { Signer, Wallet, concat, hexlify, getBytes } from "ethers";
 import nacl from "tweetnacl";
 import { encodeUnifiedPubKeys } from "./payload.js";
 import { IdentityContext, IdentityKeyPair, IdentityProof } from "./types.js";
-
 
 const SECP256K1_N = BigInt(
   "0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"
@@ -29,8 +29,7 @@ function bigIntTo32BytesBE(x: bigint): Uint8Array {
 }
 
 /**
- * Canonicalize an Ethereum ECDSA signature (65 bytes) to low-s form.
- * This is only used as KDF input.
+ * Canonicalize an Ethereum ECDSA signature (65 bytes) to low-s form (only used as KDF input)
  */
 function canonicalizeEcdsaSig65(sig: Uint8Array): Uint8Array {
   if (sig.length !== 65) return sig;
@@ -45,19 +44,16 @@ function canonicalizeEcdsaSig65(sig: Uint8Array): Uint8Array {
   const out = new Uint8Array(65);
   out.set(r, 0);
   out.set(bigIntTo32BytesBE(sLow), 32);
-  out[64] = v; 
+  out[64] = v;
   return out;
 }
 
-function buildSeedMessage(addrLower: string, ctx?: IdentityContext): string {
+function buildSeedMessage(addrLower: string): string {
   const lines = [
     "VerbEth Identity Seed v1",
     `Address: ${addrLower}`,
     "Context: verbeth",
-    "Version: 1",
   ];
-  if (typeof ctx?.chainId === "number") lines.push(`ChainId: ${ctx.chainId}`);
-  if (ctx?.rpId) lines.push(`RpId: ${ctx.rpId}`);
   return lines.join("\n");
 }
 
@@ -65,6 +61,7 @@ function buildBindingMessage(
   addrLower: string,
   pkEd25519Hex: string,
   pkX25519Hex: string,
+  executorAddress?: string,
   ctx?: IdentityContext
 ): string {
   const lines = [
@@ -72,41 +69,55 @@ function buildBindingMessage(
     `Address: ${addrLower}`,
     `PkEd25519: ${pkEd25519Hex}`,
     `PkX25519: ${pkX25519Hex}`,
+    `ExecutorAddress: ${executorAddress ?? ""}`,
   ];
   if (typeof ctx?.chainId === "number") lines.push(`ChainId: ${ctx.chainId}`);
   if (ctx?.rpId) lines.push(`RpId: ${ctx.rpId}`);
-  lines.push("Context: verbeth", "Version: 1");
   return lines.join("\n");
 }
 
+export interface DerivedIdentityKeys {
+  /** VerbEth identity key pair (X25519 + Ed25519) */
+  keyPair: IdentityKeyPair;
+  /** Hex-encoded secp256k1 private key for session signer */
+  sessionPrivateKey: string;
+  /** Ethereum address of the session signer */
+  sessionAddress: string;
+  /** Public key hex strings for binding message */
+  pkX25519Hex: string;
+  pkEd25519Hex: string;
+}
+
+export interface DerivedIdentityWithProof extends DerivedIdentityKeys {
+  identityProof: IdentityProof;
+}
+
+// ============================================================================
+// Derive all keys from seed signature
+// ============================================================================
+
 /**
- * HKDF (RFC 5869) identity key derivation.
- * Returns a proof binding the derived keypair to the wallet address.
+ * Derive all identity keys and session key from a single seed signature.
  */
-export async function deriveIdentityKeyPairWithProof(
+export async function deriveIdentityKeys(
   signer: any,
-  address: string,
-  ctx?: IdentityContext
-): Promise<{ keyPair: IdentityKeyPair; identityProof: IdentityProof }> {
+  address: string
+): Promise<DerivedIdentityKeys> {
   const enc = new TextEncoder();
   const addrLower = address.toLowerCase();
 
-  // 1) Signature-based seed
-  const seedMessage = buildSeedMessage(addrLower, ctx);
+  const seedMessage = buildSeedMessage(addrLower);
   let seedSignature = await signer.signMessage(seedMessage);
   const seedSigBytes = canonicalizeEcdsaSig65(getBytes(seedSignature));
-  seedSignature = ""; // wipe from memory
+  seedSignature = ""; 
 
   // IKM = HKDF( canonicalSig || H(seedMessage) || "verbeth/addr:" || address_lower )
-  // salt/info are public domain labels (versioned)
   const seedSalt = enc.encode("verbeth/seed-sig-v1");
   const seedInfo = enc.encode("verbeth/ikm");
   const seedMsgHash = sha256(enc.encode(seedMessage));
-  const ikmInput = getBytes(concat([
-    seedSigBytes,
-    seedMsgHash,
-    enc.encode("verbeth/addr:" + addrLower),
-  ]));
+  const ikmInput = getBytes(
+    concat([seedSigBytes, seedMsgHash, enc.encode("verbeth/addr:" + addrLower)])
+  );
   const ikm = hkdf(sha256, ikmInput, seedSalt, seedInfo, 32);
 
   // Derive X25519 (encryption)
@@ -119,13 +130,21 @@ export async function deriveIdentityKeyPairWithProof(
   const ed25519_seed = hkdf(sha256, ikm, new Uint8Array(0), info_ed25519, 32);
   const signKeyPair = nacl.sign.keyPair.fromSeed(ed25519_seed);
 
-  // wipe intermediates without affecting returned keyPair buffers
+  // Derive secp256k1 session key for txs via Safe module
+  const info_session = enc.encode("verbeth-session-secp256k1-v1");
+  const sessionSeed = hkdf(sha256, ikm, new Uint8Array(0), info_session, 32);
+  const sessionPrivateKey = hexlify(sessionSeed);
+  const sessionWallet = new Wallet(sessionPrivateKey);
+  const sessionAddress = sessionWallet.address;
+
   try {
     seedSigBytes.fill(0);
     seedMsgHash.fill(0);
     ikmInput.fill(0);
     ikm.fill(0);
     ed25519_seed.fill(0);
+    x25519_sk.fill(0);
+    sessionSeed.fill(0);
   } catch {}
 
   const pkX25519Hex = hexlify(boxKeyPair.publicKey);
@@ -138,43 +157,98 @@ export async function deriveIdentityKeyPairWithProof(
     signingSecretKey: signKeyPair.secretKey,
   };
 
-  // 2) Second signature: binding both public keys (as before)
+  return {
+    keyPair,
+    sessionPrivateKey,
+    sessionAddress,
+    pkX25519Hex,
+    pkEd25519Hex,
+  };
+}
+
+// ============================================================================
+// Create binding proof with Safe address
+// ============================================================================
+
+/**
+ * Create the binding proof that ties the derived keys to the Safe address.
+ */
+export async function createBindingProof(
+  signer: any,
+  address: string,
+  derivedKeys: DerivedIdentityKeys,
+  executorAddress: string,
+  ctx?: IdentityContext
+): Promise<IdentityProof> {
+  const addrLower = address.toLowerCase();
+  const executorAddressLower = executorAddress.toLowerCase();
+
   const message = buildBindingMessage(
     addrLower,
-    pkEd25519Hex,
-    pkX25519Hex,
+    derivedKeys.pkEd25519Hex,
+    derivedKeys.pkX25519Hex,
+    executorAddressLower,
     ctx
   );
+
   const signature = await signer.signMessage(message);
 
   const messageRawHex = ("0x" +
     Buffer.from(message, "utf-8").toString("hex")) as `0x${string}`;
 
   return {
-    keyPair,
-    identityProof: {
-      message,
-      signature,
-      messageRawHex,
-    },
+    message,
+    signature,
+    messageRawHex,
+  };
+}
+
+
+// this is when the Safe address is known upfront
+export async function deriveIdentityKeyPairWithProof(
+  signer: any,
+  address: string,
+  executorAddress?: string,
+  ctx?: IdentityContext
+): Promise<DerivedIdentityWithProof> {
+  const derivedKeys = await deriveIdentityKeys(signer, address);
+  const identityProof = await createBindingProof(
+    signer,
+    address,
+    derivedKeys,
+    executorAddress ?? "",
+    ctx
+  );
+
+  return {
+    ...derivedKeys,
+    identityProof,
   };
 }
 
 export async function deriveIdentityWithUnifiedKeys(
   signer: Signer,
   address: string,
+  executorAddress?: string,
   ctx?: IdentityContext
 ): Promise<{
   identityProof: IdentityProof;
   identityPubKey: Uint8Array;
   signingPubKey: Uint8Array;
   unifiedPubKeys: Uint8Array;
+  sessionPrivateKey: string;
+  sessionAddress: string;
 }> {
-  const result = await deriveIdentityKeyPairWithProof(signer, address, ctx);
+  const result = await deriveIdentityKeyPairWithProof(
+    signer,
+    address,
+    executorAddress,
+    ctx
+  );
 
   const unifiedPubKeys = encodeUnifiedPubKeys(
-    result.keyPair.publicKey, // X25519
-    result.keyPair.signingPublicKey // Ed25519
+    result.keyPair.publicKey, 
+    result.keyPair.signingPublicKey
   );
 
   return {
@@ -182,5 +256,7 @@ export async function deriveIdentityWithUnifiedKeys(
     identityPubKey: result.keyPair.publicKey,
     signingPubKey: result.keyPair.signingPublicKey,
     unifiedPubKeys,
+    sessionPrivateKey: result.sessionPrivateKey,
+    sessionAddress: result.sessionAddress,
   };
 }

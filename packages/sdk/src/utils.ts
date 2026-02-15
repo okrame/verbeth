@@ -14,7 +14,6 @@ import {
   defineChain,
   type PublicClient,
 } from "viem";
-import { DuplexTopics } from "./types.js";
 
 
 export function parseBindingMessage(message: string): {
@@ -22,6 +21,7 @@ export function parseBindingMessage(message: string): {
   address?: string;
   pkEd25519?: `0x${string}`;
   pkX25519?: `0x${string}`;
+  executorAddress?: string;
   context?: string;
   version?: string;
   chainId?: number;
@@ -44,6 +44,9 @@ export function parseBindingMessage(message: string): {
     }
     if (key === "pkx25519") {
       out.pkX25519 = hexlify(val) as `0x${string}`;
+    }
+    if (key === "executoraddress" || key === "executorsafe") {
+      if (val) out.executorAddress = getAddress(val);
     }
     if (key === "context") out.context = val;
     if (key === "version") out.version = val;
@@ -105,7 +108,7 @@ export function hasERC6492Suffix(sigHex: string): boolean {
 
 /**
  * Checks if an address is a smart contract that supports EIP-1271 signature verification
- * Returns true if the address has deployed code AND implements isValidSignature function
+ * Returns true if the address has deployed code and implements isValidSignature function
  */
 export async function isSmartContract1271(
   address: string,
@@ -174,9 +177,3 @@ export async function isSmartContract1271(
     return false;
   }
 }
-
-// picks the correct outbound topic from a DuplexTopics structure
-export function pickOutboundTopic(isInitiator: boolean, t: DuplexTopics): `0x${string}` {
-  return isInitiator ? t.topicOut : t.topicIn;
-}
-

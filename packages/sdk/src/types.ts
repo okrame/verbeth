@@ -11,35 +11,18 @@ export interface LogMessage {
 export interface HandshakeLog {
   recipientHash: string;
   sender: string;
-  pubKeys: string; // Unified field (hex string of 65 bytes: version + X25519 + Ed25519)
+  pubKeys: string; // hex string of 65 bytes: version + X25519 + Ed25519
   ephemeralPubKey: string;
-  plaintextPayload: string; // always contains JSON with identityProof
+  plaintextPayload: string;
 }
 
 export interface HandshakeResponseLog {
   inResponseTo: string;
   responder: string;
   responderEphemeralR: string;
-  ciphertext: string; // Contains unified pubKeys + identityProof encrypted
+  ciphertext: string;
 }
 
-// Duplex topics structure
-export interface DuplexTopics {
-  /** Initiator to Responder */
-  topicOut: `0x${string}`;
-  /** Responder to Initiator */
-  topicIn: `0x${string}`;
-}
-
-// for HSR
-export interface TopicInfoWire {
-  out: `0x${string}`;
-  in: `0x${string}`;
-  // short checksum 
-  chk: `0x${string}`;
-}
-
-// Identity key pair structure
 export interface IdentityKeyPair {
   // X25519 keys per encryption/decryption
   publicKey: Uint8Array;
@@ -58,7 +41,6 @@ export interface IdentityContext {
   rpId?: string;
 }
 
-// Identity proof structure
 export interface IdentityProof {
   message: string;
   signature: string;

@@ -1,45 +1,33 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { Fingerprint } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Fingerprint, RotateCcw, X } from "lucide-react";
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import Safe from '@safe-global/protocol-kit'
-import SafeApiKit from '@safe-global/api-kit'
 import { useAccount, useWalletClient } from 'wagmi';
 import { useRpcClients } from './rpc.js';
-import { BrowserProvider, Wallet } from "ethers";
 import {
-  LogChainV1__factory,
-  type LogChainV1,
-} from "@verbeth/contracts/typechain-types/index.js";
-import {
-  IExecutor,
-  ExecutorFactory,
-  deriveIdentityKeyPairWithProof,
-  IdentityKeyPair,
-  IdentityProof,
   VerbethClient,
-  SafeSessionSigner
+  createVerbethClient,
 } from '@verbeth/sdk';
 import { useMessageListener } from './hooks/useMessageListener.js';
 import { useMessageProcessor } from './hooks/useMessageProcessor.js';
-import { dbService } from './services/DbService.js';
 import {
-  LOGCHAIN_SINGLETON_ADDR,
-  CONTRACT_CREATION_BLOCK,
+  VERBETH_SINGLETON_ADDR,
   Contact,
-  StoredIdentity,
-  SAFE_MODULE_ADDRESS,
-  SAFE_TX_SERVICE_URL
+  Message,
 } from './types.js';
 import { InitialForm } from './components/InitialForm.js';
 import { SideToastNotifications } from './components/SideToastNotification.js';
 import { IdentityCreation } from './components/IdentityCreation.js';
 import { CelebrationToast } from "./components/CelebrationToast.js";
+import { SessionSetupPrompt } from './components/SessionSetupPrompt.js';
 import { useChatActions } from './hooks/useChatActions.js';
-
-
+import { useSessionSetup } from './hooks/useSessionSetup.js';
+import { useInitIdentity } from './hooks/useInitIdentity.js';
+import { usePendingSessionReset } from './hooks/usePendingSessionReset.js';
+import { PinnedResetRequest } from './components/PinnedResetRequest.js';
+import { sessionStore, pendingStore } from './services/StorageAdapters.js';
 
 export default function App() {
-  const { ethers: readProvider, viem: viemClient } = useRpcClients();
+  const { ethers: readProvider, viem: viemClient, transportStatus } = useRpcClients();
   const { address, isConnected } = useAccount();
   const { data: walletClient } = useWalletClient();
 
@@ -48,148 +36,155 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [loading, setLoading] = useState(false);
-  const [currentAccount, setCurrentAccount] = useState<string | null>(null);
   const [showHandshakeForm, setShowHandshakeForm] = useState(true);
   const [handshakeToasts, setHandshakeToasts] = useState<any[]>([]);
-  const [needsIdentityCreation, setNeedsIdentityCreation] = useState(false);
   const [showToast, setShowToast] = useState(false);
-
-  const [identityKeyPair, setIdentityKeyPair] = useState<IdentityKeyPair | null>(null);
-  const [identityProof, setIdentityProof] = useState<IdentityProof | null>(null);
-  const [executor, setExecutor] = useState<IExecutor | null>(null);
-  const [contract, setContract] = useState<LogChainV1 | null>(null);
-  const [signer, setSigner] = useState<any>(null);
-  const [isActivityLogOpen, setIsActivityLogOpen] = useState(false);
-  const [activityLogs, setActivityLogs] = useState<string>("");
-
   const [verbethClient, setVerbethClient] = useState<VerbethClient | null>(null);
 
-  const logRef = useRef<HTMLTextAreaElement>(null);
+  const [healthBannerDismissed, setHealthBannerDismissed] = useState(false);
+  const [isResettingContacts, setIsResettingContacts] = useState(false);
 
-  // Identity context (domain and chain binding)
   const chainId = Number(import.meta.env.VITE_CHAIN_ID);
-  const rpId = globalThis.location?.host ?? "";
-  const identityContext = useMemo(() => ({ chainId, rpId }), [chainId, rpId]);
-
-  const addLog = useCallback((message: string) => {
-    const timestamp = new Date().toLocaleTimeString();
-    const logEntry = `[${timestamp}] ${message}\n`;
-
-    setActivityLogs(prev => {
-      const newLogs = prev + logEntry;
-
-      setTimeout(() => {
-        if (logRef.current && isActivityLogOpen) {
-          logRef.current.scrollTop = logRef.current.scrollHeight;
-        }
-      }, 0);
-
-      return newLogs;
-    });
-  }, [isActivityLogOpen]);
 
 
-  const createIdentity = useCallback(async () => {
-    // Wagmi
-    if (signer && address) {
-      setLoading(true);
-      try {
-        addLog("Deriving new identity key (2 signatures)...");
+  const {
+    identityKeyPair,
+    identityProof,
+    executor,
+    identitySigner,
+    safeAddr,
+    needsIdentityCreation,
+    identityContext,
+    // Session state
+    sessionSignerAddr,
+    needsSessionSetup,
+    isSafeDeployed,
+    isModuleEnabled,
+    setIsSafeDeployed,
+    setIsModuleEnabled,
+    setNeedsSessionSetup,
+    signingStep,
+    // Actions
+    needsModeSelection,
+    fastModeAvailable,
+    executionMode,
+    emitterAddress,
+    createIdentity,
+  } = useInitIdentity({
+    walletClient,
+    address,
+    chainId,
+    readProvider,
+    ready,
+    onIdentityCreated: () => setShowToast(true),
+    onReset: () => {
+      setSelectedContact(null);
+      setVerbethClient(null);
+    },
+  });
 
-        const result = await deriveIdentityKeyPairWithProof(signer, address, identityContext);
+  // useSessionSetup receives state from useInitIdentity
+  const {
+    sessionSignerBalance,
+    refreshSessionBalance,
+    setupSession,
+  } = useSessionSetup({
+    walletClient,
+    address,
+    safeAddr,
+    sessionSignerAddr,
+    chainId,
+    readProvider,
+    isSafeDeployed,
+    isModuleEnabled,
+    setIsSafeDeployed,
+    setIsModuleEnabled,
+    setNeedsSessionSetup,
+    executionMode,
+  });
 
-        setIdentityKeyPair(result.keyPair);
-        setIdentityProof(result.identityProof);
+  // ===========================================================================
+  // Create VerbethClient with storage adapters using factory function
+  // ===========================================================================
+  useEffect(() => {
+    const currentAddress = address;
 
-        const identityToStore: StoredIdentity = {
-          address: address,
-          keyPair: result.keyPair,
-          derivedAt: Date.now(),
-          proof: result.identityProof
-        };
+    if (executor && identityKeyPair && identityProof && identitySigner && currentAddress) {
+      const client = createVerbethClient({
+        address: currentAddress,
+        signer: identitySigner,
+        identityKeyPair,
+        identityProof,
+        executor,
+        sessionStore,
+        pendingStore,
+      });
 
-        await dbService.saveIdentity(identityToStore);
-        addLog(`New identity key derived and saved for EOA`);
-        setNeedsIdentityCreation(false);
-        setShowToast(true);
-
-      } catch (signError: any) {
-        if (signError.code === 4001) {
-          addLog("User rejected signing request.");
-        } else {
-          addLog(`✗ Failed to derive identity: ${signError.message}`);
-        }
-      } finally {
-        setLoading(false);
-      }
-      return;
+      setVerbethClient(client);
+    } else {
+      setVerbethClient(null);
     }
-
-    addLog("✗ Missing signer/provider or address for identity creation");
-  }, [signer, address, identityContext, addLog]);
+  }, [executor, identityKeyPair, identityProof, identitySigner, address]);
 
   const {
     messages,
     pendingHandshakes,
     contacts,
     addMessage,
+    updateMessageStatus,
+    removeMessage,
     removePendingHandshake,
     updateContact,
-    processEvents
+    processEvents,
+    markMessagesLost
   } = useMessageProcessor({
     readProvider,
     identityContext,
     address: address ?? undefined,
+    emitterAddress: emitterAddress ?? undefined,
     identityKeyPair,
-    onLog: addLog
+    verbethClient,
   });
+  const { hasPendingReset, pendingHandshake: pendingResetHandshake, limboAfterTimestamp } =
+    usePendingSessionReset(selectedContact, pendingHandshakes);
 
   const {
     isInitialLoading,
     isLoadingMore,
     canLoadMore,
     syncProgress,
+    syncStatus,
     loadMoreHistory,
+    health,
   } = useMessageListener({
     readProvider,
     address: address ?? undefined,
-    onLog: addLog,
-    onEventsProcessed: processEvents
+    emitterAddress: emitterAddress ?? undefined,
+    onEventsProcessed: processEvents,
+    viemClient,
+    verbethClient,
   });
 
   const {
     sendHandshake,
     acceptHandshake,
-    sendMessageToContact
+    sendMessageToContact,
+    retryFailedMessage,      
+    cancelQueuedMessage,     
+    getContactQueueStatus, 
   } = useChatActions({
     verbethClient,
-    addLog,
     updateContact: async (contact: Contact) => { await updateContact(contact); },
     addMessage: async (message: any) => { await addMessage(message); },
+    updateMessageStatus, 
+    removeMessage,       
     removePendingHandshake: async (id: string) => { await removePendingHandshake(id); },
     setSelectedContact,
     setLoading,
     setMessage,
     setRecipientAddress,
+    markMessagesLost,
   });
-
-  useEffect(() => {
-    const currentAddress = address;
-
-    if (executor && identityKeyPair && identityProof && signer && currentAddress) {
-      const client = new VerbethClient({
-        executor,
-        identityKeyPair,
-        identityProof,
-        signer,
-        address: currentAddress,
-      });
-      setVerbethClient(client);
-      addLog(`VerbethClient initialized for ${currentAddress.slice(0, 8)}...`);
-    } else {
-      setVerbethClient(null);
-    }
-  }, [executor, identityKeyPair, identityProof, signer, address, addLog]);
 
   // sync handshakeToasts
   useEffect(() => {
@@ -207,6 +202,7 @@ export default function App() {
         sender: h.sender,
         message: h.message,
         verified: h.verified,
+        isExistingContact: h.isExistingContact,
         onAccept: (msg: string) => acceptHandshake(h, msg),
         onReject: () => removePendingHandshake(h.id),
       }))
@@ -217,13 +213,44 @@ export default function App() {
     setHandshakeToasts((prev) => prev.filter((n) => n.id !== id));
   };
 
+  // Auto-reset health banner when health recovers to "ok"
+  useEffect(() => {
+    if (health.level === "ok" && healthBannerDismissed) {
+      setHealthBannerDismissed(false);
+    }
+  }, [health.level, healthBannerDismissed]);
+
+  const providerLabel = (() => {
+    switch (transportStatus) {
+      case "ws":
+        return "Alchemy WS + HTTP";
+      case "http-alchemy":
+        return "Alchemy HTTP";
+      case "http-public":
+        return "Public HTTP";
+      case "disconnected":
+        return "Disconnected";
+    }
+  })();
+
+  const syncStatusLabel = (() => {
+    switch (syncStatus.mode) {
+      case "catching_up":
+        return `Catching up (${syncStatus.pendingRanges} ranges queued)`;
+      case "retrying":
+        return `Retrying (${syncStatus.pendingRanges} ranges pending)`;
+      case "degraded":
+        return "Degraded";
+      case "synced":
+        return "Synced";
+      default:
+        return "Idle";
+    }
+  })();
+
   useEffect(() => {
     setReady(readProvider !== null && isConnected && walletClient !== undefined);
   }, [readProvider, isConnected, walletClient]);
-
-  useEffect(() => {
-    handleInitialization();
-  }, [ready, readProvider, walletClient, address]);
 
   // hide handshake form when we have contacts AND user is connected
   useEffect(() => {
@@ -231,76 +258,100 @@ export default function App() {
     setShowHandshakeForm(!ready || !currentlyConnected || contacts.length === 0 || needsIdentityCreation);
   }, [ready, isConnected, contacts.length, needsIdentityCreation]);
 
-  const handleInitialization = useCallback(async () => {
-    try {
-      if (ready && readProvider && walletClient && address) {
-        await initializeWagmiAccount();
-        return;
-      }
+  const renderMessage = (msg: Message) => {
+    const isOutgoing = msg.direction === 'outgoing';
+    const isFailed = msg.status === 'failed';
+    const isPending = msg.status === 'pending';
+    const isLost = msg.isLost === true;
+    const isInLimbo = !isLost && hasPendingReset && isOutgoing && msg.type !== 'system' && limboAfterTimestamp && msg.timestamp > limboAfterTimestamp;
 
-      if (!address) {
-        resetState();
-      }
-    } catch (error) {
-      console.error("Failed to initialize:", error);
-      addLog(`✗ Failed to initialize: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }, [ready, readProvider, walletClient, address]);
+    return (
+      <div
+        key={msg.id}
+        className={`max-w-[80%] ${isOutgoing ? 'ml-auto' : ''}`}
+      >
+        <div
+          className={`p-3 rounded-lg ${isOutgoing
+            ? isFailed
+              ? 'bg-red-900/50 border border-red-700'
+              : 'bg-blue-600'
+            : 'bg-gray-700'
+            } ${msg.type === 'system' ? 'bg-gray-800 text-gray-400 italic' : ''} 
+           ${isPending || isInLimbo || isLost ? 'opacity-60' : ''}`}
+        >
+          <p className="text-sm flex items-center gap-1">
+            {msg.type === "system" && msg.verified !== undefined && (
+              msg.verified ? (
+                <span className="relative group cursor-help">
+                  <Fingerprint size={14} className="text-green-400 inline-block mr-1" />
+                  <span className="absolute bottom-full left-0 mb-1 px-2 py-1 text-xs rounded bg-gray-900 text-green-100 border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
+                    Identity proof verified
+                  </span>
+                </span>
+              ) : (
+                <span className="relative group cursor-help">
+                  <Fingerprint size={14} className="text-red-400 inline-block mr-1" />
+                  <span className="absolute bottom-full left-0 mb-1 px-2 py-1 text-xs rounded bg-gray-900 text-red-100 border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
+                    Identity proof not verified
+                  </span>
+                </span>
+              )
+            )}
 
-  const initializeWagmiAccount = async () => {
-    const ethersProvider = new BrowserProvider(walletClient!.transport);
-    const ethersSigner = await ethersProvider.getSigner();
+            {msg.type === "system" && msg.decrypted ? (
+              <>
+                <span className="font-bold">{msg.decrypted.split(":")[0]}:</span>
+                {msg.decrypted.split(":").slice(1).join(":")}
+              </>
+            ) : (
+              msg.decrypted || msg.ciphertext
+            )}
+          </p>
 
-    const net = await ethersProvider.getNetwork();
-    if (Number(net.chainId) !== chainId) {
-      addLog(`Wrong network: connected to chain ${Number(net.chainId)}, expected ${chainId}. Please switch network in your wallet.`);
-      return;
-    }
+          <div className="flex justify-between items-center mt-1">
+            <span className="text-xs text-gray-300">
+              {new Date(msg.timestamp).toLocaleTimeString()}
+            </span>
+            {isOutgoing && (
+              <span className="text-xs" title={isLost ? 'Undelivered' : `Status: ${msg.status}`}>
+                {isLost ? '✗' :
+                  isInLimbo ? '✓' :
+                    msg.status === 'confirmed' ? '✓✓' :
+                      msg.status === 'failed' ? '✗' :
+                        msg.status === 'pending' ? '✓' : '?'}
+              </span>
+            )}
+          </div>
+        </div>
 
-    const contractInstance = LogChainV1__factory.connect(LOGCHAIN_SINGLETON_ADDR, ethersSigner as any);
-    const executorInstance = ExecutorFactory.createEOA(contractInstance);
-
-    setSigner(ethersSigner);
-    setExecutor(executorInstance);
-    setContract(contractInstance);
-
-    if (address !== currentAccount) {
-      console.log(`EOA connected: ${address!.slice(0, 8)}...`);
-      await switchToAccount(address!);
-    }
+        {/* Failed message actions */}
+        {isFailed && isOutgoing && (
+          <div className="flex items-center justify-end gap-2 mt-1 text-xs">
+            <span className="text-red-400">Failed to send</span>
+            <button
+              onClick={() => retryFailedMessage(msg.id)}
+              className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors"
+              title="Send again"
+            >
+              <RotateCcw size={12} />
+              <span>Retry</span>
+            </button>
+            <button
+              onClick={() => cancelQueuedMessage(msg.id)}
+              className="flex items-center gap-1 text-gray-400 hover:text-gray-300 transition-colors"
+              title="Delete message"
+            >
+              <X size={12} />
+              <span>Delete</span>
+            </button>
+          </div>
+        )}
+      </div>
+    );
   };
 
-  const switchToAccount = async (newAddress: string) => {
-    setIdentityKeyPair(null);
-    setIdentityProof(null);
-    setSelectedContact(null);
-
-    await dbService.switchAccount(newAddress);
-    setCurrentAccount(newAddress);
-
-    const storedIdentity = await dbService.getIdentity(newAddress);
-    if (storedIdentity) {
-      setIdentityKeyPair(storedIdentity.keyPair);
-      setIdentityProof(storedIdentity.proof ?? null);
-      setNeedsIdentityCreation(false);
-      addLog(`Identity keys restored from database`);
-    } else {
-      setNeedsIdentityCreation(true);
-    }
-  };
-
-  const resetState = () => {
-    setCurrentAccount(null);
-    setIdentityKeyPair(null);
-    setIdentityProof(null);
-    setSelectedContact(null);
-    setSigner(null);
-    setContract(null);
-    setExecutor(null);
-    setNeedsIdentityCreation(false);
-    setVerbethClient(null);
-  };
-
+  // Get queue status for selected contact
+  const queueStatus = selectedContact ? getContactQueueStatus(selectedContact) : null;
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -330,10 +381,10 @@ export default function App() {
           {/* LEFT: title */}
           <div className="flex flex-col items-start">
             <h1 className="text-2xl sm:text-4xl font-extrabold leading-tight">
-              Unstoppable Chat
+              Verbeth
             </h1>
             <div className="text-xs text-gray-400 pl-0.5 mt-1">
-              powered by Verbeth
+              powered by the world computer
             </div>
           </div>
           {/* RIGHT: auth buttons - EOA only */}
@@ -366,11 +417,29 @@ export default function App() {
 
             <CelebrationToast show={showToast} onClose={() => setShowToast(false)} />
 
-            {needsIdentityCreation ? (
+            {/* Session Setup Prompt - show when wallet connected but session not ready */}
+            {isConnected && sessionSignerAddr && !needsIdentityCreation && (needsSessionSetup || (sessionSignerBalance !== null && sessionSignerBalance < BigInt(0.0001 * 1e18))) && (
+              <SessionSetupPrompt
+                sessionSignerAddr={sessionSignerAddr}
+                sessionSignerBalance={sessionSignerBalance}
+                needsSessionSetup={needsSessionSetup}
+                isSafeDeployed={isSafeDeployed}
+                isModuleEnabled={isModuleEnabled}
+                onSetupSession={setupSession}
+                onRefreshBalance={refreshSessionBalance}
+                loading={loading}
+              />
+            )}
+
+            {(needsIdentityCreation || needsModeSelection) ? (
               <IdentityCreation
                 loading={loading}
                 onCreateIdentity={createIdentity}
-                address={address || "Not connected"}
+                address={address ?? ''}
+                signingStep={signingStep}
+                needsModeSelection={needsModeSelection}
+                fastModeAvailable={fastModeAvailable}
+                chainId={chainId}
               />
             ) : showHandshakeForm ? (
               <InitialForm
@@ -473,57 +542,8 @@ export default function App() {
                               );
                             })
                             .sort((a, b) => a.timestamp - b.timestamp)
-                            .map((msg) => (
-                              <div
-                                key={msg.id}
-                                className={`max-w-[80%] p-3 rounded-lg ${msg.direction === 'outgoing'
-                                  ? 'ml-auto bg-blue-600'
-                                  : 'bg-gray-700'
-                                  } ${msg.type === 'system' ? 'bg-gray-800 text-gray-400 italic' : ''}`}
-                              >
-                                <p className="text-sm flex items-center gap-1">
-                                  {msg.type === "system" && msg.verified !== undefined && (
-                                    msg.verified ? (
-                                      <span className="relative group cursor-help">
-                                        <Fingerprint size={14} className="text-green-400 inline-block mr-1" />
-                                        <span className="absolute bottom-full left-0 mb-1 px-2 py-1 text-xs rounded bg-gray-900 text-green-100 border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
-                                          Identity proof verified
-                                        </span>
-                                      </span>
-                                    ) : (
-                                      <span className="relative group cursor-help">
-                                        <Fingerprint size={14} className="text-red-400 inline-block mr-1" />
-                                        <span className="absolute bottom-full left-0 mb-1 px-2 py-1 text-xs rounded bg-gray-900 text-red-100 border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
-                                          Identity proof not verified
-                                        </span>
-                                      </span>
-                                    )
-                                  )}
+                            .map(renderMessage)}
 
-                                  {msg.type === "system" && msg.decrypted ? (
-                                    <>
-                                      <span className="font-bold">{msg.decrypted.split(":")[0]}:</span>
-                                      {msg.decrypted.split(":").slice(1).join(":")}
-                                    </>
-                                  ) : (
-                                    msg.decrypted || msg.ciphertext
-                                  )}
-                                </p>
-
-                                <div className="flex justify-between items-center mt-1">
-                                  <span className="text-xs text-gray-300">
-                                    {new Date(msg.timestamp).toLocaleTimeString()}
-                                  </span>
-                                  {msg.direction === 'outgoing' && (
-                                    <span className="text-xs" title={`Status: ${msg.status}`}>
-                                      {msg.status === 'confirmed' ? '✓✓' :
-                                        msg.status === 'failed' ? '✗' :
-                                          msg.status === 'pending' ? '✓' : '?'}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
                           {messages.filter(m => {
                             const currentAddress = address;
                             if (!currentAddress || !selectedContact?.address) return false;
@@ -533,12 +553,36 @@ export default function App() {
                               (selectedContact.topicOutbound && m.topic === selectedContact.topicOutbound) ||
                               (selectedContact.topicInbound && m.topic === selectedContact.topicInbound)
                             );
-                          }).length === 0 && (
+                          }).length === 0 && !hasPendingReset && (
                               <p className="text-gray-400 text-sm text-center py-8">
                                 No messages yet. {selectedContact.status === 'established' ? 'Start the conversation!' : 'Waiting for handshake completion.'}
                               </p>
                             )}
+
+                          {hasPendingReset && pendingResetHandshake && (
+                            <PinnedResetRequest
+                              handshake={pendingResetHandshake}
+                              onAccept={acceptHandshake}
+                            />
+                          )}
                         </div>
+
+                        {/* Queue Status Indicator */}
+                        {queueStatus && queueStatus.queueLength > 0 && (
+                          <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-yellow-900/30 border border-yellow-800 rounded text-xs text-yellow-300">
+                            {queueStatus.isProcessing ? (
+                              <>
+                                <span className="animate-spin w-3 h-3 border border-yellow-400 border-t-transparent rounded-full"></span>
+                                <span>Sending {queueStatus.queueLength} message{queueStatus.queueLength > 1 ? 's' : ''}...</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>📨</span>
+                                <span>{queueStatus.queueLength} message{queueStatus.queueLength > 1 ? 's' : ''} queued</span>
+                              </>
+                            )}
+                          </div>
+                        )}
 
                         {/* Message Input */}
                         {selectedContact.status === 'established' && selectedContact.identityPubKey && (
@@ -584,85 +628,39 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Activity Log + Debug Info */}
-                {ready && (
-                  <div className="absolute bottom-[10px] left-0 right-0 w-full flex flex-col gap-1 sm:gap-2 px-1 sm:px-2 md:px-4 pointer-events-none z-50">
-                    <div className="max-w-6xl w-full pointer-events-auto">
-                      <div
-                        className="flex justify-between items-center p-2 sm:p-4 cursor-pointer hover:bg-gray-900/50 transition-colors"
-                        onClick={() => setIsActivityLogOpen(!isActivityLogOpen)}
-                      >
-                        <div className="flex items-center gap-2 sm:gap-4">
-                          <div className="flex items-center gap-1 sm:gap-2">
-                            <h2 className="text-sm sm:text-lg font-semibold">Activity Log</h2>
-                            <span className="text-gray-400 text-sm">
-                              {isActivityLogOpen ? '▼' : '▶'}
-                            </span>
-                          </div>
-                          {canLoadMore && ready && isActivityLogOpen && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                loadMoreHistory();
-                              }}
-                              disabled={isLoadingMore}
-                              className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded flex items-center gap-2"
-                            >
-                              {isLoadingMore ? (
-                                <>
-                                  <div className="animate-spin w-3 h-3 border border-gray-400 border-t-transparent rounded-full"></div>
-                                  <span>Loading blocks...</span>
-                                </>
-                              ) : (
-                                <>
-                                  <span>📂</span>
-                                  <span>Load More History</span>
-                                </>
-                              )}
-                            </button>
-                          )}
-                        </div>
-                        {(isInitialLoading || isLoadingMore) && isActivityLogOpen && (
-                          <div className="flex items-center gap-2 text-sm text-blue-400">
-                            <div className="animate-spin w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full"></div>
-                            <span>{isInitialLoading ? 'Initial sync...' : 'Loading more...'}</span>
-                            {syncProgress && (
-                              <span>({syncProgress.current}/{syncProgress.total})</span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      <div
-                        className={`overflow-hidden transition-all duration-300 ease-in-out ${isActivityLogOpen ? 'max-h-40 opacity-100' : 'max-h-0 opacity-0'}`}
-                      >
-                        <div className="p-4 pt-0">
-                          <textarea
-                            ref={logRef}
-                            readOnly
-                            value={activityLogs}
-                            className="w-full h-32 bg-gray-900 border border-gray-700 rounded p-2 text-sm font-mono text-gray-300 resize-none"
-                            placeholder="Activity will appear here..."
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {!isActivityLogOpen && (
-                      <div className="w-full bg-black/80 backdrop-blur-sm p-2 sm:p-3 text-xs text-gray-500 space-y-1 h-fit">
-                        <p>Contract: {LOGCHAIN_SINGLETON_ADDR}</p>
-                        <p>Network: Base (Chain ID: {chainId})</p>
-                        <p>Contract creation block: {CONTRACT_CREATION_BLOCK}</p>
-                        <p>Status: {ready ? '🟢 Ready' : '🔴 Not Ready'} {(isInitialLoading || isLoadingMore) ? '⏳ Loading' : ''}</p>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {ready && health.level === "warning" && !healthBannerDismissed && (
+        <div className="fixed bottom-[120px] sm:bottom-[100px] left-0 right-0 z-50 px-2 sm:px-4">
+          <div className="max-w-6xl mx-auto flex items-center gap-3 px-4 py-2 bg-amber-900/80 border border-amber-700 rounded-lg text-amber-200 text-sm backdrop-blur-sm">
+            <span className="flex-1">{health.message}</span>
+            <button
+              onClick={() => setHealthBannerDismissed(true)}
+              className="text-amber-400 hover:text-amber-200 font-bold px-2"
+              aria-label="Dismiss"
+            >
+              &times;
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ready && (
+        <div className="fixed bottom-0 left-0 right-0 bg-black/80 backdrop-blur-sm p-2 sm:p-3 text-xs text-gray-500 space-y-1 z-50">
+          <p>Contract: {VERBETH_SINGLETON_ADDR}</p>
+          <p>Network: Base ({chainId}) · {providerLabel}</p>
+          <p>Status: {ready ? '🟢 Ready' : '🔴 Not Ready'} {(isInitialLoading || isLoadingMore) ? '⏳ Loading' : ''}</p>
+          <p>
+            Sync: {syncStatusLabel}
+            {syncStatus.lastError ? ` · Last error: ${syncStatus.lastError}` : ""}
+            {" · Health: "}{health.level === "ok" ? "OK" : "Warning"}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

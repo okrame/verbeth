@@ -18,16 +18,17 @@ import {
   deriveIdentityKeyPairWithProof,
   verifyHandshakeIdentity,
   verifyHandshakeResponseIdentity,
-  computeTagFromInitiator,
+  computeHybridTagFromInitiator,
   decodeUnifiedPubKeys,
+  kem,
 } from "../packages/sdk/src/index.js";
 
 import {
   ERC1967Proxy__factory,
   EntryPoint__factory,
   type EntryPoint,
-  LogChainV1__factory,
-  type LogChainV1,
+  VerbethV1__factory,
+  type VerbethV1,
   TestSmartAccount__factory,
   type TestSmartAccount,
 } from "../packages/contracts/typechain-types/index.js";
@@ -40,7 +41,7 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
   let anvil: AnvilSetup;
   let provider: JsonRpcProvider;
   let entryPoint: EntryPoint;
-  let logChain: LogChainV1;
+  let verbEth: VerbethV1;
   let testSmartAccount: TestSmartAccount;
   let responderSmartAccount: TestSmartAccount;
   let executor: DirectEntryPointExecutor;
@@ -87,24 +88,24 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
 
     entryPoint = EntryPoint__factory.connect(ENTRYPOINT_ADDR, provider);
 
-    const logChainFactory = new LogChainV1__factory(deployer);
-    const logChainImpl = await logChainFactory.deploy();
-    await logChainImpl.deploymentTransaction()?.wait();
+    const verbEthFactory = new VerbethV1__factory(deployer);
+    const verbEthImpl = await verbEthFactory.deploy();
+    await verbEthImpl.deploymentTransaction()?.wait();
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    const initData = logChainFactory.interface.encodeFunctionData(
+    const initData = verbEthFactory.interface.encodeFunctionData(
       "initialize",
       []
     );
 
     const proxyFactory = new ERC1967Proxy__factory(deployer);
     const proxy = await proxyFactory.deploy(
-      await logChainImpl.getAddress(),
+      await verbEthImpl.getAddress(),
       initData
     );
     await proxy.deploymentTransaction()?.wait();
 
-    logChain = LogChainV1__factory.connect(await proxy.getAddress(), deployer);
+    verbEth = VerbethV1__factory.connect(await proxy.getAddress(), deployer);
 
     await new Promise((resolve) => setTimeout(resolve, 200));
 
@@ -144,14 +145,19 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
     await fundTx2.wait();
     await new Promise((resolve) => setTimeout(resolve, 100));
 
+    // Derive identity keys with executorAddres (3rd param) for binding proof
+    const testSmartAccountAddr = await testSmartAccount.getAddress();
     ownerIdentityKeys = await deriveIdentityKeyPairWithProof(
       smartAccountOwner,
-      await testSmartAccount.getAddress()
+      testSmartAccountAddr,
+      testSmartAccountAddr // executorAddres = smart account address
     );
 
+    const responderSmartAccountAddr = await responderSmartAccount.getAddress();
     responderIdentityKeys = await deriveIdentityKeyPairWithProof(
       responderOwner,
-      await responderSmartAccount.getAddress()
+      responderSmartAccountAddr,
+      responderSmartAccountAddr // executorAddres = smart account address
     );
     await new Promise((resolve) => setTimeout(resolve, 300));
   }, 180000);
@@ -189,7 +195,7 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
     executor = ExecutorFactory.createDirectEntryPoint(
       await testSmartAccount.getAddress(),
       entryPoint.connect(initiatorBundler) as unknown as Contract,
-      await logChain.getAddress(),
+      await verbEth.getAddress(),
       createMockSmartAccountClient(testSmartAccount, smartAccountOwner),
       initiatorBundler // Use initiatorBundler
     ) as DirectEntryPointExecutor;
@@ -197,7 +203,7 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
     responderExecutor = ExecutorFactory.createDirectEntryPoint(
       await responderSmartAccount.getAddress(),
       entryPoint.connect(responderBundler) as unknown as Contract,
-      await logChain.getAddress(),
+      await verbEth.getAddress(),
       createMockSmartAccountClient(responderSmartAccount, responderOwner),
       responderBundler // Use responderBundler
     ) as DirectEntryPointExecutor;
@@ -229,8 +235,8 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
 
     await waitForNonceSync();
 
-    const handshakeFilter = logChain.filters.Handshake();
-    const handshakeEvents = await logChain.queryFilter(
+    const handshakeFilter = verbEth.filters.Handshake();
+    const handshakeEvents = await verbEth.queryFilter(
       handshakeFilter,
       initiateReceipt.blockNumber,
       initiateReceipt.blockNumber
@@ -258,13 +264,13 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
     const respondReceipt = await respondTx.tx.wait();
     expect(respondReceipt.status).toBe(1);
 
-    const responseFilter = logChain.filters.HandshakeResponse();
+    const responseFilter = verbEth.filters.HandshakeResponse();
 
     while ((await provider.getBlockNumber()) < respondReceipt.blockNumber) {
       await new Promise((r) => setTimeout(r, 10));
     }
 
-    const responseEvents = await logChain.queryFilter(
+    const responseEvents = await verbEth.queryFilter(
       responseFilter,
       respondReceipt.blockNumber,
       respondReceipt.blockNumber
@@ -325,8 +331,8 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
     // Now respond to each handshake ONE AT A TIME
     const responseReceipts: any[] = [];
     for (let i = 0; i < handshakeData.length; i++) {
-      const handshakeFilter = logChain.filters.Handshake();
-      const handshakeEventsForItem = await logChain.queryFilter(
+      const handshakeFilter = verbEth.filters.Handshake();
+      const handshakeEventsForItem = await verbEth.queryFilter(
         handshakeFilter,
         handshakeData[i].initiateReceipt.blockNumber,
         handshakeData[i].initiateReceipt.blockNumber
@@ -364,7 +370,7 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       responseReceipts.push(respondReceipt);
     }
 
-    const responseFilter = logChain.filters.HandshakeResponse();
+    const responseFilter = verbEth.filters.HandshakeResponse();
     const fromBlock = responseReceipts[0].blockNumber;
     const toBlock = responseReceipts[responseReceipts.length - 1].blockNumber;
 
@@ -372,7 +378,7 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       await new Promise((r) => setTimeout(r, 10));
     }
 
-    const responseEvents = await logChain.queryFilter(
+    const responseEvents = await verbEth.queryFilter(
       responseFilter,
       fromBlock,
       toBlock
@@ -410,8 +416,8 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
     const respondReceipt = await respondTx.tx.wait();
     expect(respondReceipt.status).toBe(1);
 
-    const responseFilter = logChain.filters.HandshakeResponse();
-    const responseEvents = await logChain.queryFilter(
+    const responseFilter = verbEth.filters.HandshakeResponse();
+    const responseEvents = await verbEth.queryFilter(
       responseFilter,
       respondReceipt.blockNumber,
       respondReceipt.blockNumber
@@ -456,8 +462,8 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       }
       await new Promise((resolve) => setTimeout(resolve, 200));
 
-      const handshakeFilter = logChain.filters.Handshake();
-      const events = await logChain.queryFilter(
+      const handshakeFilter = verbEth.filters.Handshake();
+      const events = await verbEth.queryFilter(
         handshakeFilter,
         initiateReceipt.blockNumber,
         initiateReceipt.blockNumber
@@ -515,8 +521,8 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
     const initiateReceipt = await initiateHandshakeTx.wait();
     expect(initiateReceipt.status).toBe(1);
 
-    const handshakeFilter = logChain.filters.Handshake();
-    const handshakeEvents = await logChain.queryFilter(
+    const handshakeFilter = verbEth.filters.Handshake();
+    const handshakeEvents = await verbEth.queryFilter(
       handshakeFilter,
       initiateReceipt.blockNumber,
       initiateReceipt.blockNumber
@@ -556,8 +562,8 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
 
     const initiateReceipt = await initiateHandshakeTx.wait();
 
-    const handshakeFilter = logChain.filters.Handshake();
-    const handshakeEvents = await logChain.queryFilter(
+    const handshakeFilter = verbEth.filters.Handshake();
+    const handshakeEvents = await verbEth.queryFilter(
       handshakeFilter,
       initiateReceipt.blockNumber,
       initiateReceipt.blockNumber
@@ -587,8 +593,8 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       await new Promise((r) => setTimeout(r, 10));
     }
 
-    const responseFilter = logChain.filters.HandshakeResponse();
-    const responseEvents = await logChain.queryFilter(
+    const responseFilter = verbEth.filters.HandshakeResponse();
+    const responseEvents = await verbEth.queryFilter(
       responseFilter,
       respondReceipt.blockNumber,
       respondReceipt.blockNumber
@@ -643,8 +649,8 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
     const initiateReceipt = await initiateHandshakeTx.wait();
     expect(initiateReceipt.status).toBe(1);
 
-    const handshakeFilter = logChain.filters.Handshake();
-    const handshakeEvents = await logChain.queryFilter(
+    const handshakeFilter = verbEth.filters.Handshake();
+    const handshakeEvents = await verbEth.queryFilter(
       handshakeFilter,
       initiateReceipt.blockNumber,
       initiateReceipt.blockNumber
@@ -698,8 +704,8 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       }
       await new Promise((resolve) => setTimeout(resolve, 200));
 
-      const handshakeFilter = logChain.filters.Handshake();
-      const handshakeEvents = await logChain.queryFilter(
+      const handshakeFilter = verbEth.filters.Handshake();
+      const handshakeEvents = await verbEth.queryFilter(
         handshakeFilter,
         initiateReceipt.blockNumber,
         initiateReceipt.blockNumber
@@ -739,8 +745,8 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       }
       await new Promise((resolve) => setTimeout(resolve, 200));
 
-      const responseFilter = logChain.filters.HandshakeResponse();
-      const responseEvents = await logChain.queryFilter(
+      const responseFilter = verbEth.filters.HandshakeResponse();
+      const responseEvents = await verbEth.queryFilter(
         responseFilter,
         respondReceipt.blockNumber,
         respondReceipt.blockNumber

@@ -2,7 +2,7 @@
   "name": "@verbeth/contracts",
   "version": "0.1.0",
   "private": false,
-  "main": "contracts/LogChainV1.sol",
+  "main": "contracts/VerbethV1.sol",
   "devDependencies": {
     "@account-abstraction/contracts": "^0.8.0",
     "@nomicfoundation/hardhat-ignition": "^0.15.10",
@@ -26,10 +26,12 @@
   "scripts": {
     "build": "hardhat compile",
     "test": "hardhat test",
-    "deploy:local": "hardhat ignition deploy ignition/modules/LogChain.ts --network localhost --strategy create2",
-    "deploy:testnet": "hardhat ignition deploy ignition/modules/LogChain.ts --network baseSepolia --strategy create2",
-    "deploy:mainnet": "hardhat ignition deploy ignition/modules/LogChain.ts --network base --strategy create2",
-    "deploy:mainnet:validator": "hardhat ignition deploy ignition/modules/UniversalSigValidator.ts --network base --strategy create2"
+    "deploy:local": "hardhat ignition deploy ignition/modules/Verbeth.ts --network localhost --strategy create2",
+    "deploy:testnet": "hardhat ignition deploy ignition/modules/Verbeth.ts --network baseSepolia --strategy create2",
+    "deploy:mainnet": "hardhat ignition deploy ignition/modules/Verbeth.ts --network base --strategy create2",
+    "deploy:mainnet:validator": "hardhat ignition deploy ignition/modules/UniversalSigValidator.ts --network base --strategy create2",
+    "deploy:mainnet:session": "hardhat ignition deploy ignition/modules/SessionModule.ts --network base --strategy create2",
+    "deploy:testnet:session": "hardhat ignition deploy ignition/modules/SessionModule.ts --network baseSepolia --strategy create2"
   },
   "exports": {
     "./typechain-types/*": "./typechain-types/*",

@@ -1,113 +1,32 @@
 import { describe, it, expect } from "vitest";
 import nacl from "tweetnacl";
 import {
-  encryptMessage,
-  decryptMessage,
   encryptStructuredPayload,
   decryptStructuredPayload,
   decryptHandshakeResponse,
   decryptAndExtractHandshakeKeys,
-  deriveDuplexTopics,
-  verifyDuplexTopicsChecksum,
+  computeHybridTagFromResponder,
+  computeHybridTagFromInitiator,
 } from "../src/crypto.js";
 import {
-  HandshakePayload,
-  encodeHandshakePayload,
-  decodeHandshakePayload,
-  encodeHandshakeResponseContent,
-  decodeHandshakeResponseContent,
-  MessagePayload,
   HandshakeResponseContent,
   encodeUnifiedPubKeys,
-  extractKeysFromHandshakePayload,
   extractKeysFromHandshakeResponse,
   parseHandshakeKeys,
 } from "../src/payload.js";
-import { IdentityProof } from "../src/types.js";
-import type { LogMessage } from "../src/types.js";
 
-function randomTagHex(): `0x${string}` {
-  const b = nacl.randomBytes(32);
-  return ("0x" + Buffer.from(b).toString("hex")) as `0x${string}`;
+// Local type for test payloads
+interface MessagePayload {
+  content: string;
+  timestamp?: number;
+  messageType?: 'text' | 'file' | 'media';
+  metadata?: Record<string, any>;
 }
+import { createMockIdentityProof } from "./helpers.js";
 
 describe("Encryption/Decryption", () => {
-  describe("Message Encryption", () => {
-    it("should encrypt and decrypt a message successfully", () => {
-      const senderBoxKey = nacl.box.keyPair();
-      const senderSignKey = nacl.sign.keyPair();
-      const recipientKey = nacl.box.keyPair();
-      const message = "Hello VerbEth!";
-
-      const encrypted = encryptMessage(
-        message,
-        recipientKey.publicKey,
-        senderBoxKey.secretKey,
-        senderBoxKey.publicKey,
-        senderSignKey.secretKey,
-        senderSignKey.publicKey
-      );
-
-      const decrypted = decryptMessage(
-        encrypted,
-        recipientKey.secretKey,
-        senderSignKey.publicKey
-      );
-      expect(decrypted).toBe(message);
-    });
-
-    it("should return null on decryption with wrong recipient key", () => {
-      const senderBoxKey = nacl.box.keyPair();
-      const senderSignKey = nacl.sign.keyPair();
-      const recipientKey = nacl.box.keyPair();
-      const wrongKey = nacl.box.keyPair();
-      const message = "Sensitive Info";
-
-      const encrypted = encryptMessage(
-        message,
-        recipientKey.publicKey,
-        senderBoxKey.secretKey,
-        senderBoxKey.publicKey,
-        senderSignKey.secretKey,
-        senderSignKey.publicKey
-      );
-
-      const decrypted = decryptMessage(
-        encrypted,
-        wrongKey.secretKey,
-        senderSignKey.publicKey
-      );
-      expect(decrypted).toBeNull();
-    });
-
-    it("should fail to decrypt if payload is tampered", () => {
-      const senderBoxKey = nacl.box.keyPair();
-      const senderSignKey = nacl.sign.keyPair();
-      const recipientKey = nacl.box.keyPair();
-      const message = "tamper test";
-
-      let encrypted = encryptMessage(
-        message,
-        recipientKey.publicKey,
-        senderBoxKey.secretKey,
-        senderBoxKey.publicKey,
-        senderSignKey.secretKey,
-        senderSignKey.publicKey
-      );
-
-      const parsed = JSON.parse(encrypted);
-      parsed.ct = Buffer.from("00".repeat(32), "hex").toString("base64");
-      const tampered = JSON.stringify(parsed);
-
-      const decrypted = decryptMessage(
-        tampered,
-        recipientKey.secretKey,
-        senderSignKey.publicKey
-      );
-      expect(decrypted).toBeNull();
-    });
-
-    it("should work with the structured message format", () => {
+  describe("Structured Payload Encryption", () => {
+    it("should encrypt and decrypt structured message format", () => {
       const senderBoxKey = nacl.box.keyPair();
       const senderSignKey = nacl.sign.keyPair();
       const recipientKey = nacl.box.keyPair();
@@ -137,22 +56,6 @@ describe("Encryption/Decryption", () => {
       expect(decrypted).toEqual(messagePayload);
     });
 
-    it("should encrypt without signing keys (optional parameters)", () => {
-      const senderBoxKey = nacl.box.keyPair();
-      const recipientKey = nacl.box.keyPair();
-      const message = "No signature test";
-
-      const encrypted = encryptMessage(
-        message,
-        recipientKey.publicKey,
-        senderBoxKey.secretKey,
-        senderBoxKey.publicKey
-      );
-
-      const decrypted = decryptMessage(encrypted, recipientKey.secretKey);
-      expect(decrypted).toBe(message);
-    });
-
     it("should encrypt structured payload without signing keys", () => {
       const senderBoxKey = nacl.box.keyPair();
       const recipientKey = nacl.box.keyPair();
@@ -178,6 +81,33 @@ describe("Encryption/Decryption", () => {
 
       expect(decrypted).toEqual(messagePayload);
     });
+
+    it("should return null on decryption with wrong recipient key", () => {
+      const senderBoxKey = nacl.box.keyPair();
+      const recipientKey = nacl.box.keyPair();
+      const wrongKey = nacl.box.keyPair();
+
+      const messagePayload: MessagePayload = {
+        content: "Test message",
+        timestamp: Date.now(),
+        messageType: "text",
+      };
+
+      const encrypted = encryptStructuredPayload(
+        messagePayload,
+        recipientKey.publicKey,
+        senderBoxKey.secretKey,
+        senderBoxKey.publicKey
+      );
+
+      const decrypted = decryptStructuredPayload(
+        encrypted,
+        wrongKey.secretKey,
+        (obj) => obj as MessagePayload
+      );
+
+      expect(decrypted).toBeNull();
+    });
   });
 
   describe("Handshake Response Encryption", () => {
@@ -187,18 +117,12 @@ describe("Encryption/Decryption", () => {
 
       const identityPubKey = new Uint8Array(32).fill(3);
       const signingPubKey = new Uint8Array(32).fill(7);
-      const unifiedPubKeys = encodeUnifiedPubKeys(
-        identityPubKey,
-        signingPubKey
-      );
+      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
 
       const ephemeralPubKey = new Uint8Array(32).fill(4);
       const note = "here is my response";
 
-      const identityProof: IdentityProof = {
-        message: "VerbEth Identity Key Identity v1\nAddress: 0x1234...",
-        signature: "0x" + "1".repeat(130),
-      };
+      const identityProof = createMockIdentityProof();
 
       const responseContent: HandshakeResponseContent = {
         unifiedPubKeys,
@@ -232,17 +156,14 @@ describe("Encryption/Decryption", () => {
 
       const identityPubKey = new Uint8Array(32).fill(5);
       const signingPubKey = new Uint8Array(32).fill(8);
-      const unifiedPubKeys = encodeUnifiedPubKeys(
-        identityPubKey,
-        signingPubKey
-      );
+      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
 
       const ephemeralPubKey = new Uint8Array(32).fill(6);
 
-      const identityProof: IdentityProof = {
+      const identityProof = createMockIdentityProof({
         message: "VerbEth Identity Key identity v1\nAddress: 0xabcd...",
         signature: "0x" + "2".repeat(130),
-      };
+      });
 
       const responseContent: HandshakeResponseContent = {
         unifiedPubKeys,
@@ -275,17 +196,14 @@ describe("Encryption/Decryption", () => {
 
       const identityPubKey = new Uint8Array(32).fill(10);
       const signingPubKey = new Uint8Array(32).fill(11);
-      const unifiedPubKeys = encodeUnifiedPubKeys(
-        identityPubKey,
-        signingPubKey
-      );
+      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
       const ephemeralPubKey = new Uint8Array(32).fill(12);
       const note = "convenience function test";
 
-      const identityProof: IdentityProof = {
+      const identityProof = createMockIdentityProof({
         message: "VerbEth Identity Key Identity v1\nAddress: 0xtest...",
         signature: "0x" + "3".repeat(130),
-      };
+      });
 
       const responseContent: HandshakeResponseContent = {
         unifiedPubKeys,
@@ -317,7 +235,6 @@ describe("Encryption/Decryption", () => {
     it("should return null for invalid encrypted data", () => {
       const initiatorEphemeralKey = nacl.box.keyPair();
 
-      // Create a valid-looking but unencryptable payload
       const invalidPayload = {
         v: 1,
         epk: Buffer.from(new Uint8Array(32).fill(1)).toString("base64"),
@@ -341,15 +258,12 @@ describe("Encryption/Decryption", () => {
 
       const identityPubKey = new Uint8Array(32).fill(13);
       const signingPubKey = new Uint8Array(32).fill(14);
-      const unifiedPubKeys = encodeUnifiedPubKeys(
-        identityPubKey,
-        signingPubKey
-      );
+      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
 
-      const identityProof: IdentityProof = {
+      const identityProof = createMockIdentityProof({
         message: "Wrong key test",
         signature: "0x" + "4".repeat(130),
-      };
+      });
 
       const responseContent: HandshakeResponseContent = {
         unifiedPubKeys,
@@ -375,42 +289,16 @@ describe("Encryption/Decryption", () => {
   });
 
   describe("Key Extraction Functions", () => {
-    it("should extract keys from handshake payload", () => {
-      const identityPubKey = new Uint8Array(32).fill(20);
-      const signingPubKey = new Uint8Array(32).fill(21);
-      const ephemeralPubKey = new Uint8Array(32).fill(22);
-      const unifiedPubKeys = encodeUnifiedPubKeys(
-        identityPubKey,
-        signingPubKey
-      );
-
-      const payload: HandshakePayload = {
-        unifiedPubKeys,
-        ephemeralPubKey,
-        plaintextPayload: "test payload",
-      };
-
-      const extracted = extractKeysFromHandshakePayload(payload);
-
-      expect(extracted).not.toBeNull();
-      expect(extracted!.identityPubKey).toEqual(identityPubKey);
-      expect(extracted!.signingPubKey).toEqual(signingPubKey);
-      expect(extracted!.ephemeralPubKey).toEqual(ephemeralPubKey);
-    });
-
     it("should extract keys from handshake response content", () => {
       const identityPubKey = new Uint8Array(32).fill(25);
       const signingPubKey = new Uint8Array(32).fill(26);
       const ephemeralPubKey = new Uint8Array(32).fill(27);
-      const unifiedPubKeys = encodeUnifiedPubKeys(
-        identityPubKey,
-        signingPubKey
-      );
+      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
 
-      const identityProof: IdentityProof = {
+      const identityProof = createMockIdentityProof({
         message: "Extract test",
         signature: "0x" + "5".repeat(130),
-      };
+      });
 
       const content: HandshakeResponseContent = {
         unifiedPubKeys,
@@ -427,26 +315,13 @@ describe("Encryption/Decryption", () => {
       expect(extracted!.ephemeralPubKey).toEqual(ephemeralPubKey);
     });
 
-    it("should return null for invalid unified keys in payload", () => {
-      const invalidUnifiedKeys = new Uint8Array(30).fill(1); // Wrong size
-
-      const payload: HandshakePayload = {
-        unifiedPubKeys: invalidUnifiedKeys,
-        ephemeralPubKey: new Uint8Array(32).fill(2),
-        plaintextPayload: "invalid test",
-      };
-
-      const extracted = extractKeysFromHandshakePayload(payload);
-      expect(extracted).toBeNull();
-    });
-
     it("should return null for invalid unified keys in response content", () => {
       const invalidUnifiedKeys = new Uint8Array(30).fill(1); // Wrong size
 
-      const identityProof: IdentityProof = {
+      const identityProof = createMockIdentityProof({
         message: "Invalid test",
         signature: "0x" + "6".repeat(130),
-      };
+      });
 
       const content: HandshakeResponseContent = {
         unifiedPubKeys: invalidUnifiedKeys,
@@ -464,10 +339,7 @@ describe("Encryption/Decryption", () => {
     it("should parse handshake keys from event correctly", () => {
       const identityPubKey = new Uint8Array(32).fill(30);
       const signingPubKey = new Uint8Array(32).fill(31);
-      const unifiedPubKeys = encodeUnifiedPubKeys(
-        identityPubKey,
-        signingPubKey
-      );
+      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
 
       const event = {
         pubKeys: "0x" + Buffer.from(unifiedPubKeys).toString("hex"),
@@ -500,13 +372,10 @@ describe("Encryption/Decryption", () => {
       expect(parsed).toBeNull();
     });
 
-    it("should handle pubKeys without 0x prefix", () => {
+    it("should handle pubKeys with 0x prefix", () => {
       const identityPubKey = new Uint8Array(32).fill(35);
       const signingPubKey = new Uint8Array(32).fill(36);
-      const unifiedPubKeys = encodeUnifiedPubKeys(
-        identityPubKey,
-        signingPubKey
-      );
+      const unifiedPubKeys = encodeUnifiedPubKeys(identityPubKey, signingPubKey);
 
       const event = {
         pubKeys: "0x" + Buffer.from(unifiedPubKeys).toString("hex"),
@@ -567,7 +436,7 @@ describe("Encryption/Decryption", () => {
       }).toThrow();
     });
 
-    it("should return null when converter function throws error", () => {
+    it("should throw error when converter function throws error", () => {
       const senderBoxKey = nacl.box.keyPair();
       const recipientKey = nacl.box.keyPair();
 
@@ -584,8 +453,7 @@ describe("Encryption/Decryption", () => {
         senderBoxKey.publicKey
       );
 
-      // Converter that throws error
-      const throwingConverter = (obj: any) => {
+      const throwingConverter = () => {
         throw new Error("Converter error");
       };
 
@@ -626,129 +494,70 @@ describe("Encryption/Decryption", () => {
     });
   });
 
-  describe("Payload Encoding/Decoding", () => {
-    it("should encode and decode handshake payload correctly", () => {
-      const identityPubKey = new Uint8Array(32).fill(1);
-      const signingPubKey = new Uint8Array(32).fill(9);
-      const unifiedPubKeys = encodeUnifiedPubKeys(
-        identityPubKey,
-        signingPubKey
+  describe("Hybrid HSR Tag (PQ-Secure)", () => {
+    it("responder and initiator compute matching hybrid tags", () => {
+      const viewKeyPair = nacl.box.keyPair(); // Alice's ephemeral
+      const tagKeyPair = nacl.box.keyPair();  // Bob's tag keypair (r, R)
+      const kemSecret = nacl.randomBytes(32);
+
+      const tagFromResponder = computeHybridTagFromResponder(
+        tagKeyPair.secretKey, // r
+        viewKeyPair.publicKey, // viewPubA
+        kemSecret
       );
 
-      const payload: HandshakePayload = {
-        unifiedPubKeys,
-        ephemeralPubKey: new Uint8Array(32).fill(2),
-        plaintextPayload: "hello bob",
-      };
+      const tagFromInitiator = computeHybridTagFromInitiator(
+        viewKeyPair.secretKey, // viewPrivA
+        tagKeyPair.publicKey,  // R
+        kemSecret
+      );
 
-      const encoded = encodeHandshakePayload(payload);
-      const decoded = decodeHandshakePayload(encoded);
-
-      expect(decoded.unifiedPubKeys).toEqual(payload.unifiedPubKeys);
-      expect(decoded.ephemeralPubKey).toEqual(payload.ephemeralPubKey);
-      expect(decoded.plaintextPayload).toBe("hello bob");
+      expect(tagFromResponder).toBe(tagFromInitiator);
+      expect(tagFromResponder).toMatch(/^0x[a-f0-9]{64}$/);
     });
 
-    it("should encode and decode response content correctly", () => {
-      const identityPubKey = new Uint8Array(32).fill(3);
-      const signingPubKey = new Uint8Array(32).fill(10);
-      const unifiedPubKeys = encodeUnifiedPubKeys(
-        identityPubKey,
-        signingPubKey
+    it("different kemSecret produces different tag (PQ unlinkability)", () => {
+      const viewKeyPair = nacl.box.keyPair();
+      const tagKeyPair = nacl.box.keyPair();
+      const kemSecret1 = nacl.randomBytes(32);
+      const kemSecret2 = nacl.randomBytes(32);
+
+      const tag1 = computeHybridTagFromResponder(
+        tagKeyPair.secretKey,
+        viewKeyPair.publicKey,
+        kemSecret1
       );
 
-      const ephemeralPubKey = new Uint8Array(32).fill(4);
-      const note = "here is my response";
+      const tag2 = computeHybridTagFromResponder(
+        tagKeyPair.secretKey,
+        viewKeyPair.publicKey,
+        kemSecret2
+      );
 
-      const identityProof: IdentityProof = {
-        message: "VerbEth Identity Key Identity v1\nAddress: 0xtest...",
-        signature: "0x" + "3".repeat(130),
-      };
-
-      const content: HandshakeResponseContent = {
-        unifiedPubKeys,
-        ephemeralPubKey,
-        note,
-        identityProof,
-      };
-
-      const encoded = encodeHandshakeResponseContent(content);
-      const decoded = decodeHandshakeResponseContent(encoded);
-
-      expect(decoded.unifiedPubKeys).toEqual(unifiedPubKeys);
-      expect(decoded.ephemeralPubKey).toEqual(ephemeralPubKey);
-      expect(decoded.note).toBe(note);
-      expect(decoded.identityProof).toEqual(identityProof);
+      // Same ECDH, different KEM -> different tags
+      expect(tag1).not.toBe(tag2);
     });
-  });
 
-  describe("Log Message Structure", () => {
-    it("should decode and decrypt a log message", () => {
-      const senderBoxKey = nacl.box.keyPair();
-      const senderSignKey = nacl.sign.keyPair();
-      const recipientKey = nacl.box.keyPair();
+    it("different R produces different tag (R binding)", () => {
+      const viewKeyPair = nacl.box.keyPair();
+      const tagKeyPair1 = nacl.box.keyPair();
+      const tagKeyPair2 = nacl.box.keyPair();
+      const kemSecret = nacl.randomBytes(32);
 
-      const message = "from on-chain log";
-
-      const ciphertext = encryptMessage(
-        message,
-        recipientKey.publicKey,
-        senderBoxKey.secretKey,
-        senderBoxKey.publicKey,
-        senderSignKey.secretKey,
-        senderSignKey.publicKey
+      const tag1 = computeHybridTagFromResponder(
+        tagKeyPair1.secretKey,
+        viewKeyPair.publicKey,
+        kemSecret
       );
 
-      const mockLog: LogMessage = {
-        sender: "0x" + "a".repeat(40),
-        ciphertext,
-        timestamp: Math.floor(Date.now() / 1000),
-        topic: "0x" + "d".repeat(64),
-        nonce: 1n,
-      };
-
-      const decrypted = decryptMessage(
-        mockLog.ciphertext,
-        recipientKey.secretKey,
-        senderSignKey.publicKey
+      const tag2 = computeHybridTagFromResponder(
+        tagKeyPair2.secretKey,
+        viewKeyPair.publicKey,
+        kemSecret
       );
-      expect(decrypted).toBe(message);
+
+      // Same kemSecret, different ECDH -> different tags
+      expect(tag1).not.toBe(tag2);
     });
-  });
-
-  it("derives deterministic duplex topics (Alice & Bob compute the same) and checksum verifies", () => {
-    const alice = nacl.box.keyPair();
-    const bob = nacl.box.keyPair();
-
-    // Bind topics to a specific handshake via tag (inResponseTo)
-    const tag = randomTagHex();
-    const salt = Uint8Array.from(Buffer.from(tag.slice(2), "hex"));
-
-    // Alice view (my=Alice, their=Bob)
-    const A = deriveDuplexTopics(alice.secretKey, bob.publicKey, salt);
-    // Bob view (my=Bob, their=Alice)
-    const B = deriveDuplexTopics(bob.secretKey, alice.publicKey, salt);
-
-    // Deterministic agreement
-    expect(A.topicOut).toBe(B.topicOut);
-    expect(A.topicIn).toBe(B.topicIn);
-    expect(A.topicOut).not.toBe(A.topicIn);
-    expect(verifyDuplexTopicsChecksum(A.topicOut, A.topicIn, A.checksum)).toBe(
-      true
-    );
-  });
-
-  it("changes in tag/salt produce different topics (per-handshake binding)", () => {
-    const alice = nacl.box.keyPair();
-    const bob = nacl.box.keyPair();
-
-    const salt1 = Uint8Array.from(Buffer.from(randomTagHex().slice(2), "hex"));
-    const salt2 = Uint8Array.from(Buffer.from(randomTagHex().slice(2), "hex"));
-
-    const T1 = deriveDuplexTopics(alice.secretKey, bob.publicKey, salt1);
-    const T2 = deriveDuplexTopics(alice.secretKey, bob.publicKey, salt2);
-
-    expect(T1.topicOut).not.toBe(T2.topicOut);
-    expect(T1.topicIn).not.toBe(T2.topicIn);
   });
 });

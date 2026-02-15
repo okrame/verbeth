@@ -18,3 +18,16 @@ dist
 
 ignition/deployments/chain-31337
 ignition/deployments/chain-84532
+.aider*
+.venv/
+.envrc
+.python-version
+
+*scripts/
+*.vscode/
+
+*apps/notes/
+.claudeignore
+*.claude/
+CLAUDE.md
+*myplans

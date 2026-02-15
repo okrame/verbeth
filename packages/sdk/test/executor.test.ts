@@ -6,16 +6,17 @@ import {
   EOAExecutor,
   UserOpExecutor,
   DirectEntryPointExecutor,
-  sendEncryptedMessage,
   initiateHandshake,
   respondToHandshake,
 } from "../src/index.js";
-import type { LogChainV1 } from "@verbeth/contracts/typechain-types";
-import { IdentityKeyPair, IdentityProof } from "../src/types.js";
+import type { VerbethV1 } from "@verbeth/contracts/typechain-types";
+import { IdentityKeyPair } from "../src/types.js";
+import { kem } from "../src/pq/kem.js";
+import { createMockIdentityProof } from "./helpers.js";
 
 const TEST_SMART_ACCOUNT_ADDRESS = "0x" + "12".repeat(20);
 const TEST_ENTRYPOINT_ADDRESS = "0x" + "45".repeat(20);
-const TEST_LOGCHAIN_ADDRESS = "0x" + "78".repeat(20);
+const TEST_VERBETH_ADDRESS = "0x" + "78".repeat(20);
 
 const mockSendMessage = vi.fn().mockResolvedValue("txHash");
 const mockInitiateHandshake = vi.fn().mockResolvedValue("txHash");
@@ -25,7 +26,7 @@ const fakeContract = {
   sendMessage: mockSendMessage,
   initiateHandshake: mockInitiateHandshake,
   respondToHandshake: mockRespondToHandshake,
-} as unknown as LogChainV1;
+} as unknown as VerbethV1;
 
 const mockBundler = {
   sendUserOperation: vi.fn().mockResolvedValue("0x123"),
@@ -53,18 +54,22 @@ const mockSigner = {
 } as unknown as Signer;
 
 // Test data
-const testRecipientKey = nacl.box.keyPair();
-const testSenderSignKey = nacl.sign.keyPair();
+const testRecipientX25519Key = nacl.box.keyPair();
+const testKemKeyPair = kem.generateKeyPair();
+// Extended ephemeral key: X25519 (32) + ML-KEM (1184) = 1216 bytes
+const testInitiatorEphemeralExtended = new Uint8Array(32 + kem.publicKeyBytes);
+testInitiatorEphemeralExtended.set(testRecipientX25519Key.publicKey, 0);
+testInitiatorEphemeralExtended.set(testKemKeyPair.publicKey, 32);
+
 const testIdentityKeyPair: IdentityKeyPair = {
   publicKey: new Uint8Array(32).fill(1),
   secretKey: new Uint8Array(32).fill(2),
   signingPublicKey: new Uint8Array(32).fill(3),
   signingSecretKey: new Uint8Array(32).fill(4),
 };
-const testIdentityProof: IdentityProof = {
+const testIdentityProof = createMockIdentityProof({
   message: "Test identity proof",
-  signature: "0x" + "1".repeat(130),
-};
+});
 
 describe("ExecutorFactory", () => {
   it("creates EOA executor correctly", () => {
@@ -76,7 +81,7 @@ describe("ExecutorFactory", () => {
     const executor = ExecutorFactory.createUserOp(
       TEST_SMART_ACCOUNT_ADDRESS,
       TEST_ENTRYPOINT_ADDRESS,
-      TEST_LOGCHAIN_ADDRESS,
+      TEST_VERBETH_ADDRESS,
       mockBundler,
       mockSmartAccount
     );
@@ -87,7 +92,7 @@ describe("ExecutorFactory", () => {
     const executor = ExecutorFactory.createDirectEntryPoint(
       TEST_SMART_ACCOUNT_ADDRESS,
       mockEntryPoint,
-      TEST_LOGCHAIN_ADDRESS,
+      TEST_VERBETH_ADDRESS,
       mockSmartAccount,
       mockSigner
     );
@@ -95,115 +100,6 @@ describe("ExecutorFactory", () => {
   });
 });
 
-describe("sendEncryptedMessage with Executors", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("works with EOA executor", async () => {
-    const executor = ExecutorFactory.createEOA(fakeContract);
-
-    await sendEncryptedMessage({
-      executor,
-      topic: "0x" + "ab".repeat(32),
-      message: "Hello from EOA",
-      recipientPubKey: testRecipientKey.publicKey,
-      senderAddress: "0xAlice",
-      senderSignKeyPair: testSenderSignKey,
-      timestamp: 42,
-    });
-
-    expect(mockSendMessage).toHaveBeenCalledTimes(1);
-
-    const callArgs = mockSendMessage.mock.calls[0];
-    expect(callArgs).toHaveLength(4); // ciphertext, topic, timestamp, nonce
-    expect(typeof callArgs[1]).toBe("string"); // topic
-    expect(typeof callArgs[2]).toBe("number"); // timestamp
-    expect(typeof callArgs[3]).toBe("bigint"); // nonce
-  });
-
-  it("works with UserOp executor", async () => {
-    const executor = ExecutorFactory.createUserOp(
-      TEST_SMART_ACCOUNT_ADDRESS,
-      TEST_ENTRYPOINT_ADDRESS,
-      TEST_LOGCHAIN_ADDRESS,
-      mockBundler,
-      mockSmartAccount
-    );
-
-    await sendEncryptedMessage({
-      executor,
-      topic: "0x" + "cd".repeat(32),
-      message: "Hello from UserOp",
-      recipientPubKey: testRecipientKey.publicKey,
-      senderAddress: TEST_SMART_ACCOUNT_ADDRESS,
-      senderSignKeyPair: testSenderSignKey,
-      timestamp: 43,
-    });
-
-    expect(mockSmartAccount.getNonce).toHaveBeenCalled();
-    expect(mockSmartAccount.signUserOperation).toHaveBeenCalled();
-    expect(mockBundler.sendUserOperation).toHaveBeenCalled();
-    expect(mockBundler.waitForUserOperationReceipt).toHaveBeenCalled();
-  });
-
-  it("works with DirectEntryPoint executor", async () => {
-    const executor = ExecutorFactory.createDirectEntryPoint(
-      TEST_SMART_ACCOUNT_ADDRESS,
-      mockEntryPoint,
-      TEST_LOGCHAIN_ADDRESS,
-      mockSmartAccount,
-      mockSigner
-    );
-
-    await sendEncryptedMessage({
-      executor,
-      topic: "0x" + "ef".repeat(32),
-      message: "Hello from DirectEntryPoint",
-      recipientPubKey: testRecipientKey.publicKey,
-      senderAddress: TEST_SMART_ACCOUNT_ADDRESS,
-      senderSignKeyPair: testSenderSignKey,
-      timestamp: 44,
-    });
-
-    expect(mockSmartAccount.getNonce).toHaveBeenCalled();
-    expect(mockSmartAccount.signUserOperation).toHaveBeenCalled();
-    expect(mockEntryPoint.handleOps).toHaveBeenCalled();
-    expect(mockSigner.getAddress).toHaveBeenCalled();
-  });
-
-  it("generates different nonces for different calls with same executor", async () => {
-    const executor = ExecutorFactory.createEOA(fakeContract);
-
-    // First message
-    await sendEncryptedMessage({
-      executor,
-      topic: "0x" + "aa".repeat(32),
-      message: "Message 1",
-      recipientPubKey: testRecipientKey.publicKey,
-      senderAddress: "0xAlice",
-      senderSignKeyPair: testSenderSignKey,
-      timestamp: 100,
-    });
-
-    // Second message
-    await sendEncryptedMessage({
-      executor,
-      topic: "0x" + "aa".repeat(32),
-      message: "Message 2",
-      recipientPubKey: testRecipientKey.publicKey,
-      senderAddress: "0xAlice",
-      senderSignKeyPair: testSenderSignKey,
-      timestamp: 101,
-    });
-
-    expect(mockSendMessage).toHaveBeenCalledTimes(2);
-
-    const firstNonce = mockSendMessage.mock.calls[0][3];
-    const secondNonce = mockSendMessage.mock.calls[1][3];
-    expect(secondNonce).toBe(firstNonce + 1n);
-  });
-});
 
 describe("initiateHandshake with Executors", () => {
   beforeEach(() => {
@@ -217,7 +113,6 @@ describe("initiateHandshake with Executors", () => {
       executor,
       recipientAddress: "0xBob",
       identityKeyPair: testIdentityKeyPair,
-      ephemeralPubKey: nacl.box.keyPair().publicKey,
       plaintextPayload: "Hello Bob from EOA",
       identityProof: testIdentityProof,
       signer: mockSigner,
@@ -236,7 +131,7 @@ describe("initiateHandshake with Executors", () => {
     const executor = ExecutorFactory.createUserOp(
       TEST_SMART_ACCOUNT_ADDRESS,
       TEST_ENTRYPOINT_ADDRESS,
-      TEST_LOGCHAIN_ADDRESS,
+      TEST_VERBETH_ADDRESS,
       mockBundler,
       mockSmartAccount
     );
@@ -245,7 +140,6 @@ describe("initiateHandshake with Executors", () => {
       executor,
       recipientAddress: "0xBob",
       identityKeyPair: testIdentityKeyPair,
-      ephemeralPubKey: nacl.box.keyPair().publicKey,
       plaintextPayload: "Hello Bob from UserOp",
       identityProof: testIdentityProof,
       signer: mockSigner,
@@ -260,7 +154,7 @@ describe("initiateHandshake with Executors", () => {
     const executor = ExecutorFactory.createDirectEntryPoint(
       TEST_SMART_ACCOUNT_ADDRESS,
       mockEntryPoint,
-      TEST_LOGCHAIN_ADDRESS,
+      TEST_VERBETH_ADDRESS,
       mockSmartAccount,
       mockSigner
     );
@@ -269,7 +163,6 @@ describe("initiateHandshake with Executors", () => {
       executor,
       recipientAddress: "0xBob",
       identityKeyPair: testIdentityKeyPair,
-      ephemeralPubKey: nacl.box.keyPair().publicKey,
       plaintextPayload: "Hello Bob from DirectEntryPoint",
       identityProof: testIdentityProof,
       signer: mockSigner,
@@ -291,7 +184,7 @@ describe("respondToHandshake with Executors", () => {
 
     await respondToHandshake({
       executor,
-      initiatorPubKey: testRecipientKey.publicKey,
+      initiatorEphemeralPubKey: testInitiatorEphemeralExtended,
       responderIdentityKeyPair: testIdentityKeyPair,
       note: "Response from EOA",
       identityProof: testIdentityProof,
@@ -315,14 +208,14 @@ describe("respondToHandshake with Executors", () => {
     const executor = ExecutorFactory.createUserOp(
       TEST_SMART_ACCOUNT_ADDRESS,
       TEST_ENTRYPOINT_ADDRESS,
-      TEST_LOGCHAIN_ADDRESS,
+      TEST_VERBETH_ADDRESS,
       mockBundler,
       mockSmartAccount
     );
 
     await respondToHandshake({
       executor,
-      initiatorPubKey: testRecipientKey.publicKey,
+      initiatorEphemeralPubKey: testInitiatorEphemeralExtended,
       responderIdentityKeyPair: testIdentityKeyPair,
       note: "Response from UserOp",
       identityProof: testIdentityProof,
@@ -338,14 +231,14 @@ describe("respondToHandshake with Executors", () => {
     const executor = ExecutorFactory.createDirectEntryPoint(
       TEST_SMART_ACCOUNT_ADDRESS,
       mockEntryPoint,
-      TEST_LOGCHAIN_ADDRESS,
+      TEST_VERBETH_ADDRESS,
       mockSmartAccount,
       mockSigner
     );
 
     await respondToHandshake({
       executor,
-      initiatorPubKey: testRecipientKey.publicKey,
+      initiatorEphemeralPubKey: testInitiatorEphemeralExtended,
       responderIdentityKeyPair: testIdentityKeyPair,
       note: "Response from DirectEntryPoint",
       identityProof: testIdentityProof,
@@ -362,7 +255,7 @@ describe("respondToHandshake with Executors", () => {
 
     await respondToHandshake({
       executor,
-      initiatorPubKey: testRecipientKey.publicKey,
+      initiatorEphemeralPubKey: testInitiatorEphemeralExtended,
       responderIdentityKeyPair: testIdentityKeyPair,
       // No responderEphemeralKeyPair provided
       note: "Auto-generated ephemeral key",
