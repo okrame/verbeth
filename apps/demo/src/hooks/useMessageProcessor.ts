@@ -84,7 +84,9 @@ export const useMessageProcessor = ({
           // HANDSHAKE
           // -----------------------------------------------------------------
           case "handshake": {
-            if (!verbethClient) break;
+            if (!verbethClient) {
+              throw new Error("message processor is not ready: missing verbethClient");
+            }
 
             const result = await processHandshakeEvent(
               event,
@@ -109,7 +111,11 @@ export const useMessageProcessor = ({
           // HANDSHAKE RESPONSE - requires verbethClient for session creation
           // -----------------------------------------------------------------
           case "handshake_response": {
-            if (!identityKeyPair || !verbethClient) break;
+            if (!identityKeyPair || !verbethClient) {
+              throw new Error(
+                "message processor is not ready: missing identity or verbethClient"
+              );
+            }
 
             const result = await processHandshakeResponseEvent(
               event,
@@ -136,7 +142,9 @@ export const useMessageProcessor = ({
           // MESSAGE - Uses VerbethClient for decryption
           // -----------------------------------------------------------------
           case "message": {
-            if (!verbethClient) break;
+            if (!verbethClient) {
+              throw new Error("message processor is not ready: missing verbethClient");
+            }
 
             const result = await processMessageEvent(
               event,

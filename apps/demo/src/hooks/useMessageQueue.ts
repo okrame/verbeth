@@ -143,7 +143,7 @@ export const useMessageQueue = ({
         // =====================================================================
         // Step 3: Create pending record (SDK's PendingStore via StorageAdapter)
         // =====================================================================
-        await dbService.savePendingOutbound({
+        await dbService.ratchet.savePendingOutbound({
           id: prepared.id,
           conversationId,
           topic: prepared.topic,
@@ -170,7 +170,7 @@ export const useMessageQueue = ({
         // =====================================================================
         // Step 5: Update pending with txHash
         // =====================================================================
-        await dbService.updatePendingOutboundStatus(prepared.id, 'submitted', tx.hash);
+        await dbService.ratchet.updatePendingOutboundStatus(prepared.id, 'submitted', tx.hash);
 
         queuedMsg.txHash = tx.hash;
         queuedMsg.status = "pending";

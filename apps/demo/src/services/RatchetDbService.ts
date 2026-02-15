@@ -73,7 +73,7 @@ export class RatchetDbService {
       .equals(topicLower)
       .first();
       
-    if (stored && stored.previousTopicExpiry && Date.now() < stored.previousTopicExpiry) {
+    if (stored) {
       const session = deserializeRatchetSession(stored);
       const pruned = pruneExpiredSkippedKeys(session);
       if (pruned.skippedKeys.length !== session.skippedKeys.length) {
@@ -96,8 +96,7 @@ export class RatchetDbService {
       .toArray();
       
     const topics: string[] = [];
-    const now = Date.now();
-    
+
     for (const s of sessions) {
       // Current topic
       if (s.currentTopicInbound) {
@@ -107,8 +106,8 @@ export class RatchetDbService {
       if (s.nextTopicInbound) {
         topics.push(s.nextTopicInbound);
       }
-      // Previous topic (grace period)
-      if (s.previousTopicInbound && s.previousTopicExpiry && now < s.previousTopicExpiry) {
+      // Previous topic (always include — crypto safety is enforced by ratchetDecrypt, not expiry)
+      if (s.previousTopicInbound) {
         topics.push(s.previousTopicInbound);
       }
     }

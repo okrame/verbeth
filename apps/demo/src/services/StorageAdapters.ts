@@ -38,7 +38,7 @@ class SessionStoreAdapter implements SessionStore {
    * Get session by conversation ID (primary key).
    */
   async get(conversationId: string): Promise<RatchetSession | null> {
-    return dbService.getRatchetSessionByConversation(conversationId);
+    return dbService.ratchet.getRatchetSessionByConversation(conversationId);
   }
 
   /**
@@ -46,14 +46,14 @@ class SessionStoreAdapter implements SessionStore {
    * Checks current, next, and previous (within grace period) topics.
    */
   async getByInboundTopic(topic: string): Promise<RatchetSession | null> {
-    return dbService.getRatchetSessionByAnyInboundTopic(topic);
+    return dbService.ratchet.getRatchetSessionByAnyInboundTopic(topic);
   }
 
   /**
    * Persist session state.
    */
   async save(session: RatchetSession): Promise<void> {
-    return dbService.saveRatchetSession(session);
+    return dbService.ratchet.saveRatchetSession(session);
   }
 }
 
@@ -82,14 +82,14 @@ class PendingStoreAdapter implements PendingStore {
       txHash: pending.txHash,
       status: pending.status,
     };
-    return dbService.savePendingOutbound(dbPending);
+    return dbService.ratchet.savePendingOutbound(dbPending);
   }
 
   /**
    * Get pending message by ID.
    */
   async get(id: string): Promise<PendingMessage | null> {
-    const pending = await dbService.getPendingOutbound(id);
+    const pending = await dbService.ratchet.getPendingOutbound(id);
     return pending ? this.toPendingMessage(pending) : null;
   }
 
@@ -97,7 +97,7 @@ class PendingStoreAdapter implements PendingStore {
    * Get pending message by transaction hash.
    */
   async getByTxHash(txHash: string): Promise<PendingMessage | null> {
-    const pending = await dbService.getPendingOutboundByTxHash(txHash);
+    const pending = await dbService.ratchet.getPendingOutboundByTxHash(txHash);
     return pending ? this.toPendingMessage(pending) : null;
   }
 
@@ -105,21 +105,21 @@ class PendingStoreAdapter implements PendingStore {
    * Update pending message status.
    */
   async updateStatus(id: string, status: PendingStatus, txHash?: string): Promise<void> {
-    return dbService.updatePendingOutboundStatus(id, status, txHash);
+    return dbService.ratchet.updatePendingOutboundStatus(id, status, txHash);
   }
 
   /**
    * Delete pending message.
    */
   async delete(id: string): Promise<void> {
-    return dbService.deletePendingOutbound(id);
+    return dbService.ratchet.deletePendingOutbound(id);
   }
 
   /**
    * Get all pending messages for a conversation.
    */
   async getByConversation(conversationId: string): Promise<PendingMessage[]> {
-    const pending = await dbService.getPendingOutboundByConversation(conversationId);
+    const pending = await dbService.ratchet.getPendingOutboundByConversation(conversationId);
     return pending.map(p => this.toPendingMessage(p));
   }
 

@@ -185,7 +185,7 @@ export const useChatActions = ({
         });
 
         // Save session - SDK will pick it up via SessionStore adapter
-        await dbService.saveRatchetSession(ratchetSession);
+        await dbService.ratchet.saveRatchetSession(ratchetSession);
 
         const newContact: Contact = {
           address: handshake.sender,

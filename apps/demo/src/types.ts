@@ -182,10 +182,52 @@ export interface ScanChunk {
   events: any[];
 }
 
+export interface BlockRange {
+  fromBlock: number;
+  toBlock: number;
+}
+
+export interface PendingRange extends BlockRange {
+  attempts: number;
+  nextRetryAt: number;
+  lastError?: string;
+}
+
+export type PersistedSyncStateStatus =
+  | "idle"
+  | "catching_up"
+  | "degraded"
+  | "synced";
+
+export interface PersistedSyncState {
+  pendingRanges: PendingRange[];
+  status: PersistedSyncStateStatus;
+  lastError?: string;
+  lastRetryAt?: number;
+  targetTip?: number;
+  updatedAt: number;
+}
+
+export type ListenerSyncMode =
+  | "idle"
+  | "catching_up"
+  | "retrying"
+  | "degraded"
+  | "synced";
+
+export interface ListenerSyncStatus {
+  mode: ListenerSyncMode;
+  pendingRanges: number;
+  lastError?: string;
+  isComplete: boolean;
+}
+
 export interface ProcessedEvent {
   logKey: string;
   eventType: EventType;
   rawLog: any;
+  txHash: string;
+  logIndex: number;
   blockNumber: number;
   timestamp: number;
   matchedContactAddress?: string;
@@ -196,6 +238,7 @@ export interface MessageListenerResult {
   isLoadingMore: boolean;
   canLoadMore: boolean;
   syncProgress: ScanProgress | null;
+  syncStatus: ListenerSyncStatus;
   loadMoreHistory: () => Promise<void>;
   lastKnownBlock: number | null;
   oldestScannedBlock: number | null;

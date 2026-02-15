@@ -154,6 +154,7 @@ export default function App() {
     isLoadingMore,
     canLoadMore,
     syncProgress,
+    syncStatus,
     loadMoreHistory,
   } = useMessageListener({
     readProvider,
@@ -161,6 +162,7 @@ export default function App() {
     emitterAddress: emitterAddress ?? undefined,
     onEventsProcessed: processEvents,
     viemClient,
+    verbethClient,
   });
 
   const {
@@ -210,6 +212,21 @@ export default function App() {
   const removeToast = (id: string) => {
     setHandshakeToasts((prev) => prev.filter((n) => n.id !== id));
   };
+
+  const syncStatusLabel = (() => {
+    switch (syncStatus.mode) {
+      case "catching_up":
+        return `Catching up (${syncStatus.pendingRanges} ranges queued)`;
+      case "retrying":
+        return `Retrying (${syncStatus.pendingRanges} ranges pending)`;
+      case "degraded":
+        return "Degraded";
+      case "synced":
+        return "Synced";
+      default:
+        return "Idle";
+    }
+  })();
 
   useEffect(() => {
     setReady(readProvider !== null && isConnected && walletClient !== undefined);
@@ -603,6 +620,10 @@ export default function App() {
           <p>Network: Base (Chain ID: {chainId})</p>
           <p>Contract creation block: {CONTRACT_CREATION_BLOCK}</p>
           <p>Status: {ready ? '🟢 Ready' : '🔴 Not Ready'} {(isInitialLoading || isLoadingMore) ? '⏳ Loading' : ''}</p>
+          <p>
+            Sync: {syncStatusLabel}
+            {syncStatus.lastError ? ` · Last error: ${syncStatus.lastError}` : ""}
+          </p>
         </div>
       )}
     </div>

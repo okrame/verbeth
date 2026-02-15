@@ -20,7 +20,6 @@ import {
   Message,
   PendingHandshake,
   ProcessedEvent,
-  generateTempMessageId,
 } from "../types.js";
 
 
@@ -35,6 +34,14 @@ export function generateMessageId(
       ? log.index
       : 0;
   return `${txHash}-${idx}`;
+}
+
+function systemEventMessageId(
+  kind: "handshake" | "handshake-response",
+  txHash: string,
+  logIndex: number
+): string {
+  return `sys-${kind}-${txHash}-${logIndex}`;
 }
 
 // =============================================================================
@@ -69,6 +76,14 @@ export async function processHandshakeEvent(
   verbethClient: VerbethClient,
 ): Promise<HandshakeResult | null> {
   try {
+    const alreadyProcessed = await dbService.hasProcessedEvent(
+      address,
+      "handshake",
+      event.txHash,
+      event.logIndex
+    );
+    if (alreadyProcessed) return null;
+
     const log = event.rawLog;
     const abiCoder = new AbiCoder();
     const decoded = abiCoder.decode(["bytes", "bytes", "bytes"], log.data);
@@ -165,7 +180,7 @@ export async function processHandshakeEvent(
       : "Request received";
 
     const systemMessage: Message = {
-      id: generateTempMessageId(),
+      id: systemEventMessageId("handshake", event.txHash, event.logIndex),
       topic: "",
       sender: identityAddress,
       recipient: address,
@@ -186,6 +201,13 @@ export async function processHandshakeEvent(
 
     await dbService.savePendingHandshake(pendingHandshake);
     await dbService.saveMessage(systemMessage);
+    await dbService.markEventProcessed(
+      address,
+      "handshake",
+      event.txHash,
+      event.logIndex,
+      log.blockNumber
+    );
 
     return { pendingHandshake, systemMessage };
   } catch (error) {
@@ -207,6 +229,14 @@ export async function processHandshakeResponseEvent(
   verbethClient: VerbethClient,
 ): Promise<HandshakeResponseResult | null> {
   try {
+    const alreadyProcessed = await dbService.hasProcessedEvent(
+      address,
+      "handshake_response",
+      event.txHash,
+      event.logIndex
+    );
+    if (alreadyProcessed) return null;
+
     const log = event.rawLog;
     const abiCoder = new AbiCoder();
     const [responderEphemeralRBytes, ciphertextBytes] = abiCoder.decode(
@@ -275,7 +305,7 @@ export async function processHandshakeResponseEvent(
     });
 
     // Save session to DB (SDK will pick it up via SessionStore)
-    await dbService.saveRatchetSession(ratchetSession);
+    await dbService.ratchet.saveRatchetSession(ratchetSession);
 
     const updatedContact: Contact = {
       ...contact,
@@ -294,7 +324,11 @@ export async function processHandshakeResponseEvent(
     await dbService.saveContact(updatedContact);
 
     const systemMessage: Message = {
-      id: generateTempMessageId(),
+      id: systemEventMessageId(
+        "handshake-response",
+        event.txHash,
+        event.logIndex
+      ),
       topic: ratchetSession.currentTopicOutbound,
       sender: contact.address,
       recipient: address,
@@ -313,6 +347,13 @@ export async function processHandshakeResponseEvent(
     };
 
     await dbService.saveMessage(systemMessage);
+    await dbService.markEventProcessed(
+      address,
+      "handshake_response",
+      event.txHash,
+      event.logIndex,
+      log.blockNumber
+    );
 
     console.log(`[verbeth] session established with ${contact.address.slice(0, 10)}...`);
 
@@ -342,6 +383,14 @@ export async function processMessageEvent(
   verbethClient: VerbethClient,
 ): Promise<MessageResult | null> {
   try {
+    const alreadyProcessed = await dbService.hasProcessedEvent(
+      address,
+      "message",
+      event.txHash,
+      event.logIndex
+    );
+    if (alreadyProcessed) return null;
+
     const log = event.rawLog;
     const abiCoder = new AbiCoder();
     const decoded = abiCoder.decode(["bytes", "uint256", "uint256"], log.data);
@@ -351,7 +400,10 @@ export async function processMessageEvent(
     const sender = "0x" + log.topics[1].slice(-40);
     const ciphertextHex = ciphertextBytes as string;
     const ciphertextRaw = getBytes(ciphertextHex);
-    const dedupKey = `${address.toLowerCase()}:${generateMessageId(log.transactionHash, log)}`;
+    const dedupKey = `${address.toLowerCase()}:${generateMessageId(
+      event.txHash,
+      log
+    )}`;
 
     const isOurMessage =
       sender.toLowerCase() === address.toLowerCase() ||
@@ -360,7 +412,16 @@ export async function processMessageEvent(
     // Check dedup for incoming messages
     if (!isOurMessage) {
       const already = await dbService.getByDedupKey(dedupKey);
-      if (already) return null;
+      if (already) {
+        await dbService.markEventProcessed(
+          address,
+          "message",
+          event.txHash,
+          event.logIndex,
+          log.blockNumber
+        );
+        return null;
+      }
     }
 
     // =========================================================================
@@ -369,11 +430,11 @@ export async function processMessageEvent(
     if (isOurMessage) {
 
       // Look up pending by txHash
-      const pending = await dbService.getPendingOutboundByTxHash(log.transactionHash);
+      const pending = await dbService.ratchet.getPendingOutboundByTxHash(log.transactionHash);
 
       if (pending && pending.status === "submitted") {
         // Finalize the pending record (clean up)
-        const finalized = await dbService.finalizePendingOutbound(pending.id);
+        const finalized = await dbService.ratchet.finalizePendingOutbound(pending.id);
 
         if (!finalized) {
           return null;
@@ -398,10 +459,28 @@ export async function processMessageEvent(
           txHash: log.transactionHash,
           blockNumber: log.blockNumber,
         });
+        await dbService.markEventProcessed(
+          address,
+          "message",
+          event.txHash,
+          event.logIndex,
+          log.blockNumber
+        );
 
         return {
           messageUpdate: [pending.id, updates],
         };
+      }
+
+      const existing = await dbService.getByDedupKey(dedupKey);
+      if (existing) {
+        await dbService.markEventProcessed(
+          address,
+          "message",
+          event.txHash,
+          event.logIndex,
+          log.blockNumber
+        );
       }
 
       return null;
@@ -412,7 +491,7 @@ export async function processMessageEvent(
     // =========================================================================
 
     // Get contact for signing key
-    const session = await dbService.getRatchetSessionByAnyInboundTopic(topic);
+    const session = await dbService.ratchet.getRatchetSessionByAnyInboundTopic(topic);
     if (!session) {
       return null;
     }
@@ -475,6 +554,14 @@ export async function processMessageEvent(
       });
       await dbService.saveContact(updatedContact);
     }
+
+    await dbService.markEventProcessed(
+      address,
+      "message",
+      event.txHash,
+      event.logIndex,
+      log.blockNumber
+    );
 
     return saved ? { newMessage: message, contactUpdate: updatedContact } : null;
   } catch (error) {

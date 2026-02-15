@@ -169,19 +169,19 @@ describe("End-to-End Handshake and Messaging Tests", () => {
     await fundTx3.wait();
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // Derive identity keys with executorSafeAddress for binding proof
+    // Derive identity keys with executorAddres for binding proof
     const smartAccountAddr = await smartAccount.getAddress();
     smartAccountIdentityKeys = await deriveIdentityKeyPairWithProof(
       smartAccountOwner,
       smartAccountAddr,
-      smartAccountAddr // executorSafeAddress = smart account address
+      smartAccountAddr // executorAddres = smart account address
     );
 
     // For EOA, the executor is the EOA itself (no Safe in this test)
     eoaAccount1IdentityKeys = await deriveIdentityKeyPairWithProof(
       eoaAccount1,
       eoaAccount1.address,
-      eoaAccount1.address // executorSafeAddress = EOA address (acts as its own executor)
+      eoaAccount1.address // executorAddres = EOA address (acts as its own executor)
     );
 
   }, 180000);

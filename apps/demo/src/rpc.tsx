@@ -5,17 +5,16 @@ import { baseSepolia } from "viem/chains";
 
 
 const WS_URL = import.meta.env.VITE_RPC_WS_URL as string | undefined;
-const ALCHEMY_HTTP_URL = WS_URL?.replace(/^wss:\/\//, "https://");
 
 const PUBLIC_HTTP_1 = "https://sepolia.base.org";
 const PUBLIC_HTTP_2 = "https://base-sepolia-rpc.publicnode.com";
+export const BASESEPOLIA_HTTP_URLS = [PUBLIC_HTTP_1, PUBLIC_HTTP_2] as const;
 
-/** Best available HTTP URL – Alchemy when configured, otherwise public. */
-export const BASESEPOLIA_HTTP_URL = ALCHEMY_HTTP_URL ?? PUBLIC_HTTP_1;
+/** Browser-safe read RPC URL for Base Sepolia. */
+export const BASESEPOLIA_HTTP_URL = PUBLIC_HTTP_1;
 
 export type TransportStatus =
   | "ws"
-  | "http-alchemy"
   | "http-public"
   | "disconnected";
 
@@ -36,9 +35,7 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const urls = ALCHEMY_HTTP_URL
-        ? [ALCHEMY_HTTP_URL, PUBLIC_HTTP_1, PUBLIC_HTTP_2]
-        : [PUBLIC_HTTP_1, PUBLIC_HTTP_2];
+      const urls = [...BASESEPOLIA_HTTP_URLS];
 
       for (const url of urls) {
         try {
@@ -50,9 +47,7 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
           if (mounted) {
             setEthersProvider(p);
             if (!WS_URL) {
-              setTransportStatus(
-                url === ALCHEMY_HTTP_URL ? "http-alchemy" : "http-public"
-              );
+              setTransportStatus("http-public");
             }
           }
           return;
@@ -77,9 +72,6 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
           reconnect: { attempts: 5, delay: 2_000 },
         })
       );
-    }
-    if (ALCHEMY_HTTP_URL) {
-      transports.push(http(ALCHEMY_HTTP_URL));
     }
     transports.push(http(PUBLIC_HTTP_1));
     transports.push(http(PUBLIC_HTTP_2));
