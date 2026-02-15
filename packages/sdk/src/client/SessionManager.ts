@@ -84,11 +84,7 @@ export class SessionManager {
       return { session: workingSession, topicMatch: 'next' };
     }
 
-    if (
-      workingSession.previousTopicInbound?.toLowerCase() === topicLower &&
-      workingSession.previousTopicExpiry &&
-      Date.now() < workingSession.previousTopicExpiry
-    ) {
+    if (workingSession.previousTopicInbound?.toLowerCase() === topicLower) {
       if (!cached) {
         this.cache.set(workingSession.conversationId, workingSession);
       }

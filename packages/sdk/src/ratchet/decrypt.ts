@@ -326,11 +326,7 @@ export function matchesSessionTopic(
     return 'current';
   }
 
-  if (
-    session.previousTopicInbound?.toLowerCase() === t &&
-    session.previousTopicExpiry &&
-    Date.now() < session.previousTopicExpiry
-  ) {
+  if (session.previousTopicInbound?.toLowerCase() === t) {
     return 'previous';
   }
 
