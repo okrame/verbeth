@@ -31,3 +31,4 @@ ignition/deployments/chain-84532
 *.claude/
 CLAUDE.md
 *myplans
+.vercel

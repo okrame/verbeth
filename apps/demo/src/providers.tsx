@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
 import { RainbowKitProvider, darkTheme } from '@rainbow-me/rainbowkit';
 import { config } from '../config.js';
+import { APP_CHAIN_ID } from './chain.js';
 
 
 const customTheme = darkTheme({
@@ -22,7 +23,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <RainbowKitProvider
           theme={customTheme}
           modalSize="compact"
-          initialChain={84532} 
+          initialChain={APP_CHAIN_ID}
         > 
           {children}
         </RainbowKitProvider>

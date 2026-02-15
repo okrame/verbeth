@@ -3,13 +3,14 @@ import SafeDefault from '@safe-global/protocol-kit'
 import SafeApiKitDefault from '@safe-global/api-kit'
 import { getAddress, Interface } from 'ethers'
 import { getModuleSetupHelper, getVerbethAddress } from '@verbeth/sdk'
-import { SAFE_MODULE_ADDRESS } from '../types.js'
+import { getSafeModuleAddressOrThrow } from '../types.js'
 
 // Handle ESM/CJS interop - safe libs export default differently
 const Safe = (SafeDefault as any).default ?? SafeDefault
 const SafeApiKit = (SafeApiKitDefault as any).default ?? SafeApiKitDefault
 
-const SAFE_API_KEY = import.meta.env.VITE_SAFE_API_KEY as string
+const SAFE_API_KEY = import.meta.env.VITE_SAFE_API_KEY as string | undefined
+
 const VERBETH_SINGLETON_ADDR = getVerbethAddress()
 
 export interface SessionConfig {
@@ -63,6 +64,7 @@ export async function checkSafeOnChainStatus(params: {
   isDeployed: boolean
   moduleEnabled: boolean
 }> {
+  const moduleAddress = getSafeModuleAddressOrThrow()
   const { safeAddress, providerEip1193, ownerAddress, contractNetworks } = params
   const maybeNetworks = contractNetworks ? { contractNetworks } : {}
 
@@ -79,7 +81,7 @@ export async function checkSafeOnChainStatus(params: {
       return { isDeployed: false, moduleEnabled: false }
     }
 
-    const moduleEnabled = await protocolKit.isModuleEnabled(SAFE_MODULE_ADDRESS)
+    const moduleEnabled = await protocolKit.isModuleEnabled(moduleAddress)
     return { isDeployed: true, moduleEnabled }
   } catch {
     return { isDeployed: false, moduleEnabled: false }
@@ -112,6 +114,7 @@ export async function getOrCreateSafeForOwner(params: {
   } = params
 
   const ownerAddress = getAddress(rawOwnerAddress) as `0x${string}`
+  const moduleAddress = getSafeModuleAddressOrThrow()
   const maybeNetworks = contractNetworks ? { contractNetworks } : {}
 
   // 1) ALWAYS build deterministic config first
@@ -142,7 +145,7 @@ export async function getOrCreateSafeForOwner(params: {
       ...maybeNetworks,
     })
 
-    const moduleEnabled = await protocolKit.isModuleEnabled(SAFE_MODULE_ADDRESS)
+    const moduleEnabled = await protocolKit.isModuleEnabled(moduleAddress)
 
     console.log(`Found VerbEth Safe on-chain at ${verbEthSafeAddress}`)
     return {
@@ -226,7 +229,7 @@ export async function getOrCreateSafeForOwner(params: {
     ...maybeNetworks,
   })
 
-  const moduleEnabled = await protocolKit.isModuleEnabled(SAFE_MODULE_ADDRESS)
+  const moduleEnabled = await protocolKit.isModuleEnabled(moduleAddress)
 
   return {
     safeAddress: verbEthSafeAddress,
@@ -247,6 +250,7 @@ function buildSafeAccountConfig(
   chainId: number,
   sessionConfig: SessionConfig
 ): any {
+  const moduleAddress = getSafeModuleAddressOrThrow()
   const baseConfig = {
     owners: [ownerAddress],
     threshold: 1,
@@ -266,7 +270,7 @@ function buildSafeAccountConfig(
   const NO_EXPIRY = '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
 
   const setupData = helperInterface.encodeFunctionData('enableModuleWithSession', [
-    SAFE_MODULE_ADDRESS,
+    moduleAddress,
     sessionConfig.sessionSigner,
     NO_EXPIRY,
     sessionConfig.target,
@@ -287,7 +291,7 @@ export function isHelperAvailable(chainId: number): boolean {
  * Enable module on an already-deployed Safe (separate tx, for legacy Safes)
  */
 export async function ensureModuleEnabled(protocolKit: any): Promise<boolean> {
-  const moduleAddress = getAddress(SAFE_MODULE_ADDRESS)
+  const moduleAddress = getAddress(getSafeModuleAddressOrThrow())
   const enabled = await protocolKit.isModuleEnabled(moduleAddress)
   if (enabled) {
     console.log(`Module already enabled`)

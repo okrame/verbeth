@@ -5,7 +5,7 @@ import {
   getOrCreateSafeForOwner,
   ensureModuleEnabled,
 } from "../services/safeAccount.js";
-import { VERBETH_SINGLETON_ADDR, SAFE_MODULE_ADDRESS, ExecutionMode } from "../types.js";
+import { VERBETH_SINGLETON_ADDR, getSafeModuleAddressOrThrow, ExecutionMode } from "../types.js";
 
 interface UseSessionSetupParams {
   walletClient: any;
@@ -145,8 +145,9 @@ export function useSessionSetup({
       }
 
       // Case 3: Safe + module exist → Just setup session
+      const moduleAddress = getSafeModuleAddressOrThrow();
       const moduleContract = new Contract(
-        SAFE_MODULE_ADDRESS,
+        moduleAddress,
         ["function setupSession(address safe, address signer, uint256 expiry, address target)"],
         ethersSigner
       );

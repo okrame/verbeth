@@ -11,6 +11,7 @@ interface IdentityCreationProps {
     signingStep?: 1 | 2 | null;
     needsModeSelection: boolean;
     fastModeAvailable: boolean;
+    fastModeUnavailableReason?: string;
     chainId: number;
 }
 
@@ -164,6 +165,7 @@ export function IdentityCreation({
     signingStep,
     needsModeSelection,
     fastModeAvailable,
+    fastModeUnavailableReason,
     chainId,
 }: IdentityCreationProps) {
     //Track selected mode locally before identity creation starts
@@ -214,7 +216,7 @@ export function IdentityCreation({
                             ]}
                             recommended={fastModeAvailable}
                             disabled={!fastModeAvailable}
-                            disabledReason={!fastModeAvailable ? `Helper not deployed on chain ${chainId}` : undefined}
+                            disabledReason={!fastModeAvailable ? (fastModeUnavailableReason ?? `Helper not deployed on chain ${chainId}`) : undefined}
                             onClick={() => handleModeSelect('fast')}
                         />
 

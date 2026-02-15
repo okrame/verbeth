@@ -23,7 +23,8 @@ import {
 } from '../services/safeAccount.js';
 import {
   VERBETH_SINGLETON_ADDR,
-  SAFE_MODULE_ADDRESS,
+  getSafeModuleAddressOrThrow,
+  hasSafeModuleAddress,
   StoredIdentity,
   ExecutionMode,
 } from '../types.js';
@@ -74,7 +75,19 @@ export function useInitIdentity({
   const identityContext = useMemo(() => ({ chainId, rpId }), [chainId, rpId]);
 
   // Check if fast mode is available on this chain
-  const fastModeAvailable = useMemo(() => isHelperAvailable(chainId), [chainId]);
+  const fastModeAvailable = useMemo(
+    () => isHelperAvailable(chainId) && hasSafeModuleAddress(),
+    [chainId]
+  );
+  const fastModeUnavailableReason = useMemo(() => {
+    if (!isHelperAvailable(chainId)) {
+      return `Helper not deployed on chain ${chainId}`;
+    }
+    if (!hasSafeModuleAddress()) {
+      return 'Missing VITE_SAFE_SESSION_MODULE';
+    }
+    return undefined;
+  }, [chainId]);
 
   const resetState = useCallback(() => {
     setCurrentAccount(null);
@@ -206,7 +219,7 @@ export function useInitIdentity({
     const safeSessionSigner = new SafeSessionSigner({
       provider: readProvider,
       safeAddress,
-      moduleAddress: SAFE_MODULE_ADDRESS,
+      moduleAddress: getSafeModuleAddressOrThrow(),
       verbEthAddress: VERBETH_SINGLETON_ADDR,
       sessionSigner: sessionWallet,
     });
@@ -364,6 +377,7 @@ export function useInitIdentity({
     needsModeSelection,
     emitterAddress,
     fastModeAvailable,
+    fastModeUnavailableReason,
     setExecutionMode,
 
     // Session state

@@ -3,12 +3,24 @@ import { getVerbethAddress, getCreationBlock, SCAN_DEFAULTS } from '@verbeth/sdk
 import { keccak256, toUtf8Bytes, hexlify, getBytes } from 'ethers';
 
 /* ------------------------------- CONSTANTS -------------------------------- */
-// Re-export from SDK for backward compatibility
 export const VERBETH_SINGLETON_ADDR = getVerbethAddress();
 export const CONTRACT_CREATION_BLOCK = getCreationBlock();
 export const { INITIAL_SCAN_BLOCKS, MAX_RETRIES, MAX_RANGE_PROVIDER, CHUNK_SIZE, REAL_TIME_BUFFER } = SCAN_DEFAULTS;
 
-export const SAFE_MODULE_ADDRESS = import.meta.env.VITE_SAFE_SESSION_MODULE as `0x${string}`
+export const SAFE_MODULE_ADDRESS = (
+  import.meta.env.VITE_SAFE_SESSION_MODULE as `0x${string}` | undefined
+)?.trim();
+
+export function hasSafeModuleAddress(): boolean {
+  return Boolean(SAFE_MODULE_ADDRESS);
+}
+
+export function getSafeModuleAddressOrThrow(): `0x${string}` {
+  if (!SAFE_MODULE_ADDRESS) {
+    throw new Error("[verbeth] Missing VITE_SAFE_SESSION_MODULE");
+  }
+  return SAFE_MODULE_ADDRESS as `0x${string}`;
+}
 
 /* --------------------------- EVENT SIGNATURES ---------------------------- */
 export const EVENT_SIGNATURES = {

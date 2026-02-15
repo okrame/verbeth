@@ -25,6 +25,7 @@ import { useInitIdentity } from './hooks/useInitIdentity.js';
 import { usePendingSessionReset } from './hooks/usePendingSessionReset.js';
 import { PinnedResetRequest } from './components/PinnedResetRequest.js';
 import { sessionStore, pendingStore } from './services/StorageAdapters.js';
+import { APP_CHAIN_ID } from './chain.js';
 
 export default function App() {
   const { ethers: readProvider, viem: viemClient, transportStatus } = useRpcClients();
@@ -44,7 +45,7 @@ export default function App() {
   const [healthBannerDismissed, setHealthBannerDismissed] = useState(false);
   const [isResettingContacts, setIsResettingContacts] = useState(false);
 
-  const chainId = Number(import.meta.env.VITE_CHAIN_ID);
+  const chainId = APP_CHAIN_ID;
 
 
   const {
@@ -67,6 +68,7 @@ export default function App() {
     // Actions
     needsModeSelection,
     fastModeAvailable,
+    fastModeUnavailableReason,
     executionMode,
     emitterAddress,
     createIdentity,
@@ -223,7 +225,7 @@ export default function App() {
   const providerLabel = (() => {
     switch (transportStatus) {
       case "ws":
-        return "Alchemy WS + HTTP";
+        return "Alchemy WS";
       case "http-alchemy":
         return "Alchemy HTTP";
       case "http-public":
@@ -439,6 +441,7 @@ export default function App() {
                 signingStep={signingStep}
                 needsModeSelection={needsModeSelection}
                 fastModeAvailable={fastModeAvailable}
+                fastModeUnavailableReason={fastModeUnavailableReason}
                 chainId={chainId}
               />
             ) : showHandshakeForm ? (
@@ -652,7 +655,7 @@ export default function App() {
       {ready && (
         <div className="fixed bottom-0 left-0 right-0 bg-black/80 backdrop-blur-sm p-2 sm:p-3 text-xs text-gray-500 space-y-1 z-50">
           <p>Contract: {VERBETH_SINGLETON_ADDR}</p>
-          <p>Network: Base ({chainId}) · {providerLabel}</p>
+          <p>Network: Base ({chainId}) · RPC: {providerLabel}</p>
           <p>Status: {ready ? '🟢 Ready' : '🔴 Not Ready'} {(isInitialLoading || isLoadingMore) ? '⏳ Loading' : ''}</p>
           <p>
             Sync: {syncStatusLabel}

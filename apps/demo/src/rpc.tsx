@@ -1,25 +1,21 @@
 import { createContext, useContext, useEffect, useState, useMemo } from "react";
-import { JsonRpcProvider } from "ethers";
+import { JsonRpcProvider, WebSocketProvider } from "ethers";
 import { createPublicClient, http, webSocket, fallback } from "viem";
-import { baseSepolia } from "viem/chains";
+import { APP_CHAIN, APP_CHAIN_ID, APP_WS_URL, getHttpUrlsForChain } from "./chain.js";
 
+const HTTP_URLS = getHttpUrlsForChain(APP_CHAIN_ID);
 
-const WS_URL = import.meta.env.VITE_RPC_WS_URL as string | undefined;
-const ALCHEMY_HTTP_URL = import.meta.env.VITE_RPC_HTTP_URL as string | undefined;
+/** Browser-safe read RPC URL for the active app chain. */
+export const APP_HTTP_URL = HTTP_URLS[0];
+export const APP_HTTP_URLS = HTTP_URLS;
 
-const PUBLIC_HTTP_1 = "https://sepolia.base.org";
-const PUBLIC_HTTP_2 = "https://base-sepolia-rpc.publicnode.com";
-
-const HTTP_URLS: readonly string[] = [
-  ...(ALCHEMY_HTTP_URL ? [ALCHEMY_HTTP_URL] : []),
-  PUBLIC_HTTP_1,
-  PUBLIC_HTTP_2,
-];
-
-export const BASESEPOLIA_HTTP_URLS = HTTP_URLS;
-
-/** Browser-safe read RPC URL for Base Sepolia. */
-export const BASESEPOLIA_HTTP_URL = HTTP_URLS[0];
+function isAlchemyUrl(url: string): boolean {
+  try {
+    return new URL(url).hostname.includes("alchemy.com");
+  } catch {
+    return false;
+  }
+}
 
 export type TransportStatus =
   | "ws"
@@ -35,19 +31,30 @@ type RpcState = {
 
 const RpcCtx = createContext<RpcState | null>(null);
 
-function isAlchemyUrl(url: string): boolean {
-  return url.includes("alchemy.com");
-}
-
 export function RpcProvider({ children }: { children: React.ReactNode }) {
   const [ethersProvider, setEthersProvider] = useState<JsonRpcProvider | null>(null);
-  const [transportStatus, setTransportStatus] = useState<TransportStatus>(
-    WS_URL ? "ws" : ALCHEMY_HTTP_URL ? "http-alchemy" : "http-public"
-  );
+  const [transportStatus, setTransportStatus] = useState<TransportStatus>("disconnected");
 
   useEffect(() => {
     let mounted = true;
+
     (async () => {
+      // 1) Try WebSocket first
+      if (APP_WS_URL) {
+        try {
+          const ws = new WebSocketProvider(APP_WS_URL);
+          await ws.getBlockNumber();
+          if (mounted) {
+            setEthersProvider(ws as any);
+            setTransportStatus("ws");
+          }
+          return;
+        } catch (e) {
+          console.warn(`Ethers WS failed for ${APP_WS_URL}:`, e);
+        }
+      }
+
+      // 2) Try HTTP endpoints (Alchemy first if present, then public)
       for (const url of HTTP_URLS) {
         try {
           const p = new JsonRpcProvider(url, undefined, {
@@ -57,15 +64,14 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
           await p.getBlockNumber();
           if (mounted) {
             setEthersProvider(p);
-            if (!WS_URL) {
-              setTransportStatus(isAlchemyUrl(url) ? "http-alchemy" : "http-public");
-            }
+            setTransportStatus(isAlchemyUrl(url) ? "http-alchemy" : "http-public");
           }
           return;
         } catch (e) {
           console.warn(`Ethers RPC failed for ${url}:`, e);
         }
       }
+
       if (mounted) {
         console.error("All ethers RPC endpoints failed");
         setTransportStatus("disconnected");
@@ -77,21 +83,18 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
   const viemClient = useMemo(() => {
     const transports = [];
 
-    if (WS_URL) {
-      transports.push(
-        webSocket(WS_URL, {
-          reconnect: { attempts: 5, delay: 2_000 },
-        })
-      );
+    // WS transport first (if configured)
+    if (APP_WS_URL) {
+      transports.push(webSocket(APP_WS_URL));
     }
-    if (ALCHEMY_HTTP_URL) {
-      transports.push(http(ALCHEMY_HTTP_URL));
+
+    // HTTP transports (Alchemy first if present, then public)
+    for (const url of HTTP_URLS) {
+      transports.push(http(url));
     }
-    transports.push(http(PUBLIC_HTTP_1));
-    transports.push(http(PUBLIC_HTTP_2));
 
     return createPublicClient({
-      chain: baseSepolia,
+      chain: APP_CHAIN,
       transport: fallback(transports),
     });
   }, []);

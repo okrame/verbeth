@@ -6,7 +6,7 @@ import {
   metaMaskWallet,
   walletConnectWallet,
 } from '@rainbow-me/rainbowkit/wallets';
-import { BASESEPOLIA_HTTP_URL } from './src/rpc.js';
+import { getHttpUrlsForChain } from './src/chain.js';
 
 
 const projectId = 'abcd4fa063dd349643afb0bdc85bb248';
@@ -34,8 +34,8 @@ export const config = createConfig({
   connectors,
   chains: [baseSepolia, base, mainnet],
   transports: {
-    [baseSepolia.id]: http(BASESEPOLIA_HTTP_URL),
-    [base.id]:       http('https://base-rpc.publicnode.com'),
+    [baseSepolia.id]: http(getHttpUrlsForChain(baseSepolia.id)[0]),
+    [base.id]:       http(getHttpUrlsForChain(base.id)[0]),
     [mainnet.id]:    http(),
   },
 });
