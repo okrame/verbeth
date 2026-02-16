@@ -42,11 +42,13 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
       // 1) Try WebSocket first
       if (APP_WS_URL) {
         try {
-          const ws = new WebSocketProvider(APP_WS_URL);
+          const ws = new WebSocketProvider(APP_WS_URL, APP_CHAIN_ID);
           await ws.getBlockNumber();
           if (mounted) {
             setEthersProvider(ws as any);
             setTransportStatus("ws");
+          } else {
+            ws.destroy();
           }
           return;
         } catch (e) {
@@ -56,19 +58,24 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
 
       // 2) Try HTTP endpoints (Alchemy first if present, then public)
       for (const url of HTTP_URLS) {
+        let p: JsonRpcProvider | undefined;
         try {
-          const p = new JsonRpcProvider(url, undefined, {
+          p = new JsonRpcProvider(url, APP_CHAIN_ID, {
+            staticNetwork: true,
             polling: true,
-            pollingInterval: 3000,
+            pollingInterval: 4000,
           });
           await p.getBlockNumber();
           if (mounted) {
             setEthersProvider(p);
             setTransportStatus(isAlchemyUrl(url) ? "http-alchemy" : "http-public");
+          } else {
+            p.destroy();
           }
           return;
         } catch (e) {
           console.warn(`Ethers RPC failed for ${url}:`, e);
+          p?.destroy();
         }
       }
 
@@ -77,7 +84,10 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
         setTransportStatus("disconnected");
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+      setEthersProvider((prev) => { prev?.destroy(); return null; });
+    };
   }, []);
 
   const viemClient = useMemo(() => {

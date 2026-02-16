@@ -1,0 +1,47 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+
+  <defs>
+    <!-- Stealth Top Gradient -->
+    <linearGradient id="ethTop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3a3a3a"/>
+      <stop offset="100%" stop-color="#141414"/>
+    </linearGradient>
+
+    <!-- Stealth Bottom Gradient -->
+    <linearGradient id="ethBottom" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2a2a2a"/>
+      <stop offset="100%" stop-color="#0d0d0d"/>
+    </linearGradient>
+
+    <!-- Subtle Steel V -->
+    <linearGradient id="vGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f2f2f2"/>
+      <stop offset="100%" stop-color="#bdbdbd"/>
+    </linearGradient>
+
+    <!-- Depth -->
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- Top Ethereum -->
+  <polygon points="256,40 120,256 256,200 392,256"
+           fill="url(#ethTop)"/>
+
+  <!-- Bottom Ethereum -->
+  <polygon points="256,472 120,296 256,352 392,296"
+           fill="url(#ethBottom)"/>
+
+  <!-- Tighter handwritten V -->
+  <path d="M190 285
+           Q230 410 256 440
+           Q282 410 322 285"
+        fill="none"
+        stroke="url(#vGrad)"
+        stroke-width="48"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        filter="url(#shadow)"/>
+
+</svg>

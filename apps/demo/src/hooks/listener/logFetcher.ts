@@ -25,13 +25,13 @@ function toMessage(error: unknown): string {
 export function isRateLimitError(error: unknown): boolean {
   const message = toMessage(error);
   const code = (error as any)?.code;
+  const nestedCode = (error as any)?.error?.code;
   return (
     code === 429 ||
+    nestedCode === 429 ||
     message.includes("429") ||
-    message.includes("rate") ||
     message.includes("too many request") ||
-    message.includes("compute units exceeded") ||
-    message.includes("limit")
+    message.includes("compute units per second")
   );
 }
 
