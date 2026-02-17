@@ -1,54 +1,76 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { AbiCoder, getBytes, keccak256, toUtf8Bytes } from "ethers";
+import { matchHsrToContact, type PendingContactEntry } from "@verbeth/sdk";
 import { dbService } from "../services/DbService.js";
+import { planRanges, ScanFailedError, safeGetLogs } from "../services/scanEngine.js";
 import {
   CONTRACT_CREATION_BLOCK,
   INITIAL_SCAN_BLOCKS,
-  MAX_RETRIES,
-  MAX_RANGE_PROVIDER,
   CHUNK_SIZE,
   REAL_TIME_BUFFER,
-  Contact,
-  ProcessedEvent,
-  MessageListenerResult,
-  ListenerSyncStatus,
-  ListenerHealthStatus,
-  PendingRange,
+  BACKFILL_COOLDOWN_MS,
+  ACCUMULATION_INTERVAL_MS,
+  FALLBACK_POLL_INTERVAL_MS,
+  EVENT_SIGNATURES,
+  VERBETH_SINGLETON_ADDR,
+  RETRY_DELAYS,
+  MAX_FAILED_RETRIES,
+  type Contact,
+  type ProcessedEvent,
+  type MessageListenerResult,
+  type SyncProgress,
+  type FailedRange,
 } from "../types.js";
-import { collectEventsForRange } from "./listener/eventQuerySpecs.js";
-import { createLogFetcher } from "./listener/logFetcher.js";
-import type { FetcherTelemetryEvent } from "./listener/logFetcher.js";
-import { clampCursorToTip, planRanges } from "./listener/scanPlanner.js";
-import {
-  dequeueRetryableRanges,
-  enqueueRanges,
-  loadSyncState,
-  saveSyncState,
-  toSyncStatus,
-} from "./listener/syncStateStore.js";
-import { evaluateHealth, pruneWindow, OK_HEALTH } from "./listener/healthScore.js";
-import type { HealthMetrics } from "./listener/healthScore.js";
+
+/* ─────────────────────────── Props / Return ──────────────────────────── */
 
 interface UseMessageListenerProps {
   readProvider: any;
   address: string | undefined;
-  /** Safe address in fast mode, EOA in classic mode. Used for outbound confirmations. */
   emitterAddress: string | undefined;
   onEventsProcessed: (events: ProcessedEvent[]) => Promise<void>;
-  /** When provided, uses watchBlockNumber (WS subscription) instead of setInterval polling. */
   viemClient?: any;
   verbethClient?: any;
 }
 
-const IDLE_SYNC_STATUS: ListenerSyncStatus = {
-  mode: "idle",
-  pendingRanges: 0,
-  isComplete: false,
-};
+/* ──────────────────────── Helpers (inline, React-adjacent) ────────────────────────── */
 
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error ?? "unknown error");
+function userRecipientHash(address: string): string {
+  return keccak256(toUtf8Bytes(`contact:${address.toLowerCase()}`));
 }
+
+function toLogIndex(log: any): number {
+  const value = typeof log.logIndex !== "undefined" ? log.logIndex : log.index;
+  return Number(value ?? 0);
+}
+
+function findMatchingContact(log: any, pendingContacts: Contact[]): Contact | null {
+  const inResponseTo = log.topics[1] as `0x${string}`;
+  const abiCoder = new AbiCoder();
+  const [responderEphemeralRBytes, ciphertextBytes] = abiCoder.decode(
+    ["bytes32", "bytes"],
+    log.data
+  );
+  const responderEphemeralR = getBytes(responderEphemeralRBytes);
+  const encryptedPayload = new TextDecoder().decode(getBytes(ciphertextBytes));
+
+  const entries: PendingContactEntry[] = pendingContacts
+    .filter(
+      (c): c is Contact & { handshakeEphemeralSecret: string; handshakeKemSecret: string } =>
+        !!c.handshakeEphemeralSecret && !!c.handshakeKemSecret
+    )
+    .map((c) => ({
+      address: c.address,
+      handshakeEphemeralSecret: getBytes(c.handshakeEphemeralSecret),
+      kemSecretKey: getBytes(c.handshakeKemSecret),
+    }));
+
+  const matchedAddress = matchHsrToContact(entries, inResponseTo, responderEphemeralR, encryptedPayload);
+  if (!matchedAddress) return null;
+  return pendingContacts.find((c) => c.address.toLowerCase() === matchedAddress.toLowerCase()) ?? null;
+}
+
+/* ═══════════════════════════ HOOK ═══════════════════════════ */
 
 export const useMessageListener = ({
   readProvider,
@@ -61,181 +83,140 @@ export const useMessageListener = ({
   const [isInitialLoading, setIsInitialLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [canLoadMore, setCanLoadMore] = useState(true);
-  const [syncProgress, setSyncProgress] = useState<{ current: number; total: number } | null>(null);
-  const [syncStatus, setSyncStatus] = useState<ListenerSyncStatus>(IDLE_SYNC_STATUS);
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [lastKnownBlock, setLastKnownBlock] = useState<number | null>(null);
   const [oldestScannedBlock, setOldestScannedBlock] = useState<number | null>(null);
-  const [health, setHealth] = useState<ListenerHealthStatus>(OK_HEALTH);
+  const [backfillCooldown, setBackfillCooldown] = useState(false);
+  const [oldestScannedDate, setOldestScannedDate] = useState<Date | null>(null);
 
   const lastKnownBlockRef = useRef<number | null>(null);
+  const blockTimestampCache = useRef(new Map<number, Date>());
+  const latestBlockRef = useRef<number | null>(null);
   const onEventsProcessedRef = useRef(onEventsProcessed);
-  const isRealtimeScanRunningRef = useRef(false);
-  const isBackfillWorkerRunningRef = useRef(false);
+  const isScanningRef = useRef(false);
   const hasBootstrappedRef = useRef(false);
-
-  // Health metric refs
-  const rateLimitTimestampsRef = useRef<number[]>([]);
-  const wsErrorTimestampsRef = useRef<number[]>([]);
-  const tipLagStateRef = useRef<{ blocks: number; since: number | null }>({ blocks: 0, since: null });
-  const pendingRangeStateRef = useRef<{ count: number; since: number | null }>({ count: 0, since: null });
+  const processedLogs = useRef(new Set<string>());
+  const lastBackfillAtRef = useRef(0);
+  const failedRangesRef = useRef<FailedRange[]>([]);
+  const droppedChunksRef = useRef(0);
 
   onEventsProcessedRef.current = onEventsProcessed;
 
-  const recomputeHealth = useCallback(() => {
-    rateLimitTimestampsRef.current = pruneWindow(rateLimitTimestampsRef.current, 60_000);
-    wsErrorTimestampsRef.current = pruneWindow(wsErrorTimestampsRef.current, 60_000);
-
-    const metrics: HealthMetrics = {
-      rateLimitEvents: rateLimitTimestampsRef.current,
-      wsErrors: wsErrorTimestampsRef.current,
-      pendingRanges: pendingRangeStateRef.current.count,
-      pendingRangesSince: pendingRangeStateRef.current.since,
-      tipLagBlocks: tipLagStateRef.current.blocks,
-      tipLagSince: tipLagStateRef.current.since,
-      syncMode: syncStatus.mode,
-    };
-    setHealth(evaluateHealth(metrics));
-  }, [syncStatus.mode]);
-
-  const handleTelemetry = useCallback((event: FetcherTelemetryEvent) => {
-    if (event.type === "rate_limit") {
-      rateLimitTimestampsRef.current.push(Date.now());
-      recomputeHealth();
-    }
-  }, [recomputeHealth]);
-
-  const logFetcher = useMemo(() => {
-    if (!readProvider) return null;
-    return createLogFetcher({
-      provider: readProvider,
-      maxRetries: MAX_RETRIES,
-      maxRangeProvider: MAX_RANGE_PROVIDER,
-      onTelemetry: handleTelemetry,
-    });
-  }, [readProvider, handleTelemetry]);
-
-  const refreshSyncStatus = useCallback(async () => {
-    if (!address) {
-      setSyncStatus(IDLE_SYNC_STATUS);
-      return;
-    }
-    const state = await loadSyncState(address);
-    const status = toSyncStatus(state);
-    setSyncStatus(status);
-
-    const prevCount = pendingRangeStateRef.current.count;
-    const newCount = status.pendingRanges;
-    if (newCount > 0 && prevCount === 0) {
-      pendingRangeStateRef.current = { count: newCount, since: Date.now() };
-    } else if (newCount === 0) {
-      pendingRangeStateRef.current = { count: 0, since: null };
-    } else {
-      pendingRangeStateRef.current = { ...pendingRangeStateRef.current, count: newCount };
-    }
-  }, [address]);
-
-  const getCurrentContacts = useCallback(async (): Promise<Contact[]> => {
-    if (!address) return [];
-    try {
-      return await dbService.getAllContacts(address);
-    } catch (error) {
-      console.error("[verbeth] failed to load contacts:", error);
-      return [];
-    }
-  }, [address]);
+  /* ───────────── scanBlockRange — 4 queries, smart skipping ────────────── */
 
   const scanBlockRange = useCallback(
-    async (fromBlock: number, toBlock: number): Promise<ProcessedEvent[]> => {
-      if (!address || !logFetcher || fromBlock > toBlock) return [];
+    async (fromBlock: number, toBlock: number, opts?: { handshakesOnly?: boolean }): Promise<ProcessedEvent[]> => {
+      if (!address || !readProvider || fromBlock > toBlock) return [];
+      const handshakesOnly = opts?.handshakesOnly ?? false;
 
-      const contacts = await getCurrentContacts();
-      const pendingContacts = contacts.filter((contact) => contact.status === "handshake_sent");
+      const contacts = await dbService.getAllContacts(address);
+      const pendingContacts = contacts.filter((c) => c.status === "handshake_sent");
       const activeTopics = await dbService.ratchet.getAllActiveInboundTopics(address);
 
-      return collectEventsForRange({
-        fromBlock,
-        toBlock,
-        context: {
-          address,
-          emitterAddress,
-          activeTopics,
-          pendingContacts,
-        },
-        getLogs: async (filter, rangeStart, rangeEnd) => {
-          return logFetcher.getLogsForRange(filter, {
-            fromBlock: rangeStart,
-            toBlock: rangeEnd,
-          });
-        },
-      });
+      const events: ProcessedEvent[] = [];
+
+      const addEvent = (
+        log: any,
+        eventType: "handshake" | "handshake_response" | "message",
+        matchedContactAddress?: string
+      ) => {
+        const txHash = log.transactionHash as string;
+        const logIndex = toLogIndex(log);
+        const logKey = `${txHash}-${logIndex}`;
+        const dedupKey = `${eventType}:${logKey}`;
+        if (processedLogs.current.has(dedupKey)) return;
+        processedLogs.current.add(dedupKey);
+        events.push({
+          logKey,
+          eventType,
+          rawLog: log,
+          txHash,
+          logIndex,
+          blockNumber: Number(log.blockNumber ?? 0),
+          timestamp: Date.now(),
+          matchedContactAddress,
+        });
+      };
+
+      // 1) Inbound handshakes (always)
+      const hsLogs = await safeGetLogs(readProvider, {
+        address: VERBETH_SINGLETON_ADDR,
+        topics: [EVENT_SIGNATURES.Handshake, userRecipientHash(address)],
+      }, fromBlock, toBlock);
+      for (const log of hsLogs) addEvent(log, "handshake");
+
+      // 2) Handshake responses (only if pending contacts)
+      if (pendingContacts.length > 0) {
+        const hsrLogs = await safeGetLogs(readProvider, {
+          address: VERBETH_SINGLETON_ADDR,
+          topics: [EVENT_SIGNATURES.HandshakeResponse],
+        }, fromBlock, toBlock);
+        for (const log of hsrLogs) {
+          const match = findMatchingContact(log, pendingContacts);
+          if (match) addEvent(log, "handshake_response", match.address);
+        }
+      }
+
+      // 3) Inbound messages (only if active topics) — skip in handshakesOnly mode
+      if (!handshakesOnly && activeTopics.length > 0) {
+        const msgLogs = await safeGetLogs(readProvider, {
+          address: VERBETH_SINGLETON_ADDR,
+          topics: [EVENT_SIGNATURES.MessageSent, null, activeTopics],
+        }, fromBlock, toBlock);
+        for (const log of msgLogs) addEvent(log, "message");
+      }
+
+      // 4) Outbound confirmation (skip for fresh users with no contacts) — skip in handshakesOnly mode
+      if (!handshakesOnly && contacts.length > 0) {
+        const emitter = emitterAddress ?? address;
+        const senderTopic = "0x000000000000000000000000" + emitter.slice(2).toLowerCase();
+        const outLogs = await safeGetLogs(readProvider, {
+          address: VERBETH_SINGLETON_ADDR,
+          topics: [EVENT_SIGNATURES.MessageSent, senderTopic],
+        }, fromBlock, toBlock);
+        for (const log of outLogs) addEvent(log, "message");
+      }
+
+      events.sort((a, b) => (a.blockNumber !== b.blockNumber ? a.blockNumber - b.blockNumber : a.logIndex - b.logIndex));
+      return events;
     },
-    [address, emitterAddress, getCurrentContacts, logFetcher]
+    [address, emitterAddress, readProvider]
   );
 
   const processRange = useCallback(
-    async (fromBlock: number, toBlock: number): Promise<ProcessedEvent[]> => {
-      const events = await scanBlockRange(fromBlock, toBlock);
-      if (events.length > 0) {
-        await onEventsProcessedRef.current(events);
-      }
+    async (fromBlock: number, toBlock: number, opts?: { handshakesOnly?: boolean }) => {
+      const events = await scanBlockRange(fromBlock, toBlock, opts);
+      if (events.length > 0) await onEventsProcessedRef.current(events);
       return events;
     },
     [scanBlockRange]
   );
 
-  const batchProcessRanges = useCallback(
-    async (
-      ranges: PendingRange[] | { fromBlock: number; toBlock: number }[],
-      options?: { showProgress?: boolean; stopOnError?: boolean }
-    ): Promise<ProcessedEvent[]> => {
-      const { showProgress = false, stopOnError = false } = options ?? {};
-      const allEvents: ProcessedEvent[] = [];
-      const failedRanges: PendingRange[] = [];
+  /* ──────────── Safe processRange that catches failures ──────────── */
 
-      if (showProgress && ranges.length > 1) {
-        setSyncProgress({ current: 0, total: ranges.length });
-      }
-
-      let completed = 0;
-      for (const range of ranges) {
-        try {
-          const events = await processRange(range.fromBlock, range.toBlock);
-          allEvents.push(...events);
-        } catch (error) {
-          console.error(
-            `[verbeth] scan failed for range ${range.fromBlock}-${range.toBlock}:`,
-            error
-          );
-          if (stopOnError) throw error;
-          failedRanges.push({
-            fromBlock: range.fromBlock,
-            toBlock: range.toBlock,
+  const safeProcessRange = useCallback(
+    async (fromBlock: number, toBlock: number, opts?: { handshakesOnly?: boolean }) => {
+      try {
+        await processRange(fromBlock, toBlock, opts);
+      } catch (error) {
+        if (error instanceof ScanFailedError) {
+          failedRangesRef.current.push({
+            fromBlock: error.fromBlock,
+            toBlock: error.toBlock,
             attempts: 1,
-            nextRetryAt: Date.now() + 1_500,
-            lastError: toErrorMessage(error),
+            nextRetryAt: Date.now() + RETRY_DELAYS[0],
           });
         }
-
-        completed += 1;
-        if (showProgress && ranges.length > 1) {
-          setSyncProgress({ current: completed, total: ranges.length });
-        }
+        console.error(`[verbeth] chunk failed ${fromBlock}-${toBlock}:`, error);
       }
-
-      setSyncProgress(null);
-
-      if (failedRanges.length > 0 && address) {
-        await enqueueRanges(address, failedRanges, "degraded");
-        await refreshSyncStatus();
-      }
-
-      return allEvents;
     },
-    [address, processRange, refreshSyncStatus]
+    [processRange]
   );
 
+  /* ───────────────── Phase 1 — Bootstrap ─────────────────── */
+
   const performInitialScan = useCallback(async () => {
-    if (!readProvider || !address || !logFetcher) return;
+    if (!readProvider || !address) return;
 
     setIsInitialLoading(true);
 
@@ -244,66 +225,75 @@ export const useMessageListener = ({
       const initialScanComplete = !!(await dbService.getInitialScanComplete(address));
       const savedLastBlockRaw = await dbService.getLastKnownBlock(address);
       const savedOldestBlockRaw = await dbService.getOldestScannedBlock(address);
-      const savedLastBlock =
-        typeof savedLastBlockRaw === "number" ? savedLastBlockRaw : null;
-      const savedOldestBlock =
-        typeof savedOldestBlockRaw === "number" ? savedOldestBlockRaw : null;
+      const savedLastBlock = typeof savedLastBlockRaw === "number" ? savedLastBlockRaw : null;
+      const savedOldestBlock = typeof savedOldestBlockRaw === "number" ? savedOldestBlockRaw : null;
 
-      const fallbackOldest = Math.max(
-        currentBlock - INITIAL_SCAN_BLOCKS,
-        CONTRACT_CREATION_BLOCK
-      );
+      const fallbackOldest = Math.max(currentBlock - INITIAL_SCAN_BLOCKS, CONTRACT_CREATION_BLOCK);
       const effectiveOldest = savedOldestBlock ?? fallbackOldest;
       setOldestScannedBlock(effectiveOldest);
       setCanLoadMore(effectiveOldest > CONTRACT_CREATION_BLOCK);
 
       if (initialScanComplete) {
-        let cursor = savedLastBlock;
-        if (cursor === null) {
-          cursor = fallbackOldest;
-          console.warn("[verbeth] sync cursor missing, using fallback window cursor");
-        }
+        // Returning user — catch up from savedLastBlock to tip
+        let cursor = savedLastBlock ?? fallbackOldest;
+        cursor = Math.max(0, Math.min(cursor, currentBlock));
 
-        cursor = clampCursorToTip(cursor, currentBlock);
+        const gap = currentBlock - cursor;
+        console.log(`[verbeth] catch-up: cursor=${cursor} current=${currentBlock} gap=${gap}`);
 
         if (cursor < currentBlock) {
+          const totalBlocks = currentBlock - cursor;
           const catchUpRanges = planRanges(cursor + 1, currentBlock, CHUNK_SIZE);
-          await batchProcessRanges(catchUpRanges, {
-            showProgress: catchUpRanges.length > 1,
-            stopOnError: false,
-          });
+          let blocksProcessed = 0;
+
+          const showProgress = catchUpRanges.length > 1;
+          if (showProgress) {
+            setSyncProgress({ current: 0, total: totalBlocks, phase: "catch-up", failedChunks: 0 });
+          }
+
+          for (const range of catchUpRanges) {
+            await safeProcessRange(range.fromBlock, range.toBlock);
+            blocksProcessed += range.toBlock - range.fromBlock + 1;
+            if (showProgress) {
+              setSyncProgress({
+                current: blocksProcessed,
+                total: totalBlocks,
+                phase: "catch-up",
+                failedChunks: failedRangesRef.current.length,
+              });
+            }
+          }
+          setSyncProgress(null);
         }
 
         setLastKnownBlock(currentBlock);
         lastKnownBlockRef.current = currentBlock;
         await dbService.setLastKnownBlock(address, currentBlock);
-        const postState = await loadSyncState(address);
-        if (postState.pendingRanges.length === 0) {
-          await saveSyncState(address, {
-            pendingRanges: [],
-            status: "synced",
-            targetTip: currentBlock,
-            lastError: undefined,
-          });
-        } else {
-          await saveSyncState(address, {
-            targetTip: currentBlock,
-          });
-        }
-        await refreshSyncStatus();
         return;
       }
 
-      const startBlock = Math.max(
-        currentBlock - INITIAL_SCAN_BLOCKS,
-        CONTRACT_CREATION_BLOCK
-      );
+      // Fresh user — scan backward from tip
+      const startBlock = Math.max(currentBlock - INITIAL_SCAN_BLOCKS, CONTRACT_CREATION_BLOCK);
       const initialRanges = planRanges(startBlock, currentBlock, CHUNK_SIZE);
+      const totalBlocks = currentBlock - startBlock;
 
-      await batchProcessRanges(initialRanges, {
-        showProgress: initialRanges.length > 1,
-        stopOnError: true,
-      });
+      let blocksProcessed = 0;
+      if (initialRanges.length > 1) {
+        setSyncProgress({ current: 0, total: totalBlocks, phase: "catch-up", failedChunks: 0 });
+      }
+      for (const range of initialRanges) {
+        await safeProcessRange(range.fromBlock, range.toBlock);
+        blocksProcessed += range.toBlock - range.fromBlock + 1;
+        if (initialRanges.length > 1) {
+          setSyncProgress({
+            current: blocksProcessed,
+            total: totalBlocks,
+            phase: "catch-up",
+            failedChunks: failedRangesRef.current.length,
+          });
+        }
+      }
+      setSyncProgress(null);
 
       setLastKnownBlock(currentBlock);
       lastKnownBlockRef.current = currentBlock;
@@ -313,30 +303,14 @@ export const useMessageListener = ({
       await dbService.setLastKnownBlock(address, currentBlock);
       await dbService.setOldestScannedBlock(address, startBlock);
       await dbService.setInitialScanComplete(address, true);
-      await saveSyncState(address, {
-        pendingRanges: [],
-        status: "synced",
-        targetTip: currentBlock,
-        lastError: undefined,
-      });
-      await refreshSyncStatus();
     } catch (error) {
       console.error("[verbeth] scan failed during initial sync:", error);
-      await saveSyncState(address, {
-        status: "degraded",
-        lastError: toErrorMessage(error),
-      });
-      await refreshSyncStatus();
     } finally {
       setIsInitialLoading(false);
     }
-  }, [
-    address,
-    batchProcessRanges,
-    logFetcher,
-    readProvider,
-    refreshSyncStatus,
-  ]);
+  }, [address, safeProcessRange, readProvider]);
+
+  /* ───────────────── Phase 3 — Backfill (user-triggered) ────────────── */
 
   const loadMoreHistory = useCallback(async () => {
     if (
@@ -345,11 +319,13 @@ export const useMessageListener = ({
       isLoadingMore ||
       !canLoadMore ||
       oldestScannedBlock === null
-    ) {
-      return;
-    }
+    ) return;
+
+    // Cooldown guard
+    if (Date.now() - lastBackfillAtRef.current < BACKFILL_COOLDOWN_MS) return;
 
     setIsLoadingMore(true);
+    setBackfillCooldown(true);
 
     try {
       const endBlock = oldestScannedBlock - 1;
@@ -358,168 +334,42 @@ export const useMessageListener = ({
         return;
       }
 
-      const startBlock = Math.max(
-        endBlock - INITIAL_SCAN_BLOCKS,
-        CONTRACT_CREATION_BLOCK
-      );
+      const startBlock = Math.max(endBlock - INITIAL_SCAN_BLOCKS, CONTRACT_CREATION_BLOCK);
       const ranges = planRanges(startBlock, endBlock, CHUNK_SIZE);
+      const totalBlocks = endBlock - startBlock + 1;
 
-      await batchProcessRanges(ranges, {
-        showProgress: ranges.length > 1,
-        stopOnError: false,
-      });
+      let blocksProcessed = 0;
+      if (ranges.length > 1) {
+        setSyncProgress({ current: 0, total: totalBlocks, phase: "backfill", failedChunks: failedRangesRef.current.length });
+      }
+      for (const range of ranges) {
+        await safeProcessRange(range.fromBlock, range.toBlock, { handshakesOnly: true });
+        blocksProcessed += range.toBlock - range.fromBlock + 1;
+        if (ranges.length > 1) {
+          setSyncProgress({
+            current: blocksProcessed,
+            total: totalBlocks,
+            phase: "backfill",
+            failedChunks: failedRangesRef.current.length,
+          });
+        }
+      }
+      setSyncProgress(null);
 
       setOldestScannedBlock(startBlock);
       setCanLoadMore(startBlock > CONTRACT_CREATION_BLOCK);
       await dbService.setOldestScannedBlock(address, startBlock);
+      lastBackfillAtRef.current = Date.now();
     } catch (error) {
       console.error("[verbeth] failed to load more history:", error);
     } finally {
       setIsLoadingMore(false);
       setSyncProgress(null);
+      setTimeout(() => setBackfillCooldown(false), BACKFILL_COOLDOWN_MS);
     }
-  }, [
-    address,
-    batchProcessRanges,
-    canLoadMore,
-    isLoadingMore,
-    oldestScannedBlock,
-    readProvider,
-  ]);
+  }, [address, canLoadMore, isLoadingMore, oldestScannedBlock, safeProcessRange, readProvider]);
 
-  useEffect(() => {
-    if (!address || !readProvider || !logFetcher) return;
-
-    let disposed = false;
-
-    const runBackfillWorker = async () => {
-      if (disposed || isBackfillWorkerRunningRef.current) return;
-
-      isBackfillWorkerRunningRef.current = true;
-
-      try {
-        const retryableRanges = await dequeueRetryableRanges(address, Date.now(), 1);
-        if (retryableRanges.length === 0) {
-          await refreshSyncStatus();
-          return;
-        }
-
-        for (const range of retryableRanges) {
-          try {
-            await processRange(range.fromBlock, range.toBlock);
-          } catch (error) {
-            const attempts = range.attempts + 1;
-            const retryDelay =
-              Math.min(120_000, 1_500 * 2 ** Math.min(attempts, 6)) +
-              Math.floor(Math.random() * 600);
-
-            await enqueueRanges(
-              address,
-              [
-                {
-                  ...range,
-                  attempts,
-                  nextRetryAt: Date.now() + retryDelay,
-                  lastError: toErrorMessage(error),
-                },
-              ],
-              "degraded"
-            );
-          }
-        }
-
-        const state = await loadSyncState(address);
-        if (state.pendingRanges.length === 0 && state.status !== "synced") {
-          await saveSyncState(address, {
-            status: "synced",
-            lastError: undefined,
-          });
-        }
-
-        await refreshSyncStatus();
-      } finally {
-        isBackfillWorkerRunningRef.current = false;
-      }
-    };
-
-    void runBackfillWorker();
-    const interval = setInterval(() => {
-      void runBackfillWorker();
-    }, 4_000);
-
-    return () => {
-      disposed = true;
-      clearInterval(interval);
-    };
-  }, [address, logFetcher, processRange, readProvider, refreshSyncStatus]);
-
-  useEffect(() => {
-    if (!readProvider || !address) return;
-
-    const handleNewBlock = async (blockNumber: number) => {
-      const currentLastKnown = lastKnownBlockRef.current;
-      if (currentLastKnown === null) return;
-      if (isRealtimeScanRunningRef.current) return;
-
-      isRealtimeScanRunningRef.current = true;
-
-      try {
-        const readTip = Number(await readProvider.getBlockNumber());
-        const maxSafeBlock = Math.min(blockNumber, readTip) - REAL_TIME_BUFFER;
-
-        // Track tip lag for health scoring
-        const lag = blockNumber - readTip;
-        if (lag >= 1) {
-          if (tipLagStateRef.current.since === null) {
-            tipLagStateRef.current = { blocks: lag, since: Date.now() };
-          } else {
-            tipLagStateRef.current = { ...tipLagStateRef.current, blocks: lag };
-          }
-        } else {
-          tipLagStateRef.current = { blocks: 0, since: null };
-        }
-
-        if (maxSafeBlock <= currentLastKnown) return;
-
-        await processRange(currentLastKnown + 1, maxSafeBlock);
-
-        setLastKnownBlock(maxSafeBlock);
-        lastKnownBlockRef.current = maxSafeBlock;
-        await dbService.setLastKnownBlock(address, maxSafeBlock);
-      } catch (error) {
-        console.error("[verbeth] real-time scan error:", error);
-      } finally {
-        isRealtimeScanRunningRef.current = false;
-        recomputeHealth();
-      }
-    };
-
-    if (viemClient) {
-      const unwatch = viemClient.watchBlockNumber({
-        onBlockNumber: (blockNumber: bigint) => {
-          void handleNewBlock(Number(blockNumber));
-        },
-        onError: () => {
-          wsErrorTimestampsRef.current.push(Date.now());
-          recomputeHealth();
-        },
-        emitOnBegin: false,
-        pollingInterval: 4_000,
-      });
-      return unwatch;
-    }
-
-    const interval = setInterval(async () => {
-      try {
-        const currentBlock = Number(await readProvider.getBlockNumber());
-        await handleNewBlock(currentBlock);
-      } catch (error) {
-        console.error("[verbeth] real-time scan error:", error);
-      }
-    }, 5_000);
-
-    return () => clearInterval(interval);
-  }, [address, processRange, readProvider, recomputeHealth, viemClient]);
+  /* ──────────────── Reset state on address change ──────────────── */
 
   useEffect(() => {
     hasBootstrappedRef.current = false;
@@ -527,42 +377,162 @@ export const useMessageListener = ({
     setIsLoadingMore(false);
     setCanLoadMore(true);
     setSyncProgress(null);
-    setSyncStatus(IDLE_SYNC_STATUS);
     setLastKnownBlock(null);
     lastKnownBlockRef.current = null;
+    latestBlockRef.current = null;
     setOldestScannedBlock(null);
-    setHealth(OK_HEALTH);
-    rateLimitTimestampsRef.current = [];
-    wsErrorTimestampsRef.current = [];
-    tipLagStateRef.current = { blocks: 0, since: null };
-    pendingRangeStateRef.current = { count: 0, since: null };
-
-    if (!address) return;
-
-    void (async () => {
-      const persisted = await loadSyncState(address);
-      setSyncStatus(toSyncStatus(persisted));
-    })();
+    setBackfillCooldown(false);
+    setOldestScannedDate(null);
+    processedLogs.current.clear();
+    blockTimestampCache.current.clear();
+    failedRangesRef.current = [];
+    droppedChunksRef.current = 0;
   }, [address]);
 
+  /* ──────────── Oldest scanned date estimation ──────────── */
+
   useEffect(() => {
-    if (!readProvider || !address || !logFetcher || !verbethClient || hasBootstrappedRef.current) {
+    if (!readProvider || oldestScannedBlock === null) return;
+
+    const cached = blockTimestampCache.current.get(oldestScannedBlock);
+    if (cached) {
+      setOldestScannedDate(cached);
       return;
     }
 
+    let cancelled = false;
+    (async () => {
+      try {
+        const block = await readProvider.getBlock(oldestScannedBlock);
+        if (block && !cancelled) {
+          const date = new Date(Number(block.timestamp) * 1000);
+          blockTimestampCache.current.set(oldestScannedBlock, date);
+          setOldestScannedDate(date);
+        }
+      } catch {
+        // ignore — date estimation is best-effort
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [oldestScannedBlock, readProvider]);
+
+  /* ──────────── Bootstrap trigger (guarded by verbethClient) ──────────── */
+
+  useEffect(() => {
+    if (!readProvider || !address || !verbethClient || hasBootstrappedRef.current) return;
     hasBootstrappedRef.current = true;
     void performInitialScan();
-  }, [address, logFetcher, performInitialScan, readProvider, verbethClient]);
+  }, [address, performInitialScan, readProvider, verbethClient]);
+
+  /* ───────────── Phase 2 — Real-time (block accumulation) ───────────── */
+
+  useEffect(() => {
+    if (!readProvider || !address) return;
+
+    const drainAccumulated = async () => {
+      const wsLatest = latestBlockRef.current;
+      const lastKnown = lastKnownBlockRef.current;
+      if (wsLatest === null || lastKnown === null) return;
+      if (isScanningRef.current) return;
+
+      // Clamp to what the public RPC actually knows
+      const publicLatest = Number(await readProvider.getBlockNumber());
+      const maxSafeBlock = Math.min(wsLatest, publicLatest) - REAL_TIME_BUFFER;
+      if (maxSafeBlock <= lastKnown) {
+        // No new blocks — try retrying failed ranges instead
+        retryFailedRanges();
+        return;
+      }
+
+      isScanningRef.current = true;
+      try {
+        await processRange(lastKnown + 1, maxSafeBlock);
+        setLastKnownBlock(maxSafeBlock);
+        lastKnownBlockRef.current = maxSafeBlock;
+        await dbService.setLastKnownBlock(address, maxSafeBlock);
+      } catch (error) {
+        console.error("[verbeth] real-time scan error:", error);
+      } finally {
+        isScanningRef.current = false;
+      }
+
+      // After draining new blocks, try retrying failed ranges
+      retryFailedRanges();
+    };
+
+    const retryFailedRanges = () => {
+      const now = Date.now();
+      const due = failedRangesRef.current.filter((r) => r.nextRetryAt <= now);
+      if (due.length === 0) return;
+
+      // Process retries (don't await — fire and forget within the interval)
+      for (const range of due) {
+        failedRangesRef.current = failedRangesRef.current.filter((r) => r !== range);
+
+        processRange(range.fromBlock, range.toBlock).catch(() => {
+          if (range.attempts >= MAX_FAILED_RETRIES) {
+            droppedChunksRef.current++;
+            console.warn(`[verbeth] permanently dropped range ${range.fromBlock}-${range.toBlock} after ${range.attempts} attempts`);
+          } else {
+            const nextDelay = RETRY_DELAYS[Math.min(range.attempts, RETRY_DELAYS.length - 1)];
+            failedRangesRef.current.push({
+              ...range,
+              attempts: range.attempts + 1,
+              nextRetryAt: Date.now() + nextDelay,
+            });
+          }
+        });
+      }
+    };
+
+    // WS subscription feeds latestBlockRef — 0 extra RPC calls
+    let unwatchWs: (() => void) | undefined;
+    if (viemClient) {
+      unwatchWs = viemClient.watchBlockNumber({
+        onBlockNumber: (blockNumber: bigint) => {
+          latestBlockRef.current = Number(blockNumber);
+        },
+        onError: (err: unknown) => {
+          console.warn("[verbeth] WS block subscription error:", err);
+        },
+        emitOnBegin: false,
+        pollingInterval: ACCUMULATION_INTERVAL_MS,
+      });
+    }
+
+    // Drain accumulated blocks every ACCUMULATION_INTERVAL_MS
+    const drainInterval = setInterval(() => void drainAccumulated(), ACCUMULATION_INTERVAL_MS);
+
+    // Fallback: if no viemClient (no WS), poll for block number
+    let fallbackInterval: ReturnType<typeof setInterval> | undefined;
+    if (!viemClient) {
+      fallbackInterval = setInterval(async () => {
+        try {
+          const bn = Number(await readProvider.getBlockNumber());
+          latestBlockRef.current = bn;
+        } catch {
+          // ignore
+        }
+      }, FALLBACK_POLL_INTERVAL_MS);
+    }
+
+    return () => {
+      unwatchWs?.();
+      clearInterval(drainInterval);
+      if (fallbackInterval) clearInterval(fallbackInterval);
+    };
+  }, [address, processRange, readProvider, viemClient]);
 
   return {
     isInitialLoading,
     isLoadingMore,
     canLoadMore,
     syncProgress,
-    syncStatus,
     loadMoreHistory,
     lastKnownBlock,
     oldestScannedBlock,
-    health,
+    oldestScannedDate,
+    backfillCooldown,
   };
 };

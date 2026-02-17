@@ -25,9 +25,12 @@ ignition/deployments/chain-84532
 
 *scripts/
 *.vscode/
+*.vercel/
 
 *apps/notes/
 .claudeignore
 *.claude/
 CLAUDE.md
 *myplans
+/tests/scan-engine.test.ts
+/tests/scan-test-report.md

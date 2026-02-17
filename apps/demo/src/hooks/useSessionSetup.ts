@@ -5,6 +5,7 @@ import {
   getOrCreateSafeForOwner,
   ensureModuleEnabled,
 } from "../services/safeAccount.js";
+import { withRateLimit } from "../services/rpcLimiter.js";
 import { VERBETH_SINGLETON_ADDR, SAFE_MODULE_ADDRESS, ExecutionMode } from "../types.js";
 
 interface UseSessionSetupParams {
@@ -48,7 +49,7 @@ export function useSessionSetup({
 
     const refreshBalance = async () => {
       try {
-        const balance = await readProvider.getBalance(sessionSignerAddr);
+        const balance = await withRateLimit<bigint>(() => readProvider.getBalance(sessionSignerAddr));
         setSessionSignerBalance(balance);
       } catch (err) {
         console.error("Failed to refresh balance:", err);
@@ -63,7 +64,7 @@ export function useSessionSetup({
   const refreshSessionBalance = useCallback(async () => {
     if (isClassicMode || !sessionSignerAddr || !readProvider) return;
     try {
-      const balance = await readProvider.getBalance(sessionSignerAddr);
+      const balance = await withRateLimit<bigint>(() => readProvider.getBalance(sessionSignerAddr));
       console.log(`🔄 Balance: ${Number(balance) / 1e18} ETH`);
       setSessionSignerBalance(balance);
     } catch (err) {

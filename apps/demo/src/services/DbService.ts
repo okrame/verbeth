@@ -8,7 +8,6 @@ import type {
   Message,
   EventType,
   PendingHandshake,
-  PersistedSyncState,
 } from "../types.js";
 import { RatchetDbService } from "./RatchetDbService.js";
 
@@ -409,27 +408,6 @@ export class DbService {
   setInitialScanComplete(addr: string, ok: boolean) {
     const normalizedAddr = this.normalizeAddress(addr);
     return this.setSetting(`initialScanComplete_${normalizedAddr}`, ok);
-  }
-
-  private getSyncStateKey(addr: string): string {
-    const normalizedAddr = this.normalizeAddress(addr);
-    return `syncState_${normalizedAddr}`;
-  }
-
-  async getSyncState(addr: string): Promise<PersistedSyncState | null> {
-    const key = this.getSyncStateKey(addr);
-    const value = await this.getSetting(key);
-    return value ?? null;
-  }
-
-  async setSyncState(addr: string, state: PersistedSyncState): Promise<void> {
-    const key = this.getSyncStateKey(addr);
-    await this.setSetting(key, state);
-  }
-
-  async clearSyncState(addr: string): Promise<void> {
-    const key = this.getSyncStateKey(addr);
-    await this.deleteSetting(key);
   }
 
   /* ------------------------------ UTILITIES ------------------------------- */

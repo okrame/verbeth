@@ -2,6 +2,7 @@
   "name": "verbeth",
   "private": true,
   "scripts": {
+    "test:scan-engine": "./packages/sdk/node_modules/.bin/vitest run tests/scan-engine.test.ts --config vitest.integration.config.mjs --pool=threads",
     "test:integration": "./packages/sdk/node_modules/.bin/vitest run tests/*.test.ts --config vitest.integration.config.mjs --pool=threads",
     "test:integration:watch": "./packages/sdk/node_modules/.bin/vitest tests/*.test.ts --config vitest.integration.config.mjs",
     "test:unit": "cd packages/sdk && npm run test",
