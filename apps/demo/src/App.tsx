@@ -1,5 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
-import { Fingerprint, RotateCcw, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWalletClient } from 'wagmi';
 import { useRpcClients } from './rpc.js';
@@ -12,20 +11,18 @@ import { useMessageProcessor } from './hooks/useMessageProcessor.js';
 import {
   VERBETH_SINGLETON_ADDR,
   Contact,
-  Message,
 } from './types.js';
 import { InitialForm } from './components/InitialForm.js';
 import { SideToastNotifications } from './components/SideToastNotification.js';
 import { IdentityCreation } from './components/IdentityCreation.js';
 import { CelebrationToast } from "./components/CelebrationToast.js";
 import { HistoryScanner } from "./components/HistoryScanner.js";
-import { CatchUpBanner } from "./components/CatchUpBanner.js";
+import { ChatLayout } from "./components/ChatLayout.js";
 import { SessionSetupPrompt } from './components/SessionSetupPrompt.js';
 import { useChatActions } from './hooks/useChatActions.js';
 import { useSessionSetup } from './hooks/useSessionSetup.js';
 import { useInitIdentity } from './hooks/useInitIdentity.js';
 import { usePendingSessionReset } from './hooks/usePendingSessionReset.js';
-import { PinnedResetRequest } from './components/PinnedResetRequest.js';
 import { sessionStore, pendingStore } from './services/StorageAdapters.js';
 import { APP_CHAIN_ID } from './chain.js';
 
@@ -44,10 +41,7 @@ export default function App() {
   const [showToast, setShowToast] = useState(false);
   const [verbethClient, setVerbethClient] = useState<VerbethClient | null>(null);
 
-  const [isResettingContacts, setIsResettingContacts] = useState(false);
-
   const chainId = APP_CHAIN_ID;
-
 
   const {
     identityKeyPair,
@@ -238,103 +232,11 @@ export default function App() {
     setShowHandshakeForm(!ready || !currentlyConnected || contacts.length === 0 || needsIdentityCreation);
   }, [ready, isConnected, contacts.length, needsIdentityCreation]);
 
-  const renderMessage = (msg: Message) => {
-    const isOutgoing = msg.direction === 'outgoing';
-    const isFailed = msg.status === 'failed';
-    const isPending = msg.status === 'pending';
-    const isLost = msg.isLost === true;
-    const isInLimbo = !isLost && hasPendingReset && isOutgoing && msg.type !== 'system' && limboAfterTimestamp && msg.timestamp > limboAfterTimestamp;
-
-    return (
-      <div
-        key={msg.id}
-        className={`max-w-[80%] w-fit ${isOutgoing ? 'ml-auto' : ''}`}
-      >
-        <div
-          className={`p-3 rounded-lg ${isOutgoing
-            ? isFailed
-              ? 'bg-red-900/50 border border-red-700'
-              : 'bg-blue-600'
-            : 'bg-gray-700'
-            } ${msg.type === 'system' ? 'bg-gray-800 text-gray-400 italic' : ''} 
-           ${isPending || isInLimbo || isLost ? 'opacity-60' : ''}`}
-        >
-          <p className="text-sm flex items-center gap-1">
-            {msg.type === "system" && msg.verified !== undefined && (
-              msg.verified ? (
-                <span className="relative group cursor-help">
-                  <Fingerprint size={14} className="text-green-400 inline-block mr-1" />
-                  <span className="absolute bottom-full left-0 mb-1 px-2 py-1 text-xs rounded bg-gray-900 text-green-100 border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
-                    Identity proof verified
-                  </span>
-                </span>
-              ) : (
-                <span className="relative group cursor-help">
-                  <Fingerprint size={14} className="text-red-400 inline-block mr-1" />
-                  <span className="absolute bottom-full left-0 mb-1 px-2 py-1 text-xs rounded bg-gray-900 text-red-100 border border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
-                    Identity proof not verified
-                  </span>
-                </span>
-              )
-            )}
-
-            {msg.type === "system" && msg.decrypted ? (
-              <>
-                <span className="font-bold">{msg.decrypted.split(":")[0]}:</span>
-                {msg.decrypted.split(":").slice(1).join(":")}
-              </>
-            ) : (
-              msg.decrypted || msg.ciphertext
-            )}
-          </p>
-
-          <div className="flex justify-end items-center gap-1.5 mt-1">
-            <span className="text-xs text-gray-300">
-              {new Date(msg.timestamp).toLocaleTimeString()}
-            </span>
-            {isOutgoing && (
-              <span className="text-xs" title={isLost ? 'Undelivered' : `Status: ${msg.status}`}>
-                {isLost ? '✗' :
-                  isInLimbo ? '✓' :
-                    msg.status === 'confirmed' ? '✓✓' :
-                      msg.status === 'failed' ? '✗' :
-                        msg.status === 'pending' ? '✓' : '?'}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Failed message actions */}
-        {isFailed && isOutgoing && (
-          <div className="flex items-center justify-end gap-2 mt-1 text-xs">
-            <span className="text-red-400">Failed to send</span>
-            <button
-              onClick={() => retryFailedMessage(msg.id)}
-              className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors"
-              title="Send again"
-            >
-              <RotateCcw size={12} />
-              <span>Retry</span>
-            </button>
-            <button
-              onClick={() => cancelQueuedMessage(msg.id)}
-              className="flex items-center gap-1 text-gray-400 hover:text-gray-300 transition-colors"
-              title="Delete message"
-            >
-              <X size={12} />
-              <span>Delete</span>
-            </button>
-          </div>
-        )}
-      </div>
-    );
-  };
-
   // Get queue status for selected contact
   const queueStatus = selectedContact ? getContactQueueStatus(selectedContact) : null;
 
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="h-dvh bg-black text-white flex flex-col overflow-hidden">
       <style>{`
         .custom-scrollbar::-webkit-scrollbar {
           width: 8px;
@@ -356,7 +258,7 @@ export default function App() {
           scrollbar-color: rgba(75, 85, 99, 0.8) rgba(17, 24, 39, 0.5);
         }
       `}</style>
-      <div className="w-full bg-black relative">
+      <div className="w-full bg-black relative shrink-0">
         <div className="flex justify-between items-start px-2 sm:px-4 py-2 sm:py-4">
           {/* LEFT: title */}
           <div className="flex flex-col items-start">
@@ -385,9 +287,9 @@ export default function App() {
       </div>
 
       {/* Main content with max-width */}
-      <div className="max-w-6xl mx-auto pt-px px-2 sm:px-4 pb-4 flex flex-col min-h-[80vh]">
-        <div className="flex-1 flex flex-col pb-32 sm:pb-24">
-          <div className="flex-1 flex flex-col">
+      <div className="max-w-6xl mx-auto w-full pt-px px-2 sm:px-4 pb-2 flex-1 min-h-0 overflow-hidden flex flex-col">
+        <div className="flex-1 min-h-0 flex flex-col">
+          <div className="flex-1 min-h-0 flex flex-col">
 
             {/* Handshake Toast Notifiche */}
             <SideToastNotifications
@@ -449,195 +351,37 @@ export default function App() {
                 )}
               </>
             ) : (
-              <div className="relative">
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-[650px] pb-52">
-                  {/* Left Panel - Contacts */}
-                  <div className="border border-gray-800 bg-gray-800/30 rounded-lg p-4">
-                    <div className="flex justify-between items-center mb-4">
-                      <h2 className="text-lg font-semibold">Contacts</h2>
-                      <button
-                        onClick={() => setShowHandshakeForm(true)}
-                        className="text-sm text-blue-400 hover:text-blue-300"
-                      >
-                        + New
-                      </button>
-                    </div>
-                    <div className="space-y-2">
-                      {contacts.map((contact) => (
-                        <div
-                          key={contact.address}
-                          onClick={() => setSelectedContact(contact)}
-                          className={`p-3 rounded cursor-pointer transition-colors ${selectedContact?.address === contact.address
-                            ? 'bg-gray-700'
-                            : 'bg-gray-800 hover:bg-gray-750'
-                            }`}
-                        >
-                          <div className="flex justify-between items-start">
-                            <span className="font-mono text-sm">
-                              {contact.address.slice(0, 8)}...{contact.address.slice(-6)}
-                            </span>
-                            <span className={`text-xs px-2 py-1 rounded ${contact.status === 'established'
-                              ? 'bg-green-900 text-green-300'
-                              : 'bg-yellow-900 text-yellow-300'
-                              }`}>
-                              {contact.status === 'established' ? '✓' : '...'}
-                            </span>
-                          </div>
-                          {contact.lastMessage && (
-                            <p className="text-xs text-gray-400 mt-1 truncate">
-                              {contact.lastMessage}
-                            </p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    <HistoryScanner
-                      canLoadMore={canLoadMore}
-                      isLoadingMore={isLoadingMore}
-                      backfillCooldown={backfillCooldown}
-                      syncProgress={syncProgress}
-                      oldestScannedBlock={oldestScannedBlock}
-                      oldestScannedDate={oldestScannedDate}
-                      onLoadMore={loadMoreHistory}
-                    />
-                  </div>
-
-                  {/* Right Panel - Conversation */}
-                  <div className="lg:col-span-2 border border-gray-800 bg-gray-800/40 rounded-lg p-4 flex flex-col h-[650px]">
-                    <h2 className="text-lg font-semibold mb-4">
-                      {selectedContact ? `Chat with ${selectedContact.address.slice(0, 8)}...` : 'Select a contact'}
-                    </h2>
-
-                    <CatchUpBanner syncProgress={syncProgress} />
-
-                    {selectedContact ? (
-                      <>
-                        {/* Messages */}
-                        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col-reverse gap-2 mb-4 pr-2 custom-scrollbar">
-                          {(() => {
-                            const contactMessages = messages
-                              .filter(m => {
-                                if (!address || !selectedContact?.address) return false;
-                                return (
-                                  m.sender.toLowerCase() === selectedContact.address.toLowerCase() ||
-                                  (m.direction === 'outgoing' && m.recipient?.toLowerCase() === selectedContact.address.toLowerCase()) ||
-                                  (selectedContact.topicOutbound && m.topic === selectedContact.topicOutbound) ||
-                                  (selectedContact.topicInbound && m.topic === selectedContact.topicInbound)
-                                );
-                              })
-                              .sort((a, b) => a.timestamp - b.timestamp);
-
-                            const formatDayLabel = (ts: number): string => {
-                              const d = new Date(ts);
-                              const now = new Date();
-                              const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-                              const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-                              if (day === today) return 'Today';
-                              if (day === today - 86400000) return 'Yesterday';
-                              return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-                            };
-
-                            return contactMessages.length > 0
-                              ? contactMessages.flatMap((msg, i) => {
-                                  const dayLabel = formatDayLabel(msg.timestamp);
-                                  const prevDay = i > 0 ? formatDayLabel(contactMessages[i - 1].timestamp) : null;
-                                  const elements: ReactNode[] = [];
-                                  if (dayLabel !== prevDay) {
-                                    elements.push(
-                                      <div key={`day-${dayLabel}`} className="flex items-center gap-3 my-3">
-                                        <div className="flex-1 border-t border-gray-700" />
-                                        <span className="text-xs text-gray-500 whitespace-nowrap">{dayLabel}</span>
-                                        <div className="flex-1 border-t border-gray-700" />
-                                      </div>
-                                    );
-                                  }
-                                  elements.push(renderMessage(msg));
-                                  return elements;
-                                }).slice().reverse()
-                              : !hasPendingReset && (
-                                  <p className="text-gray-400 text-sm text-center py-8">
-                                    No messages yet. {selectedContact.status === 'established' ? 'Start the conversation!' : 'Waiting for handshake completion.'}
-                                  </p>
-                                );
-                          })()}
-
-                          {hasPendingReset && pendingResetHandshake && (
-                            <PinnedResetRequest
-                              handshake={pendingResetHandshake}
-                              onAccept={acceptHandshake}
-                            />
-                          )}
-                        </div>
-
-                        {/* Queue Status Indicator */}
-                        {queueStatus && queueStatus.queueLength > 0 && (
-                          <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-yellow-900/30 border border-yellow-800 rounded text-xs text-yellow-300">
-                            {queueStatus.isProcessing ? (
-                              <>
-                                <span className="animate-spin w-3 h-3 border border-yellow-400 border-t-transparent rounded-full"></span>
-                                <span>Sending {queueStatus.queueLength} message{queueStatus.queueLength > 1 ? 's' : ''}...</span>
-                              </>
-                            ) : (
-                              <>
-                                <span>📨</span>
-                                <span>{queueStatus.queueLength} message{queueStatus.queueLength > 1 ? 's' : ''} queued</span>
-                              </>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Message Input */}
-                        {selectedContact.status === 'established' && selectedContact.identityPubKey && (
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              placeholder="Type a message..."
-                              className="flex-1 px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white"
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' && e.currentTarget.value.trim()) {
-                                  sendMessageToContact(selectedContact, e.currentTarget.value.trim());
-                                  e.currentTarget.value = '';
-                                }
-                              }}
-                            />
-                            <button
-                              onClick={() => {
-                                const input = document.querySelector('input[placeholder="Type a message..."]') as HTMLInputElement;
-                                if (input?.value.trim()) {
-                                  sendMessageToContact(selectedContact, input.value.trim());
-                                  input.value = '';
-                                }
-                              }}
-                              disabled={loading}
-                              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded"
-                            >
-                              Send
-                            </button>
-                          </div>
-                        )}
-
-                        {selectedContact.status !== 'established' && (
-                          <div className="text-center py-4 text-gray-400 text-sm">
-                            Handshake in progress... waiting for response
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div className="flex-1 flex items-center justify-center text-gray-400">
-                        Select a contact to start messaging
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-              </div>
+              <ChatLayout
+                contacts={contacts}
+                selectedContact={selectedContact}
+                setSelectedContact={setSelectedContact}
+                messages={messages}
+                address={address}
+                hasPendingReset={hasPendingReset}
+                pendingResetHandshake={pendingResetHandshake}
+                limboAfterTimestamp={limboAfterTimestamp}
+                acceptHandshake={acceptHandshake}
+                queueStatus={queueStatus}
+                loading={loading}
+                sendMessageToContact={sendMessageToContact}
+                retryFailedMessage={retryFailedMessage}
+                cancelQueuedMessage={cancelQueuedMessage}
+                setShowHandshakeForm={setShowHandshakeForm}
+                syncProgress={syncProgress}
+                canLoadMore={canLoadMore}
+                isLoadingMore={isLoadingMore}
+                backfillCooldown={backfillCooldown}
+                oldestScannedBlock={oldestScannedBlock}
+                oldestScannedDate={oldestScannedDate}
+                loadMoreHistory={loadMoreHistory}
+              />
             )}
           </div>
         </div>
       </div>
 
       {ready && (
-        <div className="fixed bottom-0 left-0 right-0 bg-black/80 backdrop-blur-sm p-2 sm:p-3 text-xs text-gray-500 space-y-1 z-50">
+        <div className="shrink-0 border-t border-gray-900 bg-black p-2 sm:p-3 text-xs text-gray-500 space-y-1">
           <p>Contract: {VERBETH_SINGLETON_ADDR}</p>
           <p>Network: Base ({chainId}) · {providerLabel}</p>
           <p>Status: {(isInitialLoading || isLoadingMore) ? '🟡 Loading' : '🟢 Ready'}
