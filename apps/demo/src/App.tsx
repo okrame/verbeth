@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Fingerprint, RotateCcw, X } from "lucide-react";
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWalletClient } from 'wagmi';
@@ -248,7 +248,7 @@ export default function App() {
     return (
       <div
         key={msg.id}
-        className={`max-w-[80%] ${isOutgoing ? 'ml-auto' : ''}`}
+        className={`max-w-[80%] w-fit ${isOutgoing ? 'ml-auto' : ''}`}
       >
         <div
           className={`p-3 rounded-lg ${isOutgoing
@@ -288,7 +288,7 @@ export default function App() {
             )}
           </p>
 
-          <div className="flex justify-between items-center mt-1">
+          <div className="flex justify-end items-center gap-1.5 mt-1">
             <span className="text-xs text-gray-300">
               {new Date(msg.timestamp).toLocaleTimeString()}
             </span>
@@ -513,7 +513,7 @@ export default function App() {
                     {selectedContact ? (
                       <>
                         {/* Messages */}
-                        <div className="flex-1 min-h-0 overflow-y-auto space-y-2 mb-4 pr-2 custom-scrollbar">
+                        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col-reverse gap-2 mb-4 pr-2 custom-scrollbar">
                           {(() => {
                             const contactMessages = messages
                               .filter(m => {
@@ -527,8 +527,33 @@ export default function App() {
                               })
                               .sort((a, b) => a.timestamp - b.timestamp);
 
+                            const formatDayLabel = (ts: number): string => {
+                              const d = new Date(ts);
+                              const now = new Date();
+                              const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+                              const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+                              if (day === today) return 'Today';
+                              if (day === today - 86400000) return 'Yesterday';
+                              return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+                            };
+
                             return contactMessages.length > 0
-                              ? contactMessages.map(renderMessage)
+                              ? contactMessages.flatMap((msg, i) => {
+                                  const dayLabel = formatDayLabel(msg.timestamp);
+                                  const prevDay = i > 0 ? formatDayLabel(contactMessages[i - 1].timestamp) : null;
+                                  const elements: ReactNode[] = [];
+                                  if (dayLabel !== prevDay) {
+                                    elements.push(
+                                      <div key={`day-${dayLabel}`} className="flex items-center gap-3 my-3">
+                                        <div className="flex-1 border-t border-gray-700" />
+                                        <span className="text-xs text-gray-500 whitespace-nowrap">{dayLabel}</span>
+                                        <div className="flex-1 border-t border-gray-700" />
+                                      </div>
+                                    );
+                                  }
+                                  elements.push(renderMessage(msg));
+                                  return elements;
+                                }).slice().reverse()
                               : !hasPendingReset && (
                                   <p className="text-gray-400 text-sm text-center py-8">
                                     No messages yet. {selectedContact.status === 'established' ? 'Start the conversation!' : 'Waiting for handshake completion.'}
