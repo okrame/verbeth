@@ -32,6 +32,6 @@ ignition/deployments/chain-84532
 *.claude/
 CLAUDE.md
 *myplans
-.vercel
+.vercel/
 /tests/scan-engine.test.ts
 /tests/scan-test-report.md
