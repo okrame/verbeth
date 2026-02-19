@@ -18,6 +18,8 @@ import { InitialForm } from './components/InitialForm.js';
 import { SideToastNotifications } from './components/SideToastNotification.js';
 import { IdentityCreation } from './components/IdentityCreation.js';
 import { CelebrationToast } from "./components/CelebrationToast.js";
+import { HistoryScanner } from "./components/HistoryScanner.js";
+import { CatchUpBanner } from "./components/CatchUpBanner.js";
 import { SessionSetupPrompt } from './components/SessionSetupPrompt.js';
 import { useChatActions } from './hooks/useChatActions.js';
 import { useSessionSetup } from './hooks/useSessionSetup.js';
@@ -42,7 +44,6 @@ export default function App() {
   const [showToast, setShowToast] = useState(false);
   const [verbethClient, setVerbethClient] = useState<VerbethClient | null>(null);
 
-  const [healthBannerDismissed, setHealthBannerDismissed] = useState(false);
   const [isResettingContacts, setIsResettingContacts] = useState(false);
 
   const chainId = APP_CHAIN_ID;
@@ -155,9 +156,10 @@ export default function App() {
     isLoadingMore,
     canLoadMore,
     syncProgress,
-    syncStatus,
     loadMoreHistory,
-    health,
+    oldestScannedBlock,
+    oldestScannedDate,
+    backfillCooldown,
   } = useMessageListener({
     readProvider,
     address: address ?? undefined,
@@ -215,38 +217,14 @@ export default function App() {
     setHandshakeToasts((prev) => prev.filter((n) => n.id !== id));
   };
 
-  // Auto-reset health banner when health recovers to "ok"
-  useEffect(() => {
-    if (health.level === "ok" && healthBannerDismissed) {
-      setHealthBannerDismissed(false);
-    }
-  }, [health.level, healthBannerDismissed]);
-
   const providerLabel = (() => {
     switch (transportStatus) {
       case "ws":
-        return "Alchemy WS";
-      case "http-alchemy":
-        return "Alchemy HTTP";
+        return "WS + Public HTTP";
       case "http-public":
         return "Public HTTP";
       case "disconnected":
         return "Disconnected";
-    }
-  })();
-
-  const syncStatusLabel = (() => {
-    switch (syncStatus.mode) {
-      case "catching_up":
-        return `Catching up (${syncStatus.pendingRanges} ranges queued)`;
-      case "retrying":
-        return `Retrying (${syncStatus.pendingRanges} ranges pending)`;
-      case "degraded":
-        return "Degraded";
-      case "synced":
-        return "Synced";
-      default:
-        return "Idle";
     }
   })();
 
@@ -445,18 +423,31 @@ export default function App() {
                 chainId={chainId}
               />
             ) : showHandshakeForm ? (
-              <InitialForm
-                isConnected={isConnected}
-                loading={loading}
-                recipientAddress={recipientAddress}
-                setRecipientAddress={setRecipientAddress}
-                message={message}
-                setMessage={setMessage}
-                onSendHandshake={() => sendHandshake(recipientAddress, message)}
-                contactsLength={isConnected ? contacts.length : 0}
-                onBackToChats={() => setShowHandshakeForm(false)}
-                hasExistingIdentity={!needsIdentityCreation}
-              />
+              <>
+                <InitialForm
+                  isConnected={isConnected}
+                  loading={loading}
+                  recipientAddress={recipientAddress}
+                  setRecipientAddress={setRecipientAddress}
+                  message={message}
+                  setMessage={setMessage}
+                  onSendHandshake={() => sendHandshake(recipientAddress, message)}
+                  contactsLength={isConnected ? contacts.length : 0}
+                  onBackToChats={() => setShowHandshakeForm(false)}
+                  hasExistingIdentity={!needsIdentityCreation}
+                />
+                {isConnected && !needsIdentityCreation && (
+                  <HistoryScanner
+                    canLoadMore={canLoadMore}
+                    isLoadingMore={isLoadingMore}
+                    backfillCooldown={backfillCooldown}
+                    syncProgress={syncProgress}
+                    oldestScannedBlock={oldestScannedBlock}
+                    oldestScannedDate={oldestScannedDate}
+                    onLoadMore={loadMoreHistory}
+                  />
+                )}
+              </>
             ) : (
               <div className="relative">
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-[650px] pb-52">
@@ -500,6 +491,15 @@ export default function App() {
                         </div>
                       ))}
                     </div>
+                    <HistoryScanner
+                      canLoadMore={canLoadMore}
+                      isLoadingMore={isLoadingMore}
+                      backfillCooldown={backfillCooldown}
+                      syncProgress={syncProgress}
+                      oldestScannedBlock={oldestScannedBlock}
+                      oldestScannedDate={oldestScannedDate}
+                      onLoadMore={loadMoreHistory}
+                    />
                   </div>
 
                   {/* Right Panel - Conversation */}
@@ -508,59 +508,33 @@ export default function App() {
                       {selectedContact ? `Chat with ${selectedContact.address.slice(0, 8)}...` : 'Select a contact'}
                     </h2>
 
+                    <CatchUpBanner syncProgress={syncProgress} />
+
                     {selectedContact ? (
                       <>
-                        {/* Load More History Button */}
-                        {canLoadMore && (
-                          <div className="text-center mb-2">
-                            <button
-                              onClick={loadMoreHistory}
-                              disabled={isLoadingMore}
-                              className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded"
-                            >
-                              {isLoadingMore ? (
-                                <span className="flex items-center gap-2">
-                                  <span className="animate-spin w-3 h-3 border border-gray-400 border-t-transparent rounded-full"></span>
-                                  <span>Loading...</span>
-                                  {syncProgress && <span>({syncProgress.current}/{syncProgress.total})</span>}
-                                </span>
-                              ) : (
-                                "📂 Load More History"
-                              )}
-                            </button>
-                          </div>
-                        )}
-
                         {/* Messages */}
                         <div className="flex-1 min-h-0 overflow-y-auto space-y-2 mb-4 pr-2 custom-scrollbar">
-                          {messages
-                            .filter(m => {
-                              const currentAddress = address;
-                              if (!currentAddress || !selectedContact?.address) return false;
-                              return (
-                                m.sender.toLowerCase() === selectedContact.address.toLowerCase() ||
-                                (m.direction === 'outgoing' && m.recipient?.toLowerCase() === selectedContact.address.toLowerCase()) ||
-                                (selectedContact.topicOutbound && m.topic === selectedContact.topicOutbound) ||
-                                (selectedContact.topicInbound && m.topic === selectedContact.topicInbound)
-                              );
-                            })
-                            .sort((a, b) => a.timestamp - b.timestamp)
-                            .map(renderMessage)}
+                          {(() => {
+                            const contactMessages = messages
+                              .filter(m => {
+                                if (!address || !selectedContact?.address) return false;
+                                return (
+                                  m.sender.toLowerCase() === selectedContact.address.toLowerCase() ||
+                                  (m.direction === 'outgoing' && m.recipient?.toLowerCase() === selectedContact.address.toLowerCase()) ||
+                                  (selectedContact.topicOutbound && m.topic === selectedContact.topicOutbound) ||
+                                  (selectedContact.topicInbound && m.topic === selectedContact.topicInbound)
+                                );
+                              })
+                              .sort((a, b) => a.timestamp - b.timestamp);
 
-                          {messages.filter(m => {
-                            const currentAddress = address;
-                            if (!currentAddress || !selectedContact?.address) return false;
-                            return (
-                              m.sender.toLowerCase() === selectedContact.address.toLowerCase() ||
-                              (m.direction === 'outgoing' && m.recipient?.toLowerCase() === selectedContact.address.toLowerCase()) ||
-                              (selectedContact.topicOutbound && m.topic === selectedContact.topicOutbound) ||
-                              (selectedContact.topicInbound && m.topic === selectedContact.topicInbound)
-                            );
-                          }).length === 0 && !hasPendingReset && (
-                              <p className="text-gray-400 text-sm text-center py-8">
-                                No messages yet. {selectedContact.status === 'established' ? 'Start the conversation!' : 'Waiting for handshake completion.'}
-                              </p>
-                            )}
+                            return contactMessages.length > 0
+                              ? contactMessages.map(renderMessage)
+                              : !hasPendingReset && (
+                                  <p className="text-gray-400 text-sm text-center py-8">
+                                    No messages yet. {selectedContact.status === 'established' ? 'Start the conversation!' : 'Waiting for handshake completion.'}
+                                  </p>
+                                );
+                          })()}
 
                           {hasPendingReset && pendingResetHandshake && (
                             <PinnedResetRequest
@@ -637,30 +611,12 @@ export default function App() {
         </div>
       </div>
 
-      {ready && health.level === "warning" && !healthBannerDismissed && (
-        <div className="fixed bottom-[120px] sm:bottom-[100px] left-0 right-0 z-50 px-2 sm:px-4">
-          <div className="max-w-6xl mx-auto flex items-center gap-3 px-4 py-2 bg-amber-900/80 border border-amber-700 rounded-lg text-amber-200 text-sm backdrop-blur-sm">
-            <span className="flex-1">{health.message}</span>
-            <button
-              onClick={() => setHealthBannerDismissed(true)}
-              className="text-amber-400 hover:text-amber-200 font-bold px-2"
-              aria-label="Dismiss"
-            >
-              &times;
-            </button>
-          </div>
-        </div>
-      )}
-
       {ready && (
         <div className="fixed bottom-0 left-0 right-0 bg-black/80 backdrop-blur-sm p-2 sm:p-3 text-xs text-gray-500 space-y-1 z-50">
           <p>Contract: {VERBETH_SINGLETON_ADDR}</p>
-          <p>Network: Base ({chainId}) · RPC: {providerLabel}</p>
-          <p>Status: {ready ? '🟢 Ready' : '🔴 Not Ready'} {(isInitialLoading || isLoadingMore) ? '⏳ Loading' : ''}</p>
-          <p>
-            Sync: {syncStatusLabel}
-            {syncStatus.lastError ? ` · Last error: ${syncStatus.lastError}` : ""}
-            {" · Health: "}{health.level === "ok" ? "OK" : "Warning"}
+          <p>Network: Base ({chainId}) · {providerLabel}</p>
+          <p>Status: {(isInitialLoading || isLoadingMore) ? '🟡 Loading' : '🟢 Ready'}
+            {syncProgress?.failedChunks ? ` · ${syncProgress.failedChunks} chunk${syncProgress.failedChunks > 1 ? 's' : ''} in retry` : ''}
           </p>
         </div>
       )}

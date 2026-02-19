@@ -1,25 +1,17 @@
 import { createContext, useContext, useEffect, useState, useMemo } from "react";
-import { JsonRpcProvider, WebSocketProvider } from "ethers";
+import { JsonRpcProvider } from "ethers";
 import { createPublicClient, http, webSocket, fallback } from "viem";
-import { APP_CHAIN, APP_CHAIN_ID, APP_WS_URL, getHttpUrlsForChain } from "./chain.js";
+import { baseSepolia } from "wagmi/chains";
 
-const HTTP_URLS = getHttpUrlsForChain(APP_CHAIN_ID);
+const WS_URL = import.meta.env.VITE_RPC_WS_URL as string | undefined;
 
-/** Browser-safe read RPC URL for the active app chain. */
-export const APP_HTTP_URL = HTTP_URLS[0];
-export const APP_HTTP_URLS = HTTP_URLS;
+const PUBLIC_HTTP_1 = "https://sepolia.base.org";
+const PUBLIC_HTTP_2 = "https://base-sepolia-rpc.publicnode.com";
 
-function isAlchemyUrl(url: string): boolean {
-  try {
-    return new URL(url).hostname.includes("alchemy.com");
-  } catch {
-    return false;
-  }
-}
+const PUBLIC_HTTP_URLS: readonly string[] = [PUBLIC_HTTP_1, PUBLIC_HTTP_2];
 
 export type TransportStatus =
   | "ws"
-  | "http-alchemy"
   | "http-public"
   | "disconnected";
 
@@ -33,44 +25,24 @@ const RpcCtx = createContext<RpcState | null>(null);
 
 export function RpcProvider({ children }: { children: React.ReactNode }) {
   const [ethersProvider, setEthersProvider] = useState<JsonRpcProvider | null>(null);
-  const [transportStatus, setTransportStatus] = useState<TransportStatus>("disconnected");
+  const [transportStatus, setTransportStatus] = useState<TransportStatus>(
+    WS_URL ? "ws" : "http-public"
+  );
 
   useEffect(() => {
     let mounted = true;
 
     (async () => {
-      // 1) Try WebSocket first
-      if (APP_WS_URL) {
-        try {
-          const ws = new WebSocketProvider(APP_WS_URL, APP_CHAIN_ID);
-          await ws.getBlockNumber();
-          if (mounted) {
-            setEthersProvider(ws as any);
-            setTransportStatus("ws");
-          } else {
-            ws.destroy();
-          }
-          return;
-        } catch (e) {
-          console.warn(`Ethers WS failed for ${APP_WS_URL}:`, e);
-        }
-      }
-
-      // 2) Try HTTP endpoints (Alchemy first if present, then public)
-      for (const url of HTTP_URLS) {
+      for (const url of PUBLIC_HTTP_URLS) {
         let p: JsonRpcProvider | undefined;
         try {
-          p = new JsonRpcProvider(url, APP_CHAIN_ID, {
+          p = new JsonRpcProvider(url, 84532, {
             staticNetwork: true,
-            polling: true,
-            pollingInterval: 4000,
           });
           await p.getBlockNumber();
           if (mounted) {
             setEthersProvider(p);
-            setTransportStatus(isAlchemyUrl(url) ? "http-alchemy" : "http-public");
-          } else {
-            p.destroy();
+            if (!WS_URL) setTransportStatus("http-public");
           }
           return;
         } catch (e) {
@@ -91,21 +63,20 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const viemClient = useMemo(() => {
-    const transports = [];
-
-    // WS transport first (if configured)
-    if (APP_WS_URL) {
-      transports.push(webSocket(APP_WS_URL));
+    if (WS_URL) {
+      // WS-only: viem is used exclusively for block-tip subscriptions
+      return createPublicClient({
+        chain: baseSepolia,
+        transport: webSocket(WS_URL, {
+          reconnect: { attempts: 5, delay: 2_000 },
+        }),
+      });
     }
 
-    // HTTP transports (Alchemy first if present, then public)
-    for (const url of HTTP_URLS) {
-      transports.push(http(url));
-    }
-
+    // No WS: fall back to HTTP polling for watchBlockNumber
     return createPublicClient({
-      chain: APP_CHAIN,
-      transport: fallback(transports),
+      chain: baseSepolia,
+      transport: fallback([http(PUBLIC_HTTP_1), http(PUBLIC_HTTP_2)]),
     });
   }, []);
 
@@ -126,13 +97,4 @@ export function useRpcClients() {
   const ctx = useContext(RpcCtx);
   if (!ctx) throw new Error("useRpcClients must be used inside RpcProvider");
   return ctx;
-}
-
-export function useRpcStatus() {
-  const ctx = useContext(RpcCtx);
-  return {
-    isConnected: ctx !== null && ctx.ethers !== null,
-    transportStatus: ctx?.transportStatus ?? "disconnected",
-    provider: ctx,
-  };
 }

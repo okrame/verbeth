@@ -5,7 +5,8 @@ import {
   getOrCreateSafeForOwner,
   ensureModuleEnabled,
 } from "../services/safeAccount.js";
-import { VERBETH_SINGLETON_ADDR, getSafeModuleAddressOrThrow, ExecutionMode } from "../types.js";
+import { withRateLimit } from "../services/rpcLimiter.js";
+import { VERBETH_SINGLETON_ADDR, SAFE_MODULE_ADDRESS, ExecutionMode } from "../types.js";
 
 interface UseSessionSetupParams {
   walletClient: any;
@@ -48,7 +49,7 @@ export function useSessionSetup({
 
     const refreshBalance = async () => {
       try {
-        const balance = await readProvider.getBalance(sessionSignerAddr);
+        const balance = await withRateLimit<bigint>(() => readProvider.getBalance(sessionSignerAddr));
         setSessionSignerBalance(balance);
       } catch (err) {
         console.error("Failed to refresh balance:", err);
@@ -63,7 +64,7 @@ export function useSessionSetup({
   const refreshSessionBalance = useCallback(async () => {
     if (isClassicMode || !sessionSignerAddr || !readProvider) return;
     try {
-      const balance = await readProvider.getBalance(sessionSignerAddr);
+      const balance = await withRateLimit<bigint>(() => readProvider.getBalance(sessionSignerAddr));
       console.log(`🔄 Balance: ${Number(balance) / 1e18} ETH`);
       setSessionSignerBalance(balance);
     } catch (err) {
@@ -145,7 +146,8 @@ export function useSessionSetup({
       }
 
       // Case 3: Safe + module exist → Just setup session
-      const moduleAddress = getSafeModuleAddressOrThrow();
+      if (!SAFE_MODULE_ADDRESS) throw new Error("SAFE_MODULE_ADDRESS not configured");
+      const moduleAddress = SAFE_MODULE_ADDRESS;
       const moduleContract = new Contract(
         moduleAddress,
         ["function setupSession(address safe, address signer, uint256 expiry, address target)"],

@@ -1,11 +1,19 @@
 import type { IdentityKeyPair, IdentityProof, RatchetSession as SDKRatchetSession, } from '@verbeth/sdk';
-import { getVerbethAddress, getCreationBlock, SCAN_DEFAULTS } from '@verbeth/sdk';
+import { getVerbethAddress, getCreationBlock } from '@verbeth/sdk';
 import { keccak256, toUtf8Bytes, hexlify, getBytes } from 'ethers';
 
 /* ------------------------------- CONSTANTS -------------------------------- */
 export const VERBETH_SINGLETON_ADDR = getVerbethAddress();
 export const CONTRACT_CREATION_BLOCK = getCreationBlock();
-export const { INITIAL_SCAN_BLOCKS, MAX_RETRIES, MAX_RANGE_PROVIDER, CHUNK_SIZE, REAL_TIME_BUFFER } = SCAN_DEFAULTS;
+
+/* ------------------------------- SCAN CONFIG ------------------------------ */
+export const INITIAL_SCAN_BLOCKS        = 9_000;
+export const CHUNK_SIZE                 = 3_000;
+export const REAL_TIME_BUFFER           = 3;
+export const MAX_RETRIES                = 3;
+export const BACKFILL_COOLDOWN_MS       = 3_000;
+export const ACCUMULATION_INTERVAL_MS   = 4_000;
+export const FALLBACK_POLL_INTERVAL_MS  = 5_000;
 
 export const SAFE_MODULE_ADDRESS = (
   import.meta.env.VITE_SAFE_SESSION_MODULE as `0x${string}` | undefined
@@ -182,56 +190,21 @@ export type MessageDirection = 'incoming' | 'outgoing';
 export type ContactStatus = 'none' | 'handshake_sent' | 'established';
 export type MessageType = 'text' | 'system';
 
-export interface ScanProgress {
+export const RETRY_DELAYS = [10_000, 30_000, 60_000];
+export const MAX_FAILED_RETRIES = 3;
+
+export interface SyncProgress {
   current: number;
   total: number;
+  phase: 'catch-up' | 'backfill';
+  failedChunks: number;
 }
 
-export interface ScanChunk {
+export interface FailedRange {
   fromBlock: number;
   toBlock: number;
-  loaded: boolean;
-  events: any[];
-}
-
-export interface BlockRange {
-  fromBlock: number;
-  toBlock: number;
-}
-
-export interface PendingRange extends BlockRange {
   attempts: number;
   nextRetryAt: number;
-  lastError?: string;
-}
-
-export type PersistedSyncStateStatus =
-  | "idle"
-  | "catching_up"
-  | "degraded"
-  | "synced";
-
-export interface PersistedSyncState {
-  pendingRanges: PendingRange[];
-  status: PersistedSyncStateStatus;
-  lastError?: string;
-  lastRetryAt?: number;
-  targetTip?: number;
-  updatedAt: number;
-}
-
-export type ListenerSyncMode =
-  | "idle"
-  | "catching_up"
-  | "retrying"
-  | "degraded"
-  | "synced";
-
-export interface ListenerSyncStatus {
-  mode: ListenerSyncMode;
-  pendingRanges: number;
-  lastError?: string;
-  isComplete: boolean;
 }
 
 export interface ProcessedEvent {
@@ -245,31 +218,16 @@ export interface ProcessedEvent {
   matchedContactAddress?: string;
 }
 
-export type ListenerHealthLevel = "ok" | "warning";
-
-export type ListenerHealthReason =
-  | "rate_limit"
-  | "backlog"
-  | "tip_lag"
-  | "ws_error";
-
-export interface ListenerHealthStatus {
-  level: ListenerHealthLevel;
-  reasons: ListenerHealthReason[];
-  message: string;
-  updatedAt: number;
-}
-
 export interface MessageListenerResult {
   isInitialLoading: boolean;
   isLoadingMore: boolean;
   canLoadMore: boolean;
-  syncProgress: ScanProgress | null;
-  syncStatus: ListenerSyncStatus;
+  syncProgress: SyncProgress | null;
   loadMoreHistory: () => Promise<void>;
   lastKnownBlock: number | null;
   oldestScannedBlock: number | null;
-  health: ListenerHealthStatus;
+  oldestScannedDate: Date | null;
+  backfillCooldown: boolean;
 }
 
 export interface MessageProcessorResult {

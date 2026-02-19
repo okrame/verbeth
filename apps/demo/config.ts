@@ -6,9 +6,6 @@ import {
   metaMaskWallet,
   walletConnectWallet,
 } from '@rainbow-me/rainbowkit/wallets';
-import { getHttpUrlsForChain } from './src/chain.js';
-
-
 const projectId = 'abcd4fa063dd349643afb0bdc85bb248';
 const name       = 'Unstoppable Chat';
 
@@ -34,8 +31,8 @@ export const config = createConfig({
   connectors,
   chains: [baseSepolia, base, mainnet],
   transports: {
-    [baseSepolia.id]: http(getHttpUrlsForChain(baseSepolia.id)[0]),
-    [base.id]:       http(getHttpUrlsForChain(base.id)[0]),
+    [baseSepolia.id]: http('https://sepolia.base.org'),
+    [base.id]:       http('https://base-rpc.publicnode.com'),
     [mainnet.id]:    http(),
   },
 });
