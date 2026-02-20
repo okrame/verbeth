@@ -25,6 +25,7 @@ import { useMessageQueue } from "./useMessageQueue.js";
 
 interface UseChatActionsProps {
   verbethClient: VerbethClient | null;
+  readProvider: any;
   updateContact: (contact: Contact) => Promise<void>;
   addMessage: (message: any) => Promise<void>;
   updateMessageStatus: (id: string, status: "pending" | "confirmed" | "failed", error?: string) => Promise<void>;
@@ -39,6 +40,7 @@ interface UseChatActionsProps {
 
 export const useChatActions = ({
   verbethClient,
+  readProvider,
   updateContact,
   addMessage,
   updateMessageStatus,
@@ -187,6 +189,13 @@ export const useChatActions = ({
         // Save session - SDK will pick it up via SessionStore adapter
         await dbService.ratchet.saveRatchetSession(ratchetSession);
 
+        let establishedBlock: number | undefined;
+        try {
+          establishedBlock = Number(await readProvider.getBlockNumber());
+        } catch {
+          // Provider temporarily unavailable so no false dismissals.
+        }
+
         const newContact: Contact = {
           address: handshake.sender,
           ownerAddress: verbethClient.userAddress,
@@ -196,6 +205,7 @@ export const useChatActions = ({
           topicOutbound: ratchetSession.currentTopicOutbound,
           topicInbound: ratchetSession.currentTopicInbound,
           conversationId: ratchetSession.conversationId,
+          establishedAtBlock: establishedBlock,
           lastMessage: responseMessage,
           lastTimestamp: Date.now(),
         };
@@ -241,6 +251,7 @@ export const useChatActions = ({
     },
     [
       verbethClient,
+      readProvider,
       updateContact,
       removePendingHandshake,
       addMessage,

@@ -1,34 +1,15 @@
 import { http, createConfig } from 'wagmi';
-import { base, mainnet, baseSepolia} from 'wagmi/chains';
-import { connectorsForWallets } from '@rainbow-me/rainbowkit';
-import {
-  coinbaseWallet,
-  metaMaskWallet,
-  walletConnectWallet,
-} from '@rainbow-me/rainbowkit/wallets';
+import { base, mainnet, baseSepolia } from 'wagmi/chains';
+import { injected, walletConnect } from 'wagmi/connectors';
+
 const projectId = 'abcd4fa063dd349643afb0bdc85bb248';
-const name       = 'Unstoppable Chat';
-
-
-//coinbaseWallet.preference = 'smartWalletOnly'; 
-
-const connectors = connectorsForWallets(
-  [
-    {
-      groupName: 'Recommended',
-      wallets: [
-        metaMaskWallet],
-    },
-    {
-      groupName: 'Other options',
-      wallets: [walletConnectWallet],
-    },
-  ],
-  { appName: name, projectId }
-);
 
 export const config = createConfig({
-  connectors,
+  connectors: [
+    injected(),
+    // wagmi marked walletConnect @deprecated due to WalletConnect relicensing; still functional, pino override applied in root package.json
+    (walletConnect as any)({ projectId }),
+  ],
   chains: [baseSepolia, base, mainnet],
   transports: {
     [baseSepolia.id]: http('https://sepolia.base.org'),

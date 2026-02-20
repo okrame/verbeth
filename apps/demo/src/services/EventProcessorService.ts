@@ -65,7 +65,7 @@ export interface MessageResult {
 }
 
 // =============================================================================
-// Handshake Processing (unchanged - doesn't use ratchet)
+// Handshake Processing
 // =============================================================================
 
 export async function processHandshakeEvent(
@@ -158,6 +158,15 @@ export async function processHandshakeEvent(
 
     const existingContact = await dbService.getContact(identityAddress, address);
     const isExistingEstablished = existingContact?.status === "established";
+
+    // if we already have an established
+    // session and this handshake predates it, it's an old HS that would cause
+    // asymmetric session breakage if accepted
+    if (isExistingEstablished && existingContact.establishedAtBlock != null
+        && log.blockNumber < existingContact.establishedAtBlock) {
+      await dbService.markEventProcessed(address, "handshake", event.txHash, event.logIndex, log.blockNumber);
+      return null;
+    }
 
     const pendingHandshake: PendingHandshake = {
       id: log.transactionHash,
@@ -315,8 +324,9 @@ export async function processHandshakeResponseEvent(
       topicOutbound: ratchetSession.currentTopicOutbound,
       topicInbound: ratchetSession.currentTopicInbound,
       conversationId: ratchetSession.conversationId,
-      handshakeEphemeralSecret: undefined, // Clear after use
-      handshakeKemSecret: undefined,       // Clear after use
+      establishedAtBlock: log.blockNumber,
+      handshakeEphemeralSecret: undefined, 
+      handshakeKemSecret: undefined,      
       lastMessage: result.keys.note || "Connection established",
       lastTimestamp: Date.now(),
     };

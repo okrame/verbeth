@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWalletClient } from 'wagmi';
 import { useRpcClients } from './rpc.js';
 import {
@@ -13,12 +12,11 @@ import {
   Contact,
 } from './types.js';
 import { InitialForm } from './components/InitialForm.js';
-import { SideToastNotifications } from './components/SideToastNotification.js';
 import { IdentityCreation } from './components/IdentityCreation.js';
-import { CelebrationToast } from "./components/CelebrationToast.js";
-import { HistoryScanner } from "./components/HistoryScanner.js";
 import { ChatLayout } from "./components/ChatLayout.js";
 import { SessionSetupPrompt } from './components/SessionSetupPrompt.js';
+import { WalletButton } from './components/WalletButton.js';
+import { WalletPanel } from './components/WalletPanel.js';
 import { useChatActions } from './hooks/useChatActions.js';
 import { useSessionSetup } from './hooks/useSessionSetup.js';
 import { useInitIdentity } from './hooks/useInitIdentity.js';
@@ -34,11 +32,10 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [recipientAddress, setRecipientAddress] = useState("");
   const [message, setMessage] = useState("");
-  const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const [selectedContactAddress, setSelectedContactAddress] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showHandshakeForm, setShowHandshakeForm] = useState(true);
-  const [handshakeToasts, setHandshakeToasts] = useState<any[]>([]);
-  const [showToast, setShowToast] = useState(false);
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [verbethClient, setVerbethClient] = useState<VerbethClient | null>(null);
 
   const chainId = APP_CHAIN_ID;
@@ -73,9 +70,9 @@ export default function App() {
     chainId,
     readProvider,
     ready,
-    onIdentityCreated: () => setShowToast(true),
+    onIdentityCreated: () => {},
     onReset: () => {
-      setSelectedContact(null);
+      setSelectedContactAddress(null);
       setVerbethClient(null);
     },
   });
@@ -142,6 +139,13 @@ export default function App() {
     identityKeyPair,
     verbethClient,
   });
+
+  const selectedContact = contacts.find(
+    (c) => c.address.toLowerCase() === selectedContactAddress?.toLowerCase()
+  ) ?? null;
+  const setSelectedContact = (contact: Contact | null) =>
+    setSelectedContactAddress(contact?.address ?? null);
+
   const { hasPendingReset, pendingHandshake: pendingResetHandshake, limboAfterTimestamp } =
     usePendingSessionReset(selectedContact, pendingHandshakes);
 
@@ -167,15 +171,16 @@ export default function App() {
     sendHandshake,
     acceptHandshake,
     sendMessageToContact,
-    retryFailedMessage,      
-    cancelQueuedMessage,     
-    getContactQueueStatus, 
+    retryFailedMessage,
+    cancelQueuedMessage,
+    getContactQueueStatus,
   } = useChatActions({
     verbethClient,
+    readProvider,
     updateContact: async (contact: Contact) => { await updateContact(contact); },
     addMessage: async (message: any) => { await addMessage(message); },
-    updateMessageStatus, 
-    removeMessage,       
+    updateMessageStatus,
+    removeMessage,
     removePendingHandshake: async (id: string) => { await removePendingHandshake(id); },
     setSelectedContact,
     setLoading,
@@ -183,33 +188,6 @@ export default function App() {
     setRecipientAddress,
     markMessagesLost,
   });
-
-  // sync handshakeToasts
-  useEffect(() => {
-    const currentlyConnected = isConnected;
-    const currentAddress = address;
-
-    if (!currentlyConnected || !currentAddress || !identityKeyPair) {
-      setHandshakeToasts([]);
-      return;
-    }
-
-    setHandshakeToasts(
-      pendingHandshakes.map((h) => ({
-        id: h.id,
-        sender: h.sender,
-        message: h.message,
-        verified: h.verified,
-        isExistingContact: h.isExistingContact,
-        onAccept: (msg: string) => acceptHandshake(h, msg),
-        onReject: () => removePendingHandshake(h.id),
-      }))
-    );
-  }, [pendingHandshakes, isConnected, address, identityKeyPair]);
-
-  const removeToast = (id: string) => {
-    setHandshakeToasts((prev) => prev.filter((n) => n.id !== id));
-  };
 
   const providerLabel = (() => {
     switch (transportStatus) {
@@ -263,41 +241,46 @@ export default function App() {
           {/* LEFT: title */}
           <div className="flex flex-col items-start">
             <h1 className="text-2xl sm:text-4xl font-extrabold leading-tight">
-              Verbeth
+              Demo chat
             </h1>
             <div className="text-xs text-gray-400 pl-0.5 mt-1">
-              powered by the world computer
+              powered by Verbeth
             </div>
           </div>
-          {/* RIGHT: auth buttons - EOA only */}
-          <div className="flex items-start gap-px sm:gap-px">
-            {!isConnected ? (
-              <div className="flex flex-col items-end -space-y-1 sm:space-y-0 sm:gap-px">
-                <div className="border border-gray-400 rounded-lg p-0.5 w-full flex justify-center scale-75 sm:scale-100 origin-top-right">
-                  <ConnectButton />
-                </div>
-              </div>
-            ) : (
-              <div className="border border-gray-600 rounded-lg p-0.5 w-full flex justify-center scale-75 sm:scale-100 origin-top-right">
-                <ConnectButton />
-              </div>
-            )}
-          </div>
+          {/* RIGHT: wallet button */}
+          <WalletButton
+            pendingCount={pendingHandshakes.length}
+            isPanelOpen={isPanelOpen}
+            onTogglePanel={() => setIsPanelOpen(v => !v)}
+          />
         </div>
       </div>
+
+      {/* Wallet Panel */}
+      <WalletPanel
+        isOpen={isPanelOpen}
+        onClose={() => setIsPanelOpen(false)}
+        identityKeyPair={identityKeyPair}
+        executionMode={executionMode}
+        sessionSignerAddr={sessionSignerAddr}
+        sessionSignerBalance={sessionSignerBalance}
+        pendingHandshakes={pendingHandshakes}
+        onAcceptHandshake={acceptHandshake}
+        onRejectHandshake={removePendingHandshake}
+        safeAddr={safeAddr}
+        canLoadMore={canLoadMore}
+        isLoadingMore={isLoadingMore}
+        backfillCooldown={backfillCooldown}
+        syncProgress={syncProgress}
+        oldestScannedBlock={oldestScannedBlock}
+        oldestScannedDate={oldestScannedDate}
+        onLoadMore={loadMoreHistory}
+      />
 
       {/* Main content with max-width */}
       <div className="max-w-6xl mx-auto w-full pt-px px-2 sm:px-4 pb-2 flex-1 min-h-0 overflow-hidden flex flex-col">
         <div className="flex-1 min-h-0 flex flex-col">
           <div className="flex-1 min-h-0 flex flex-col">
-
-            {/* Handshake Toast Notifiche */}
-            <SideToastNotifications
-              notifications={handshakeToasts}
-              removeNotification={removeToast}
-            />
-
-            <CelebrationToast show={showToast} onClose={() => setShowToast(false)} />
 
             {/* Session Setup Prompt - show when wallet connected but session not ready */}
             {isConnected && sessionSignerAddr && !needsIdentityCreation && (needsSessionSetup || (sessionSignerBalance !== null && sessionSignerBalance < BigInt(0.0001 * 1e18))) && (
@@ -338,17 +321,6 @@ export default function App() {
                   onBackToChats={() => setShowHandshakeForm(false)}
                   hasExistingIdentity={!needsIdentityCreation}
                 />
-                {isConnected && !needsIdentityCreation && (
-                  <HistoryScanner
-                    canLoadMore={canLoadMore}
-                    isLoadingMore={isLoadingMore}
-                    backfillCooldown={backfillCooldown}
-                    syncProgress={syncProgress}
-                    oldestScannedBlock={oldestScannedBlock}
-                    oldestScannedDate={oldestScannedDate}
-                    onLoadMore={loadMoreHistory}
-                  />
-                )}
               </>
             ) : (
               <ChatLayout

@@ -63,7 +63,7 @@ export interface Contact {
   previousConversationId?: string;
   handshakeEphemeralSecret?: string;
   handshakeKemSecret?: string; // ML-KEM secret for PQ-hybrid (hex)
-  sessionResetAt?: number;
+  establishedAtBlock?: number;
 }
 
 

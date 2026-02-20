@@ -1,4 +1,4 @@
-import { useConnectModal } from '@rainbow-me/rainbowkit';
+import { useConnect } from 'wagmi';
 import { motion } from 'framer-motion';
 
 interface CenteredHandshakeFormProps {
@@ -26,7 +26,7 @@ export function InitialForm({
   onBackToChats,
   hasExistingIdentity
 }: CenteredHandshakeFormProps) {
-  const { openConnectModal } = useConnectModal();
+  const { connectors, connect } = useConnect();
   
   const isAnyConnected = isConnected;
   const shouldShowConnect =
@@ -78,7 +78,7 @@ export function InitialForm({
           ) : (
             <div className="w-full text-center">
               <h2 className="text-2xl font-semibold">
-                {isAnyConnected ? "Hi, start your first chat" : "Send a message ina block"}
+                {isAnyConnected ? "Hi, start your first chat" : "Say it in a block"}
               </h2>
               <div className="mt-2">
                 <span className="text-sm text-gray-400">
@@ -106,7 +106,10 @@ export function InitialForm({
           />
           {shouldShowConnect ? (
             <button
-              onClick={openConnectModal}
+              onClick={() => {
+                const picked = connectors.find(cn => cn.type === 'injected') ?? connectors[0];
+                if (picked) connect({ connector: picked });
+              }}
               className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 rounded font-medium"
             >
               {hasExistingIdentity ? "Connect Wallet" : "Get started"}
