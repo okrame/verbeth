@@ -1,6 +1,6 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { useAccount, useConnect, useSwitchChain, type Connector } from 'wagmi';
-import { APP_CHAIN_ID } from '../chain.js';
+import { APP_CHAIN_ID, isSupportedChain } from '../chain.js';
 import { AddressAvatar } from './AddressAvatar.js';
 
 function WalletConnectLogo({ size = 24 }: { size?: number }) {
@@ -87,7 +87,7 @@ export function WalletButton({ pendingCount, isPanelOpen, onTogglePanel }: Walle
   }
 
   // Connected but wrong chain
-  if (chainId !== APP_CHAIN_ID) {
+  if (!isSupportedChain(chainId!)) {
     return (
       <button
         onClick={() => switchChain({ chainId: APP_CHAIN_ID })}

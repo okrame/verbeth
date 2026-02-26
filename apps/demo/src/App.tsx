@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAccount, useWalletClient } from 'wagmi';
-import { useRpcClients } from './rpc.js';
+import { RpcProvider, useRpcClients } from './rpc.js';
 import {
   VerbethClient,
   createVerbethClient,
@@ -22,9 +22,22 @@ import { useSessionSetup } from './hooks/useSessionSetup.js';
 import { useInitIdentity } from './hooks/useInitIdentity.js';
 import { usePendingSessionReset } from './hooks/usePendingSessionReset.js';
 import { sessionStore, pendingStore } from './services/StorageAdapters.js';
-import { APP_CHAIN_ID } from './chain.js';
+import { APP_CHAIN_ID, isSupportedChain } from './chain.js';
 
 export default function App() {
+  const { chainId: walletChainId, isConnected } = useAccount();
+  const activeChainId = (isConnected && walletChainId && isSupportedChain(walletChainId))
+    ? walletChainId
+    : APP_CHAIN_ID;
+
+  return (
+    <RpcProvider chainId={activeChainId}>
+      <AppContent chainId={activeChainId} />
+    </RpcProvider>
+  );
+}
+
+function AppContent({ chainId }: { chainId: number }) {
   const { ethers: readProvider, viem: viemClient, transportStatus } = useRpcClients();
   const { address, isConnected } = useAccount();
   const { data: walletClient } = useWalletClient();
@@ -37,8 +50,6 @@ export default function App() {
   const [showHandshakeForm, setShowHandshakeForm] = useState(true);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [verbethClient, setVerbethClient] = useState<VerbethClient | null>(null);
-
-  const chainId = APP_CHAIN_ID;
 
   const {
     identityKeyPair,
@@ -165,6 +176,7 @@ export default function App() {
     onEventsProcessed: processEvents,
     viemClient,
     verbethClient,
+    chainId,
   });
 
   const {
@@ -355,7 +367,7 @@ export default function App() {
       {ready && (
         <div className="shrink-0 border-t border-gray-900 bg-black p-2 sm:p-3 text-xs text-gray-500 space-y-1">
           <p>Contract: {VERBETH_SINGLETON_ADDR}</p>
-          <p>Network: Base ({chainId}) · {providerLabel}</p>
+          <p>Network: {chainId} · {providerLabel}</p>
           <p>Status: {(isInitialLoading || isLoadingMore) ? '🟡 Loading' : '🟢 Ready'}
             {syncProgress?.failedChunks ? ` · ${syncProgress.failedChunks} chunk${syncProgress.failedChunks > 1 ? 's' : ''} in retry` : ''}
           </p>

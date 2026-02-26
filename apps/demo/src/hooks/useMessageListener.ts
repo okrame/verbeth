@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { AbiCoder, getBytes, keccak256, toUtf8Bytes } from "ethers";
-import { matchHsrToContact, type PendingContactEntry } from "@verbeth/sdk";
+import { matchHsrToContact, type PendingContactEntry, getCreationBlock } from "@verbeth/sdk";
 import { dbService } from "../services/DbService.js";
 import { planRanges, ScanFailedError, safeGetLogs } from "../services/scanEngine.js";
 import {
-  CONTRACT_CREATION_BLOCK,
   INITIAL_SCAN_BLOCKS,
   CHUNK_SIZE,
   REAL_TIME_BUFFER,
@@ -31,6 +30,7 @@ interface UseMessageListenerProps {
   onEventsProcessed: (events: ProcessedEvent[]) => Promise<void>;
   viemClient?: any;
   verbethClient?: any;
+  chainId: number;
 }
 
 /* ──────────────────────── Helpers (inline, React-adjacent) ────────────────────────── */
@@ -79,7 +79,9 @@ export const useMessageListener = ({
   onEventsProcessed,
   viemClient,
   verbethClient,
+  chainId,
 }: UseMessageListenerProps): MessageListenerResult => {
+  const creationBlock = getCreationBlock(chainId);
   const [isInitialLoading, setIsInitialLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [canLoadMore, setCanLoadMore] = useState(true);
@@ -228,10 +230,10 @@ export const useMessageListener = ({
       const savedLastBlock = typeof savedLastBlockRaw === "number" ? savedLastBlockRaw : null;
       const savedOldestBlock = typeof savedOldestBlockRaw === "number" ? savedOldestBlockRaw : null;
 
-      const fallbackOldest = Math.max(currentBlock - INITIAL_SCAN_BLOCKS, CONTRACT_CREATION_BLOCK);
+      const fallbackOldest = Math.max(currentBlock - INITIAL_SCAN_BLOCKS, creationBlock);
       const effectiveOldest = savedOldestBlock ?? fallbackOldest;
       setOldestScannedBlock(effectiveOldest);
-      setCanLoadMore(effectiveOldest > CONTRACT_CREATION_BLOCK);
+      setCanLoadMore(effectiveOldest > creationBlock);
 
       if (initialScanComplete) {
         // Returning user — catch up from savedLastBlock to tip
@@ -273,7 +275,7 @@ export const useMessageListener = ({
       }
 
       // Fresh user — scan backward from tip
-      const startBlock = Math.max(currentBlock - INITIAL_SCAN_BLOCKS, CONTRACT_CREATION_BLOCK);
+      const startBlock = Math.max(currentBlock - INITIAL_SCAN_BLOCKS, creationBlock);
       const initialRanges = planRanges(startBlock, currentBlock, CHUNK_SIZE);
       const totalBlocks = currentBlock - startBlock;
 
@@ -298,7 +300,7 @@ export const useMessageListener = ({
       setLastKnownBlock(currentBlock);
       lastKnownBlockRef.current = currentBlock;
       setOldestScannedBlock(startBlock);
-      setCanLoadMore(startBlock > CONTRACT_CREATION_BLOCK);
+      setCanLoadMore(startBlock > creationBlock);
 
       await dbService.setLastKnownBlock(address, currentBlock);
       await dbService.setOldestScannedBlock(address, startBlock);
@@ -329,12 +331,12 @@ export const useMessageListener = ({
 
     try {
       const endBlock = oldestScannedBlock - 1;
-      if (endBlock < CONTRACT_CREATION_BLOCK) {
+      if (endBlock < creationBlock) {
         setCanLoadMore(false);
         return;
       }
 
-      const startBlock = Math.max(endBlock - INITIAL_SCAN_BLOCKS, CONTRACT_CREATION_BLOCK);
+      const startBlock = Math.max(endBlock - INITIAL_SCAN_BLOCKS, creationBlock);
       const ranges = planRanges(startBlock, endBlock, CHUNK_SIZE);
       const totalBlocks = endBlock - startBlock + 1;
 
@@ -357,7 +359,7 @@ export const useMessageListener = ({
       setSyncProgress(null);
 
       setOldestScannedBlock(startBlock);
-      setCanLoadMore(startBlock > CONTRACT_CREATION_BLOCK);
+      setCanLoadMore(startBlock > creationBlock);
       await dbService.setOldestScannedBlock(address, startBlock);
       lastBackfillAtRef.current = Date.now();
     } catch (error) {
