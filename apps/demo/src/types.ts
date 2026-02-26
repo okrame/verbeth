@@ -1,10 +1,9 @@
 import type { IdentityKeyPair, IdentityProof, RatchetSession as SDKRatchetSession, } from '@verbeth/sdk';
-import { getVerbethAddress, getCreationBlock } from '@verbeth/sdk';
+import { getVerbethAddress } from '@verbeth/sdk';
 import { keccak256, toUtf8Bytes, hexlify, getBytes } from 'ethers';
 
 /* ------------------------------- CONSTANTS -------------------------------- */
 export const VERBETH_SINGLETON_ADDR = getVerbethAddress();
-export const CONTRACT_CREATION_BLOCK = getCreationBlock();
 
 /* ------------------------------- SCAN CONFIG ------------------------------ */
 export const INITIAL_SCAN_BLOCKS        = 9_000;
@@ -147,6 +146,10 @@ export interface StoredRatchetSession {
   previousTopicInbound?: string;
   previousTopicExpiry?: number;
   topicEpoch: number;
+
+  // === Stealth ===
+  stealthRootKey: string;
+  stealthChainKey: string;
 }
 
 export interface StoredSkippedKey {
@@ -291,6 +294,10 @@ export function serializeRatchetSession(session: SDKRatchetSession): StoredRatch
     previousTopicInbound: session.previousTopicInbound?.toLowerCase(),
     previousTopicExpiry: session.previousTopicExpiry,
     topicEpoch: session.topicEpoch,
+
+    // Stealth
+    stealthRootKey: hexlify(session.stealthRootKey),
+    stealthChainKey: hexlify(session.stealthChainKey),
   };
 }
 
@@ -335,5 +342,9 @@ export function deserializeRatchetSession(stored: StoredRatchetSession): SDKRatc
     previousTopicInbound: stored.previousTopicInbound as `0x${string}` | undefined,
     previousTopicExpiry: stored.previousTopicExpiry,
     topicEpoch: stored.topicEpoch,
+
+    // Stealth
+    stealthRootKey: getBytes(stored.stealthRootKey),
+    stealthChainKey: getBytes(stored.stealthChainKey),
   };
 }

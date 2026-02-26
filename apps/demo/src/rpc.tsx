@@ -1,14 +1,7 @@
 import { createContext, useContext, useEffect, useState, useMemo } from "react";
 import { JsonRpcProvider } from "ethers";
 import { createPublicClient, http, webSocket, fallback } from "viem";
-import { baseSepolia } from "wagmi/chains";
-
-const WS_URL = import.meta.env.VITE_RPC_WS_URL as string | undefined;
-
-const PUBLIC_HTTP_1 = "https://sepolia.base.org";
-const PUBLIC_HTTP_2 = "https://base-sepolia-rpc.publicnode.com";
-
-const PUBLIC_HTTP_URLS: readonly string[] = [PUBLIC_HTTP_1, PUBLIC_HTTP_2];
+import { getHttpUrlsForChain, getChainById, getWsUrlForChain } from "./chain.js";
 
 export type TransportStatus =
   | "ws"
@@ -23,26 +16,31 @@ type RpcState = {
 
 const RpcCtx = createContext<RpcState | null>(null);
 
-export function RpcProvider({ children }: { children: React.ReactNode }) {
+export function RpcProvider({ chainId, children }: { chainId: number; children: React.ReactNode }) {
   const [ethersProvider, setEthersProvider] = useState<JsonRpcProvider | null>(null);
+
+  const httpUrls = useMemo(() => getHttpUrlsForChain(chainId), [chainId]);
+  const wsUrl = useMemo(() => getWsUrlForChain(chainId), [chainId]);
+  const chain = useMemo(() => getChainById(chainId), [chainId]);
+
   const [transportStatus, setTransportStatus] = useState<TransportStatus>(
-    WS_URL ? "ws" : "http-public"
+    wsUrl ? "ws" : "http-public"
   );
 
   useEffect(() => {
     let mounted = true;
 
     (async () => {
-      for (const url of PUBLIC_HTTP_URLS) {
+      for (const url of httpUrls) {
         let p: JsonRpcProvider | undefined;
         try {
-          p = new JsonRpcProvider(url, 84532, {
+          p = new JsonRpcProvider(url, chainId, {
             staticNetwork: true,
           });
           await p.getBlockNumber();
           if (mounted) {
             setEthersProvider(p);
-            if (!WS_URL) setTransportStatus("http-public");
+            if (!wsUrl) setTransportStatus("http-public");
           }
           return;
         } catch (e) {
@@ -60,25 +58,25 @@ export function RpcProvider({ children }: { children: React.ReactNode }) {
       mounted = false;
       setEthersProvider((prev) => { prev?.destroy(); return null; });
     };
-  }, []);
+  }, [chainId, httpUrls, wsUrl]);
 
   const viemClient = useMemo(() => {
-    if (WS_URL) {
-      // WS-only: viem is used exclusively for block-tip subscriptions
+    if (!chain) return null;
+
+    if (wsUrl) {
       return createPublicClient({
-        chain: baseSepolia,
-        transport: webSocket(WS_URL, {
+        chain,
+        transport: webSocket(wsUrl, {
           reconnect: { attempts: 5, delay: 2_000 },
         }),
       });
     }
 
-    // No WS: fall back to HTTP polling for watchBlockNumber
     return createPublicClient({
-      chain: baseSepolia,
-      transport: fallback([http(PUBLIC_HTTP_1), http(PUBLIC_HTTP_2)]),
+      chain,
+      transport: fallback(httpUrls.map((url) => http(url))),
     });
-  }, []);
+  }, [chainId, chain, httpUrls, wsUrl]);
 
   return (
     <RpcCtx.Provider
