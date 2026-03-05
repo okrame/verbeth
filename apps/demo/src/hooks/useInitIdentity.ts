@@ -1,11 +1,8 @@
 // src/hooks/useInitIdentity.ts
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { BrowserProvider, Wallet } from 'ethers';
+import { BrowserProvider, Contract, Wallet } from 'ethers';
 import {
-  VerbethV1__factory,
-  type VerbethV1,
-} from '@verbeth/contracts/typechain-types/index.js';
-import {
+  VERBETH_ABI,
   IExecutor,
   ExecutorFactory,
   deriveIdentityKeys,
@@ -51,7 +48,7 @@ export function useInitIdentity({
   const [identityKeyPair, setIdentityKeyPair] = useState<IdentityKeyPair | null>(null);
   const [identityProof, setIdentityProof] = useState<IdentityProof | null>(null);
   const [executor, setExecutor] = useState<IExecutor | null>(null);
-  const [contract, setContract] = useState<VerbethV1 | null>(null);
+  const [contract, setContract] = useState<Contract | null>(null);
   const [identitySigner, setIdentitySigner] = useState<any>(null);
   const [txSigner, setTxSigner] = useState<any>(null);
   const [safeAddr, setSafeAddr] = useState<string | null>(null);
@@ -165,7 +162,7 @@ export function useInitIdentity({
     // =========================================================================
     if (currentMode === 'classic') {
 
-      const contractInstance = VerbethV1__factory.connect(VERBETH_SINGLETON_ADDR, ethersSigner as any);
+      const contractInstance = new Contract(VERBETH_SINGLETON_ADDR, VERBETH_ABI, ethersSigner as any);
       const executorInstance = ExecutorFactory.createEOA(contractInstance);
 
       setExecutor(executorInstance);
@@ -235,7 +232,7 @@ export function useInitIdentity({
 
     console.log(`=====================================================\n`);
 
-    const contractInstance = VerbethV1__factory.connect(VERBETH_SINGLETON_ADDR, safeSessionSigner as any);
+    const contractInstance = new Contract(VERBETH_SINGLETON_ADDR, VERBETH_ABI, safeSessionSigner as any);
     const executorInstance = ExecutorFactory.createEOA(contractInstance);
 
     setExecutor(executorInstance);
