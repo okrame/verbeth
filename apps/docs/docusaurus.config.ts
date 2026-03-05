@@ -37,6 +37,7 @@ const config: Config = {
         docs: {
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/okrame/verbeth/tree/main/apps/docs/',
+          showLastUpdateTime: true,
         },
         blog: false,
         theme: {
@@ -52,14 +53,8 @@ const config: Config = {
       respectPrefersColorScheme: true,
     },
     navbar: {
-      title: 'Verbeth',
+      title: 'Verbeth Docs',
       items: [
-        {
-          type: 'docSidebar',
-          sidebarId: 'docsSidebar',
-          position: 'left',
-          label: 'Docs',
-        },
         {
           href: 'https://github.com/okrame/verbeth',
           label: 'GitHub',

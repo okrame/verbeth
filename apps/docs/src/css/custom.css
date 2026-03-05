@@ -71,8 +71,14 @@ code {
 }
 
 pre {
-  border-radius: 0;
+  border-radius: 14px;
   border: 1px solid var(--ifm-color-emphasis-200);
+}
+
+/* Docusaurus code block outer container */
+[class*='codeBlockContainer'] {
+  border-radius: 14px !important;
+  overflow: hidden;
 }
 
 /* Buttons */

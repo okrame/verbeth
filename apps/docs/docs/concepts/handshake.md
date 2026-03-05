@@ -5,167 +5,52 @@ title: Handshake
 
 # Handshake
 
-Verbeth uses a hybrid key exchange combining X25519 (classical) and ML-KEM-768 (post-quantum) to establish encrypted channels.
+Verbeth uses a hybrid key exchange to establish encrypted channels between two EVM addresses. The handshake is how two on-chain parties go from "strangers" to "sharing a secret" with no server infrastructure.
 
-## Overview
+## What it Accomplishes
 
-Unlike Signal's X3DH which uses prekeys stored on a server, Verbeth uses ephemeral-only key exchange:
+A successful handshake produces a **shared root key** that both parties can use to initialize a [Double Ratchet](./ratchet.md) session. This root key is derived from two independent key exchanges performed simultaneously:
 
-| X3DH (Signal) | Verbeth |
-|---------------|---------|
-| Prekey server required | No server infrastructure |
-| Offline initiation | Initiator must wait for response |
-| Multiple DH operations | Ephemeral + KEM hybrid |
+1. **X25519**: classical elliptic-curve Diffie-Hellman
+2. **ML-KEM-768**: NIST-standardized post-quantum KEM (formerly Kyber)
+ 
+Verbeth uses ephemeral-only DH paired with ML-KEM so that no long-term keys participate in the key exchange. Authentication is separated entirely: `msg.sender` is a guarantee from Ethereum, and a cryptographic [binding proof](./identity.md) ties the EVM address to the long-term keys. 
 
-The tradeoff: Verbeth requires the responder to come online before the channel is established, but eliminates server trust entirely.
+## Why hybrid?
 
-## Hybrid Key Exchange
+Defense-in-depth against an uncertain cryptographic future:
 
-Verbeth combines two key exchange mechanisms:
+- If X25519 is broken (e.g. quantum computers running Shor's algorithm), ML-KEM still protects the root key
+- If ML-KEM is broken (future cryptanalysis of lattice problems), X25519 still protects the root key
 
-### X25519 (Classical)
+So, security holds as long as either primitive remains secure.
 
-- Well-understood elliptic curve Diffie-Hellman
-- 128-bit security against classical computers
-- Vulnerable to quantum computers running Shor's algorithm
+This is especially important for "Harvest Now, Decrypt Later" attacks, i.e. adversaries who record encrypted blockchain traffic today, hoping to decrypt it with future quantum computers. Because Verbeth's [root key](./ratchet.md#root-key-derivation)  depends on ML-KEM, even a future quantum adversary cannot recover past session keys. For a detailed security analysis, see [Security Model](./security.md#handshake-response-unlinkability).
 
-### ML-KEM-768 (Post-Quantum)
+### Other PQ-secure handshake protocols
 
-- NIST-standardized lattice-based KEM (formerly Kyber)
-- 192-bit security against quantum computers
-- Larger keys (1184 bytes public, 1088 bytes ciphertext)
+| | **Verbeth** | **Signal** | **XMTP** |
+|---|---|---|---|
+| **Transport** | Blockchain events | Server-relayed | XMTP network nodes |
+| **Server trust** | None | Prekey server | Node operators |
+| **Offline initiation** | Not yet<sup>1</sup> | Yes (prekeys) | Yes (KeyPackages) |
+| **Authentication** | On-chain `msg.sender`+ Identity proof | Identity keys mixed into DH | Installation keys + wallet signature |
+| **Key exchange** | 1 KEM + 1 eph. DH | 1 KEM + up to 4 DH | MLS TreeKEM |
+| **Post-quantum** | Yes (hybrid, mandatory) | Yes (hybrid, mandatory) | Yes (hybrid, optional) |
+| **Forward secrecy** | Unconditional<sup>2</sup> | Conditional on IK + SPK security | Conditional on leaf node security |
 
-### Why Hybrid?
+For a deeper analysis of how PQ security propagates through each protocol's key schedule, see [Post-Quantum Comparison](./security.md#post-quantum-comparison-verbeth-vs-signal-vs-xmtp). For the full security comparison (forward secrecy, post-compromise security, metadata privacy), see [Security Model](./security.md).
 
-Defense-in-depth:
+---
 
-- If X25519 is broken (quantum), ML-KEM protects
-- If ML-KEM is broken (cryptanalysis), X25519 protects
-- Security holds if *either* primitive remains secure
+<sup>1</sup> A planned **Contact KEM** integration will allow recipients to publish ML-KEM keys on-chain, enabling hybrid-encrypted first-message payloads. Under the hood the 2-step handshake flow remains unchanged, but first contact will be protected, hence simulating an offline initiation.
 
-This protects against "Harvest Now, Decrypt Later" (HNDL) attacks where adversaries record encrypted traffic today hoping to decrypt with future quantum computers.
+<sup>2</sup> Only ephemeral keys participate in key derivation: `SK = KDF(DH(EKa, EKb) || KEM_SS)`. Even if all long-term keys are later compromised, past sessions are unrecoverable because both ephemeral secrets were deleted after use. (Differently, in Signal, if both Bob's identity key and signed prekey are compromised, all sessions established under that prekey are recoverable, and althogh this is mitigated via prekey rotation, there is always an active window.)
 
-## Protocol Flow
 
-```
-Alice (Initiator)                              Bob (Responder)
-─────────────────                              ───────────────
 
-1. Generate ephemeral X25519 keypair (a, A)
-2. Generate ML-KEM-768 keypair (kemPk, kemSk)
-3. Create identity proof
+## Next Steps
 
-        ─────── Handshake Event ───────►
-        │ recipientHash: H(bob_addr)    │
-        │ ephemeralPubKey: A            │
-        │ kemPublicKey: kemPk           │
-        │ identityProof: {...}          │
-        └───────────────────────────────┘
-
-                                        4. Generate ephemeral keypair (r, R)
-                                        5. Compute X25519: x_ss = ECDH(r, A)
-                                        6. Encapsulate KEM: (ct, kem_ss) = Encap(kemPk)
-                                        7. Compute hybrid tag:
-                                           tag = HKDF(x_ss || kem_ss, "verbeth:hsr-hybrid:v1")
-                                        8. Encrypt response to A
-
-        ◄───── HandshakeResponse ──────
-        │ inResponseTo: tag             │
-        │ responderEphemeralR: R        │
-        │ ciphertext: Enc(A, response)  │
-        └───────────────────────────────┘
-
-9. Decrypt response, extract R, ct
-10. Compute X25519: x_ss = ECDH(a, R)
-11. Decapsulate KEM: kem_ss = Decap(ct, kemSk)
-12. Verify tag matches
-13. Derive root key from hybrid secret
-
-        ═══════ Channel Established ═══════
-```
-
-## Hybrid Tag Computation
-
-The `inResponseTo` tag links response to handshake using the hybrid secret:
-
-```typescript
-function computeHybridTag(
-  ecdhSecret: Uint8Array,  // X25519 shared secret
-  kemSecret: Uint8Array    // ML-KEM shared secret
-): `0x${string}` {
-  const okm = hkdf(sha256, kemSecret, ecdhSecret, "verbeth:hsr-hybrid:v1", 32);
-  return keccak256(okm);
-}
-```
-
-Observers cannot link `HandshakeResponse` to its `Handshake` without the shared secrets. See [Security Model](./security.md#handshake-response-unlinkability) for detailed analysis against classical and quantum adversaries.
-
-## Root Key Derivation
-
-The initial root key for the Double Ratchet combines both secrets:
-
-```typescript
-function hybridInitialSecret(
-  x25519Secret: Uint8Array,
-  kemSecret: Uint8Array
-): Uint8Array {
-  const combined = concat([x25519Secret, kemSecret]);
-  return hkdf(sha256, combined, zeros(32), "VerbethHybrid", 32);
-}
-```
-
-This root key is post-quantum secure. All subsequent ratchet keys derive from it, propagating PQ security through the entire conversation.
-
-## On-Chain Events
-
-### Handshake Event
-
-```solidity
-event Handshake(
-  bytes32 indexed recipientHash,
-  address indexed sender,
-  bytes ephemeralPubKey,    // 32 bytes X25519
-  bytes kemPublicKey,       // 1184 bytes ML-KEM-768
-  bytes plaintextPayload    // Identity proof + note
-);
-```
-
-### HandshakeResponse Event
-
-```solidity
-event HandshakeResponse(
-  bytes32 indexed inResponseTo,  // Hybrid tag
-  address indexed responder,
-  bytes responderEphemeralR,     // 32 bytes X25519
-  bytes ciphertext               // Encrypted response (includes KEM ciphertext)
-);
-```
-
-## Gas Considerations
-
-| Component | Size | Notes |
-|-----------|------|-------|
-| X25519 ephemeral | 32 bytes | Minimal |
-| ML-KEM public key | 1184 bytes | Dominates handshake cost |
-| ML-KEM ciphertext | 1088 bytes | In encrypted response |
-| Identity proof | ~500 bytes | Signature + message |
-
-Handshake initiation costs more due to the KEM public key. Response is encrypted, so KEM ciphertext is hidden in the blob.
-
-## Executor Abstraction
-
-Handshake transactions can be sent via:
-
-- **EOA**: Direct wallet transaction
-- **Safe Module**: Session key authorized by Safe
-
-The identity proof's `ExecutorAddres` field specifies which address will send the transaction, enabling verification regardless of executor type.
-
-## Security Properties
-
-| Property | Guarantee |
-|----------|-----------|
-| **Forward secrecy** | Ephemeral keys provide FS from message 0 |
-| **HNDL resistance** | ML-KEM protects root key against quantum |
-| **Identity binding** | Proof ties keys to Ethereum address |
-| **Quantum unlinkability** | Tag derivation hides handshake-response link |
+- [Protocol Flow](../how-it-works/protocol-flow.md) — the full step-by-step exchange, on-chain events, and code
+- [Double Ratchet](./ratchet.md) — what happens after the handshake
+- [Wire Format](../how-it-works/wire-format.md) — how messages are encoded on-chain

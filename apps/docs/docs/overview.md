@@ -1,9 +1,10 @@
 ---
-sidebar_position: 1
-title: How It Works
+sidebar_position: 0
+slug: /
+title: Overview
 ---
 
-# How It Works
+# What is Verbeth
 
 Verbeth is an end-to-end encrypted messaging protocol that uses Ethereum as its sole transport layer.
 
@@ -27,6 +28,8 @@ Traditional encrypted messaging requires:
 3. Trust that the server doesn't log metadata
 
 Verbeth eliminates all of this. The Ethereum network stores messages indefinitely. Recipients query the blockchain when they come online. The trust model shifts from "trust our servers" to "verify the chain."
+
+## Walk-away test
 
 ## Identity Model
 
@@ -98,4 +101,4 @@ Topics are derived from shared secrets. Only participants know which topics belo
 4. **Messages flow**: Each party emits `MessageSent` to their outbound topic
 5. **Topics evolve**: Double Ratchet advances topics for forward secrecy
 
-See [Handshake](./handshake.md) and [Ratchet](./ratchet.md) for protocol details.
+See [Handshake](./concepts/handshake.md) and [Ratchet](./concepts/ratchet.md) for protocol details.

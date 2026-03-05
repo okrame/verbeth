@@ -3,7 +3,7 @@ sidebar_position: 5
 title: Security Model
 ---
 
-# Security Model
+# Security Model (still WIP...)
 
 This document describes Verbeth's threat model, security guarantees, and tradeoffs compared to traditional encrypted messaging.
 
@@ -292,6 +292,32 @@ For applications requiring strict deduplication:
 - Track message hashes or (topic, n) pairs
 - Reject duplicates at application layer
 - SDK provides hooks for custom logic
+
+## Post-Quantum Comparison: Verbeth vs Signal vs XMTP
+
+All three protocols PQ-protect the **initial secret** and use classical DH for **ongoing key evolution**. The PQ security propagates through the key schedule because `KDF(secret_input, computable_DH_output)` doesn't leak `secret_input` — a quantum attacker who can break every X25519 DH still can't derive any key without the root/epoch secret, which was PQ-protected. In practice, all three achieve PQ confidentiality for the entire message history, not just the handshake.
+
+| | **Verbeth** | **Signal (PQXDH)** | **XMTP (MLS)** |
+|---|---|---|---|
+| **PQ lives in...** | Handshake protocol (ML-KEM-768 is a first-class participant in key derivation) | Handshake protocol (KEM ciphertext added to X3DH) | Transport layer (HPKE encryption of Welcome messages via XWING) |
+| **Initial secret** | `KDF(DH(EKa, EKb) \|\| KEM_SS)` | `KDF(DH₁ \|\| DH₂ \|\| DH₃ [\|\| DH₄] \|\| KEM_SS)` | Random group secret, encrypted to recipient with XWING HPKE |
+| **Key evolution** | Double Ratchet: `RK_new = KDF(RK_old, DH_ratchet)` — X25519 only | Double Ratchet: same mechanism | TreeKEM commits: `epoch_new = KDF(epoch_old, TreeKEM_DH)` — X25519 only |
+| **PQ propagation** | Root key is PQ-secure → all chain keys inherit it via KDF | Same: PQ root → chain keys inherit | Epoch 0 secret is PQ-protected in transit → subsequent epochs inherit via KDF |
+| **If PQ is broken** | Falls back to X25519 (hybrid — both must break) | Falls back to X3DH DH terms (hybrid) | Welcome envelope broken, but group secret was random — still fine if X25519 holds |
+| **PQ mandatory?** | Yes, always | No (PQXDH is opt-in, X3DH is default) | Yes for Welcome messages |
+| **Architecture** | Structural: ML-KEM participates in key agreement math | Structural: KEM ciphertext is part of shared secret derivation | Envelope: PQ protects delivery of an already-generated secret |
+
+### What "structural vs envelope" means
+
+In Verbeth and Signal (PQXDH), the PQ KEM output is **mixed into the shared secret derivation** — the KEM shared secret is a direct input to the KDF that produces the root key. If the KEM is broken, the protocol falls back to the classical DH component (hybrid design).
+
+In XMTP, the MLS group secret is generated randomly by the group creator and then **delivered** to other members inside a Welcome message encrypted with XWING HPKE. The PQ protection is on the transport of the secret, not on its derivation. This is a sound design — the secret itself is high-entropy random bytes — but it means PQ security depends on a single point (the Welcome encryption) rather than being woven into the key agreement.
+
+### Where all three converge
+
+Despite the architectural differences, the practical outcome is similar:
+- **HNDL resistance**: A passive quantum adversary who records all traffic today cannot recover any message content, because the initial secret (from which all keys derive) was PQ-protected
+- **PCS limitation**: None of the three protocols achieve full post-compromise security against an active quantum adversary — the ongoing DH ratchet / TreeKEM steps use classical X25519, so an attacker with quantum capabilities AND device state compromise can track future keys until the next PQ re-keying (which none currently implement in the ratchet)
 
 ## Comparison with Signal Protocol
 

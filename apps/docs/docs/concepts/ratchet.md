@@ -3,7 +3,7 @@ sidebar_position: 4
 title: Double Ratchet
 ---
 
-# Double Ratchet
+# Double Ratchet (still WIP...)
 
 Verbeth uses the Double Ratchet algorithm for post-handshake encryption, providing forward secrecy and post-compromise security.
 

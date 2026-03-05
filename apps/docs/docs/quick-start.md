@@ -21,7 +21,8 @@ import {
   createVerbethClient,
   deriveIdentityKeyPairWithProof,
   ExecutorFactory,
-  getVerbethAddress
+  getVerbethAddress,
+  VERBETH_ABI,
 } from '@verbeth/sdk';
 import { ethers } from 'ethers';
 
@@ -47,13 +48,24 @@ const client = createVerbethClient({
   identityKeyPair,
   identityProof,
   executor,
+  sessionStore, 
+  pendingStore, 
 });
 ```
 
-## Send a Handshake
+`SessionStore` and `PendingStore` are interfaces you implement to connect the client to your persistence layer (localStorage, IndexedDB, any database, etc.).
+
+## Create a connection
+
+To create a connection between two EVM accounts that have never interacted before, a handshake is required.
+
+### Initate a handshake request
 
 Start a conversation by sending a handshake to another address.
-The returned secrets must be stored until the recipient responds.
+
+>The optional message attached to the handshake is plaintext, unless a shared secret already exists between the accounts. However, encrypted contact discovery will be covered in future iterations.
+
+The SDK generates and returns two keypairs that must be securely stored until the recipient responds.
 
 ```typescript
 const recipientAddress = '0x...';
@@ -63,21 +75,25 @@ const { tx, ephemeralKeyPair, kemKeyPair } = await client.sendHandshake(
   'Hello from Verbeth!'
 );
 await tx.wait();
+
+// Store both secrets — needed to create the session when a response arrives
+await pendingContactStore.save({
+  contactAddress: recipientAddress,
+  ephemeralSecret: ephemeralKeyPair.secretKey,
+  kemSecret: kemKeyPair.secretKey,
+});
 ```
 
-## Accept a Handshake
+### Respond to a handshake request
 
-When you receive a handshake, accept it to establish the encrypted channel. You can implement your own storage to persist the session.
-
+When a `Handshake` event arrives on-chain, respond to establish the encrypted channel.
 
 ```typescript
-// Parse incoming handshake event from blockchain logs
+// this public key is a Uint8Array from the on-chain handshake event
 const initiatorEphemeralPubKey = handshakeEvent.ephemeralPubKey;
 
 const {
   tx,
-  topicOutbound,
-  topicInbound,
   responderEphemeralSecret,
   responderEphemeralPublic,
   salt,
@@ -85,7 +101,39 @@ const {
 } = await client.acceptHandshake(initiatorEphemeralPubKey, 'Hey!');
 
 await tx.wait();
+```
 
+## Create a session
+
+After the handshake exchange, both parties independently derive their local session from the exchanged key material. The session manages all state for subsequent encrypted messages.
+
+### As initiator
+
+Call this when a `HandshakeResponse` event arrives on-chain matching your earlier handshake.
+
+```typescript
+// storedEphemeralSecret and storedKemSecret were saved after sendHandshake
+const session = client.createInitiatorSessionFromHsr({
+  contactAddress: recipientAddress,
+  myEphemeralSecret: storedEphemeralSecret,
+  myKemSecret: storedKemSecret,
+  hsrEvent: {
+    responderEphemeralPubKey: hsrEvent.responderEphemeralPubKey,
+    inResponseToTag: hsrEvent.inResponseTo,
+    kemCiphertext: hsrEvent.kemCiphertext,
+  },
+});
+
+await sessionStore.save(session);
+```
+
+### As responder
+
+Call this right after `acceptHandshake` completes, using the values it returned alongside data from the original `Handshake` event.
+
+>Note this means that the responder can have a session and start sending e2ee messages immediately, unlike the initiator that must wait for their response. 
+
+```typescript
 const session = client.createResponderSession({
   contactAddress: handshakeEvent.sender,
   responderEphemeralSecret,
@@ -98,45 +146,25 @@ const session = client.createResponderSession({
 await sessionStore.save(session);
 ```
 
-## Create Session from Response
+## Use a session
 
-When the recipient responds to your handshake, create your session using the previously stored secrets.
+Parties can leverage the established session to carry on encrypted conversations over stealth topics to preserve metadata privacy. 
 
-```typescript
-// hsrEvent is the HandshakeResponse event from the blockchain
-const session = client.createInitiatorSessionFromHsr({
-  contactAddress: recipientAddress,
-  myEphemeralSecret: storedEphemeralSecret,     
-  myKemSecret: storedKemSecret,                  
-  hsrEvent: {
-    responderEphemeralPubKey: hsrEvent.responderEphemeralPubKey,
-    inResponseToTag: hsrEvent.inResponseTo,
-    kemCiphertext: hsrEvent.kemCiphertext,
-  },
-});
+>Verbeth uses rotating stealth topics that change automatically with each Diffie-Hellman ratchet step, hence requiring to update the on-chain event subscriptions. See [Topic Ratcheting](./concepts/topic-ratcheting) for a full explanation.
 
-await sessionStore.save(session);
-```
 
-## Send Messages
-
-Once you have a session, configure the storage and send encrypted messages.
+### Send encrypted messages
 
 ```typescript
-client.setSessionStore(sessionStore);
-client.setPendingStore(pendingStore);
-
 const result = await client.sendMessage(
   session.conversationId,
-  'This message is end-to-end encrypted!'
+  'This message is e2e encrypted!'
 );
 
 console.log('Sent:', result.txHash);
 ```
 
-## Decrypt Messages
-
-Decrypt incoming messages from the blockchain.
+### Decrypt incoming messages
 
 ```typescript
 const decrypted = await client.decryptMessage(
@@ -153,53 +181,142 @@ if (decrypted) {
 
 ## Full Example
 
+The complete flow from wallet connection to encrypted messaging.
+
+<details>
+<summary>Setup</summary>
+
 ```typescript
 import {
   createVerbethClient,
   deriveIdentityKeyPairWithProof,
   ExecutorFactory,
-  getVerbethAddress
+  getVerbethAddress,
+  VERBETH_ABI,
 } from '@verbeth/sdk';
 import { ethers } from 'ethers';
 
-async function initVerbeth() {
-  const provider = new ethers.BrowserProvider(window.ethereum);
-  const signer = await provider.getSigner();
-  const address = await signer.getAddress();
+const provider = new ethers.BrowserProvider(window.ethereum);
+const signer = await provider.getSigner();
+const address = await signer.getAddress();
 
-  const { identityKeyPair, identityProof } = await deriveIdentityKeyPairWithProof(
-    signer,
-    address
-  );
+const { identityKeyPair, identityProof } = await deriveIdentityKeyPairWithProof(signer, address);
 
-  const contract = new ethers.Contract(getVerbethAddress(), VERBETH_ABI, signer);
-  const executor = ExecutorFactory.createEOA(contract);
+const contract = new ethers.Contract(getVerbethAddress(), VERBETH_ABI, signer);
+const executor = ExecutorFactory.createEOA(contract);
 
-  const client = createVerbethClient({
-    address,
-    signer,
-    identityKeyPair,
-    identityProof,
-    executor,
-  });
+const client = createVerbethClient({
+  address,
+  signer,
+  identityKeyPair,
+  identityProof,
+  executor,
+  sessionStore,  // your SessionStore implementation
+  pendingStore,  // your PendingStore implementation
+});
+```
 
-  return { client, identityKeyPair };
-}
+</details>
 
-async function startConversation(client, recipientAddress: string) {
-  const { tx, ephemeralKeyPair, kemKeyPair } = await client.sendHandshake(
-    recipientAddress,
-    'Starting secure conversation'
-  );
+<details>
+<summary>Alice: send handshake</summary>
 
-  await tx.wait();
+```typescript
+const { tx, ephemeralKeyPair, kemKeyPair } = await client.sendHandshake(
+  bobAddress,
+  'Hello from Verbeth!'
+);
+await tx.wait();
 
-  return {
-    ephemeralSecret: ephemeralKeyPair.secretKey,
-    kemSecret: kemKeyPair.secretKey,
-  };
+// Persist handshake secrets until Bob's HandshakeResponse arrives on-chain.
+// pendingContactStore is your own store — separate from the SDK's PendingStore (for messages).
+await pendingContactStore.save({
+  contactAddress: bobAddress,
+  ephemeralSecret: ephemeralKeyPair.secretKey,
+  kemSecret: kemKeyPair.secretKey,
+});
+```
+
+</details>
+
+<details>
+<summary>Bob: accept handshake & create session</summary>
+
+When a `Handshake` event arrives on-chain for Bob:
+
+```typescript
+// initiatorEphemeralPubKey is a Uint8Array from the on-chain Handshake event
+const initiatorEphemeralPubKey = handshakeEvent.ephemeralPubKey;
+
+const {
+  tx,
+  responderEphemeralSecret,
+  responderEphemeralPublic,
+  salt,
+  kemSharedSecret,
+} = await client.acceptHandshake(initiatorEphemeralPubKey, 'Hey!');
+await tx.wait();
+
+// Bob can create a session and start sending immediately,
+// without waiting for Alice to confirm.
+const session = client.createResponderSession({
+  contactAddress: handshakeEvent.sender,
+  responderEphemeralSecret,
+  responderEphemeralPublic,
+  initiatorEphemeralPubKey,
+  salt,
+  kemSharedSecret,
+});
+await sessionStore.save(session);
+```
+
+</details>
+
+<details>
+<summary>Alice: create session from Bob's response</summary>
+
+When a `HandshakeResponse` event arrives on-chain for Alice:
+
+```typescript
+const { ephemeralSecret, kemSecret } = await pendingContactStore.get(bobAddress);
+
+const session = client.createInitiatorSessionFromHsr({
+  contactAddress: bobAddress,
+  myEphemeralSecret: ephemeralSecret,
+  myKemSecret: kemSecret,
+  hsrEvent: {
+    responderEphemeralPubKey: hsrEvent.responderEphemeralPubKey,
+    inResponseToTag: hsrEvent.inResponseTo,
+    kemCiphertext: hsrEvent.kemCiphertext,
+  },
+});
+await sessionStore.save(session);
+```
+
+</details>
+
+<details>
+<summary>Send and receive messages</summary>
+
+
+```typescript
+// Send
+const result = await client.sendMessage(session.conversationId, 'This is e2e encrypted!');
+console.log('Sent:', result.txHash);
+
+// Decrypt incoming (from an on-chain MessageSent event)
+const decrypted = await client.decryptMessage(
+  messageEvent.topic,
+  messageEvent.payload,
+  senderSigningKey,
+  false // isOwnMessage
+);
+if (decrypted) {
+  console.log('Received:', decrypted.plaintext);
 }
 ```
+
+</details>
 
 ## Next Steps
 
