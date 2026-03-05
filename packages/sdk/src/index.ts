@@ -34,10 +34,11 @@ export {
 } from './identity.js';
 
 export {
+  VERBETH_ABI,
   IExecutor,
   EOAExecutor,
   UserOpExecutor,
-  DirectEntryPointExecutor,  
+  DirectEntryPointExecutor,
   ExecutorFactory
 } from './executor.js';
 
