@@ -64,7 +64,7 @@ Observers cannot link `HandshakeResponse` to its `Handshake` without the shared 
 
 ## Root Key Derivation
 
-The initial root key for the [Double Ratchet](../concepts/ratchet.md) combines both secrets:
+The initial root key for the [Double Ratchet](../concepts/ratchet/double-ratchet.md) combines both secrets:
 
 ```typescript
 function hybridInitialSecret(

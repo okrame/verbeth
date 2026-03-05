@@ -12,7 +12,16 @@ const sidebars: SidebarsConfig = {
       items: [
         'concepts/identity',
         'concepts/handshake',
-        'concepts/ratchet',
+        {
+          type: 'category',
+          label: 'Ratchet',
+          collapsed: false,
+          collapsible: true,
+          items: [
+            'concepts/ratchet/double-ratchet',
+            'concepts/ratchet/topic-ratcheting',
+          ],
+        },
         'concepts/security',
       ],
     },
@@ -24,6 +33,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'how-it-works/wire-format',
         'how-it-works/protocol-flow',
+        'how-it-works/ratchet-internals',
       ],
     },
   ],

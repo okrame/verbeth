@@ -150,7 +150,7 @@ await sessionStore.save(session);
 
 Parties can leverage the established session to carry on encrypted conversations over stealth topics to preserve metadata privacy. 
 
->Verbeth uses rotating stealth topics that change automatically with each Diffie-Hellman ratchet step, hence requiring to update the on-chain event subscriptions. See [Topic Ratcheting](./concepts/topic-ratcheting) for a full explanation.
+>Verbeth uses rotating stealth topics that change automatically with each Diffie-Hellman ratchet step, hence requiring to update the on-chain event subscriptions. See [Topic Ratcheting](./concepts/ratchet/topic-ratcheting) for a full explanation.
 
 
 ### Send encrypted messages

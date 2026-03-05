@@ -101,4 +101,4 @@ Topics are derived from shared secrets. Only participants know which topics belo
 4. **Messages flow**: Each party emits `MessageSent` to their outbound topic
 5. **Topics evolve**: Double Ratchet advances topics for forward secrecy
 
-See [Handshake](./concepts/handshake.md) and [Ratchet](./concepts/ratchet.md) for protocol details.
+See [Handshake](./concepts/handshake.md) and [Ratchet](./concepts/ratchet/double-ratchet.md) for protocol details.

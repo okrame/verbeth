@@ -7,9 +7,9 @@ title: Handshake
 
 Verbeth uses a hybrid key exchange to establish encrypted channels between two EVM addresses. The handshake is how two on-chain parties go from "strangers" to "sharing a secret" with no server infrastructure.
 
-## What it Accomplishes
+## What it accomplishes
 
-A successful handshake produces a **shared root key** that both parties can use to initialize a [Double Ratchet](./ratchet.md) session. This root key is derived from two independent key exchanges performed simultaneously:
+A successful handshake produces a **shared root key** that both parties can use to initialize a [Double Ratchet](./ratchet/double-ratchet.md) session. This root key is derived from two independent key exchanges performed simultaneously:
 
 1. **X25519**: classical elliptic-curve Diffie-Hellman
 2. **ML-KEM-768**: NIST-standardized post-quantum KEM (formerly Kyber)
@@ -25,7 +25,7 @@ Defense-in-depth against an uncertain cryptographic future:
 
 So, security holds as long as either primitive remains secure.
 
-This is especially important for "Harvest Now, Decrypt Later" attacks, i.e. adversaries who record encrypted blockchain traffic today, hoping to decrypt it with future quantum computers. Because Verbeth's [root key](./ratchet.md#root-key-derivation)  depends on ML-KEM, even a future quantum adversary cannot recover past session keys. For a detailed security analysis, see [Security Model](./security.md#handshake-response-unlinkability).
+This is especially important for "Harvest Now, Decrypt Later" attacks, i.e. adversaries who record encrypted blockchain traffic today, hoping to decrypt it with future quantum computers. Because Verbeth's [root key](./ratchet/double-ratchet.md)  depends on ML-KEM, even a future quantum adversary cannot recover past session keys. For a detailed security analysis, see [Security Model](./security.md#handshake-response-unlinkability).
 
 ### Other PQ-secure handshake protocols
 
@@ -52,5 +52,5 @@ For a deeper analysis of how PQ security propagates through each protocol's key 
 ## Next Steps
 
 - [Protocol Flow](../how-it-works/protocol-flow.md) — the full step-by-step exchange, on-chain events, and code
-- [Double Ratchet](./ratchet.md) — what happens after the handshake
+- [Double Ratchet](./ratchet/double-ratchet.md) — what happens after the handshake
 - [Wire Format](../how-it-works/wire-format.md) — how messages are encoded on-chain
