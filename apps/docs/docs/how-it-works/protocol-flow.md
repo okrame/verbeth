@@ -3,7 +3,7 @@ sidebar_position: 2
 title: Protocol Flow
 ---
 
-# Protocol Flow
+# Protocol Flow (WIP...)
 
 This page details the full handshake exchange — the sequence of on-chain events, cryptographic operations, and key derivations that establish an encrypted channel. For the conceptual overview, see [Handshake](../concepts/handshake.md).
 

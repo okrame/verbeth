@@ -6,78 +6,65 @@ title: Overview
 
 # Verbeth, what is it?
 
-Verbeth is an end-to-end encrypted messaging protocol that uses Ethereum as its sole transport layer.
+Verbeth is an end-to-end encrypted messaging protocol that uses a public EVM chain as its sole transport layer. 
+This is an unusual property for a messaging protocol, as messages move through the chain itself, not through servers or relay infrastructure.
 
-**When non-repudiation matters**: audit trails, regulated workflows, legal agreements, on-chain governance, or any context where "who said what, and when" must be publicly and permanently checkable — and where that is a feature, not a liability. see threat model.md#non-repudiation
-
+The premise is simple. If messaging infrastructure depends on someone’s goodwill to keep running, it will eventually be compromised, shut down, or degraded. Verbeth is designed to remove that dependency within the trust assumptions of the blockchain, while accepting the tradeoffs and implementation constraints that come with that choice.
 
 ---
 
-### Things that Verbeth does NOT cover
+## Why it exists
 
-- **Deniability**: on-chain transactions are permanent and attributable; there is no way to deny having sent a message
-- **Metadata privacy from RPC providers**: without self-hosting or future private retrieval techniques, several query pattern are likely visible (see [Metadata Privacy](./concepts/security/metadata-privacy.md))
-- **Active quantum post-compromise security**; an adversary with both a quantum computer and device access can track keys through classical DH ratchet steps (see [Cryptographic Guarantees](./concepts/security/cryptographic-guarantees.md#against-quantum-adversary))
-- **Spam filtering**: Ethereum's gas model provides economic resistance, but the protocol does not filter content
+Most encrypted messaging systems solve the "cryptography problem" well. What they leave intact is the *trust* problem: a server stores your messages, a company controls the keys to that server, and a jurisdiction controls the company. Even unbreakable encryption can be switched off if someone can shut down the server it runs on.
 
+To nail down the point one can read the [Trustless Manifesto](https://trustlessness.eth.limo/general/2025/11/11/the-trustless-manifesto.html) framing
 
-## Blockchain as Transport
+> "The only defense is trustless design: systems whose correctness and fairness depend only on math and consensus, never on the goodwill of intermediaries."
 
-Instead of running servers or relay infrastructure, Verbeth stores encrypted messages directly in Ethereum event logs. The blockchain provides:
+So, what if clients query event logs from a single immutable contract?
 
-- **Immutability**: Messages cannot be altered or deleted
-- **Availability**: No server downtime, no message loss
-- **Censorship resistance**: Anyone can read/write to the contract
-- **Global ordering**: Block timestamps provide message ordering
+Of course, average users still depend on RPC providers to read the chain, and on bundlers or paymasters if using account abstraction for gas sponsorship. The protocol itself, however, owns none of that infrastructure and it only requires that *some* path to Ethereum exists, and any provider is replaceable by another (see [metadata privacy](./concepts/security/metadata-privacy.md) for the RPC-level privacy implications).
 
-Messages are emitted as events from the Verbeth contract. Clients query these events using standard RPC calls.
+## The walk-away test
 
-## No Servers, No Relays
+Vitalik Buterin proposed a simple litmus test for decentralized systems:
 
-Traditional encrypted messaging requires:
+> "If your team and servers disappeared tomorrow, would your application still be usable?"
 
-1. A server to store messages until recipients come online
-2. Push infrastructure for notifications
-3. Trust that the server doesn't log metadata
+Verbeth is designed toward passing this test. The reader of these docs can decide herself if this truly the case.
 
-Verbeth eliminates all of this. The Ethereum network stores messages indefinitely. Recipients query the blockchain when they come online. The trust model shifts from "trust our servers" to "verify the chain."
+> To get all the nice [cryptographic guarantees](concepts/security/cryptographic-guarantees.md), ratchet sessions, pending messages, and contact metadata live in app-managed storage via [`SessionStore`](how-it-works/wire-format.md) and [`PendingStore`](how-it-works/wire-format.md) interfaces that each application implements. If an app disappears without exporting that state, the on-chain ciphertext is preserved but users lose the keys to decrypt it. This is an explicit design choice: the protocol does not prescribe *where* you store your state, only that you must store it. 
 
-## Walk-away test
+A companion question matters just as much. If the original team wanted to interfere, could they stop the system from working or selectively prevent people from using it?  
+The answer is left to the reader here too. 
 
-## Identity Model
+## Own your messages
 
-Your Ethereum address is your identity. No usernames, no phone numbers, no email verification.
+Shane Mac, co-founder of XMTP Labs, put it well:
 
-Verbeth derives cryptographic keys from a single wallet signature:
+> "Private servers require 'trust me' — but having no private server means 'you don't have to trust me.'"
+>
+> — [Privacy Trends for 2026, a16z crypto](https://a16zcrypto.com/posts/article/privacy-trends-moats-quantum-data-testing/)
 
-```
-Wallet Signature
-      ↓
-   HKDF Chain
-      ↓
-┌─────────────────────────────────────┐
-│  X25519 (encryption)                │
-│  Ed25519 (signing)                  │
-│  secp256k1 session key (optional)   │
-└─────────────────────────────────────┘
-```
+Verbeth takes this further: your messages live on a public blockchain, encrypted, forever. They are not hosted *for* you by a service that can revoke access. They are *yours* in the same way your ETH is yours — anyone can verify they exist, but only you hold the keys.
 
-A binding proof cryptographically ties these derived keys to your Ethereum address. This proof is verified or via ERC-1271/ERC-6492 for smart accounts.
+This means persistence is an app-level decision, not a protocol-level lock-in. An application built on Verbeth might store decrypted messages locally, back up encrypted session state to IPFS, or sync across devices via a user-controlled cloud. The protocol doesn't mandate a storage backend — it ensures that *no single app is the gatekeeper*. If one client shuts down, another can pick up where it left off, provided the user has their session state.
 
-## Why Safe Accounts?
+Vitalik's case for [full-stack openness](https://vitalik.eth.limo/general/2025/09/24/openness_and_verifiability.html) reinforces this: genuine openness means equality of access, verifiability, and no vendor lock-in. In Verbeth, every layer is inspectable — from the Solidity contract to the TypeScript SDK to the on-chain ciphertext itself.
 
-Verbeth works with EOAs but is optimized for Safe accounts:
+## What Verbeth does NOT do
 
-- **Session keys**: Derived secp256k1 key can be authorized via Safe module, enabling messaging without repeated wallet signatures
-- **Gasless messaging**: Paymasters can sponsor message transactions
-- **Multi-sig recovery**: Safe's recovery mechanisms protect your messaging identity
-- **ERC-1271 verification**: Smart contract signature verification built into the protocol
+- **Deniability** — on-chain transactions are permanent and attributable. There is no way to deny having sent a message. This is a feature for some use cases and a limitation for others (see [Threat Model](./concepts/security/threat-model.md#non-repudiation)).
+- **Metadata privacy from RPC providers** — without self-hosting or future private retrieval techniques, query patterns are visible to your RPC provider (see [Metadata Privacy](./concepts/security/metadata-privacy.md)).
+- **Active quantum post-compromise security** — an adversary with both a quantum computer *and* device access can track keys through classical DH ratchet steps (see [Cryptographic Guarantees](./concepts/security/cryptographic-guarantees.md#against-quantum-adversary)).
+- **Spam filtering** — Ethereum's gas model provides economic resistance, but the protocol does not filter content.
 
-## Protocol Stack
+## Protocol stack
 
 ```
 ┌─────────────────────────────────────┐
 │           Application               │
+│    (UI, storage, notifications)     │
 ├─────────────────────────────────────┤
 │         VerbethClient               │
 │   (sessions, encryption, keys)      │
@@ -85,33 +72,30 @@ Verbeth works with EOAs but is optimized for Safe accounts:
 │          @verbeth/sdk               │
 │  (ratchet, handshake, identity)     │
 ├─────────────────────────────────────┤
-│       VerbethV1 Contract           │
-│  (Handshake, HandshakeResponse,     │
-│   MessageSent events)               │
+│       VerbethV1 Contract            │
+│    (on-chain event emission)        │
 ├─────────────────────────────────────┤
 │           Ethereum                  │
 │      (event logs, finality)         │
 └─────────────────────────────────────┘
 ```
 
-## On-Chain Data Model
+**Application** — your client. Manages UI, message display, and local persistence via `SessionStore` / `PendingStore`.
 
-The Verbeth contract emits three event types:
+**VerbethClient** — the high-level SDK entry point. Orchestrates handshakes, encrypts and decrypts messages, manages ratchet state. Works with EOAs directly and supports [Safe accounts](https://safe.global) for session keys, gas sponsorship, and multi-sig recovery via `SafeSessionSigner`.
 
-| Event | Purpose | Indexed Fields |
-|-------|---------|----------------|
-| `Handshake` | Initiate key exchange | `recipientHash`, `sender` |
-| `HandshakeResponse` | Accept key exchange | `inResponseTo` |
-| `MessageSent` | Encrypted message | `sender`, `topic` |
+**@verbeth/sdk** — core cryptographic modules: [identity binding](./concepts/identity.md), [hybrid handshake](./concepts/handshake.md) (X25519 + ML-KEM-768), and the [Double Ratchet](./concepts/ratchet/double-ratchet.md) with [topic ratcheting](./concepts/ratchet/topic-ratcheting.md).
 
-Topics are derived from shared secrets. Only participants know which topics belong to their conversation.
+**VerbethV1 Contract** — a single immutable contract on Base that emits `Handshake`, `HandshakeResponse`, and `MessageSent` events. Nothing more.
 
-## Message Flow
+**Ethereum** — the transport and persistence layer. Event logs are immutable, globally available, and censorship-resistant.
 
-1. **Alice initiates**: Emits `Handshake` with her ephemeral keys and identity proof
-2. **Bob responds**: Emits `HandshakeResponse` with his keys, encrypted to Alice
-3. **Both derive topics**: Shared secrets produce topic hashes for the conversation
-4. **Messages flow**: Each party emits `MessageSent` to their outbound topic
-5. **Topics evolve**: Double Ratchet advances topics for forward secrecy
+## When to use Verbeth
 
-See [Handshake](./concepts/handshake.md) and [Ratchet](./concepts/ratchet/double-ratchet.md) for protocol details.
+**When non-repudiation matters**: audit trails, regulated workflows, legal agreements, on-chain governance, or any context where *who said what, and when* must be publicly and permanently verifiable — and where that is a feature, not a liability.
+
+**When you need messaging without trust assumptions**: coordination between DAOs, cross-org communication, whistleblowing channels where the medium itself must be beyond any party's control.
+
+**When durability matters more than ephemerality**: Verbeth messages cannot be deleted. For contexts where the permanent record is the point — compliance, dispute resolution, public accountability — this is by design. For contexts that need deniability, look elsewhere (Signal, for instance).
+
+For protocol details, see the [Handshake](./concepts/handshake.md) and [Double Ratchet](./concepts/ratchet/double-ratchet.md) concepts, or the [Protocol Flow](./how-it-works/protocol-flow.md) for the full on-chain sequence.
