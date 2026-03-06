@@ -69,7 +69,7 @@ Properties:
 
 ### Unified Key Format
 
-Public keys are encoded as a 65-byte blob for on-chain use:
+Public keys are encoded as a 65-byte blob:
 
 ```
 Byte 0       Bytes 1-32        Bytes 33-64
@@ -102,8 +102,8 @@ RpId: my-app
 | `PkEd25519` | Ed25519 public key (signing) |
 | `PkX25519` | X25519 public key (encryption) |
 | `ExecutorAddress` | Address that sends transactions (Safe or EOA) |
-| `ChainId` | Chain ID (to prevent cross-chain replay) |
-| `RpId` | Application identifier (optional, prevents cross-app replay) |
+| `ChainId` | Scopes the proof to a specific chain (prevents cross-chain proof replay) |
+| `RpId` | Scopes the proof to a specific app (prevents cross-app proof replay) |
 
 ### What It Proves
 
@@ -125,7 +125,7 @@ Ethereum Address
 Anyone who receives a handshake can verify:
 1. The wallet owner authorized these specific public keys
 2. The keys are bound to a specific chain and executor
-3. The proof hasn't been replayed from another chain or app
+3. The proof wasn't issued for a different chain or app (cross-context proof replay)
 
 ### Verification
 

@@ -57,6 +57,10 @@ Each ratchet session tracks:
 
 **Session state must be persisted after every encrypt/decrypt operation.** Rolling back to stale state creates duplicate message keys and breaks security guarantees. See [Ratchet Internals](../../how-it-works/ratchet-internals.md) for the full TypeScript interface.
 
+### Duplicate message replay
+
+Message keys are single-use. When a message is successfully decrypted, its key is immediately deleted from the skipped-keys store, or the receiving chain advances past it. If an attacker re-broadcasts the same ciphertext, no matching key exists and decryption fails. This guarantee depends on persisting session state after every decrypt.
+
 ## Out-of-order messages
 
 Blockchain delivery doesn't guarantee order. When message N arrives but we expected message M (where M < N), the ratchet pre-derives and stores the skipped keys for messages M through N-1.

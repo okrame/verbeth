@@ -25,7 +25,7 @@ Defense-in-depth against an uncertain cryptographic future:
 
 So, security holds as long as either primitive remains secure.
 
-This is especially important for "Harvest Now, Decrypt Later" attacks, i.e. adversaries who record encrypted blockchain traffic today, hoping to decrypt it with future quantum computers. Because Verbeth's [root key](./ratchet/double-ratchet.md)  depends on ML-KEM, even a future quantum adversary cannot recover past session keys. For a detailed security analysis, see [Security Model](./security.md#handshake-response-unlinkability).
+This is especially important for "Harvest Now, Decrypt Later" attacks, i.e. adversaries who record encrypted blockchain traffic today, hoping to decrypt it with future quantum computers. Because Verbeth's [root key](./ratchet/double-ratchet.md)  depends on ML-KEM, even a future quantum adversary cannot recover past session keys. For a detailed security analysis, see [Metadata Privacy](./security/metadata-privacy.md#handshake-response-unlinkability).
 
 ### Other PQ-secure handshake protocols
 
@@ -39,7 +39,7 @@ This is especially important for "Harvest Now, Decrypt Later" attacks, i.e. adve
 | **Post-quantum** | Yes (hybrid, mandatory) | Yes (hybrid, mandatory) | Yes (hybrid, optional) |
 | **Forward secrecy** | Unconditional<sup>2</sup> | Conditional on IK + SPK security | Conditional on leaf node security |
 
-For a deeper analysis of how PQ security propagates through each protocol's key schedule, see [Post-Quantum Comparison](./security.md#post-quantum-comparison-verbeth-vs-signal-vs-xmtp). For the full security comparison (forward secrecy, post-compromise security, metadata privacy), see [Security Model](./security.md).
+For a deeper analysis of forward secrecy, post-compromise security, and post-quantum guarantees, see [Cryptographic Guarantees](./security/cryptographic-guarantees.md). For metadata analysis, see [Metadata Privacy](./security/metadata-privacy.md).
 
 ---
 

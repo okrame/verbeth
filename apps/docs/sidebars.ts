@@ -22,7 +22,17 @@ const sidebars: SidebarsConfig = {
             'concepts/ratchet/topic-ratcheting',
           ],
         },
-        'concepts/security',
+        {
+          type: 'category',
+          label: 'Security',
+          collapsed: false,
+          collapsible: true,
+          items: [
+            'concepts/security/threat-model',
+            'concepts/security/cryptographic-guarantees',
+            'concepts/security/metadata-privacy',
+          ],
+        },
       ],
     },
     {
@@ -34,6 +44,15 @@ const sidebars: SidebarsConfig = {
         'how-it-works/wire-format',
         'how-it-works/protocol-flow',
         'how-it-works/ratchet-internals',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Roadmap',
+      collapsed: false,
+      collapsible: true,
+      items: [
+        'roadmap/metadata-privacy-psi',
       ],
     },
   ],

@@ -60,7 +60,7 @@ function computeHybridTag(
 }
 ```
 
-Observers cannot link `HandshakeResponse` to its `Handshake` without the shared secrets. See [Security Model](../concepts/security.md#handshake-response-unlinkability) for detailed analysis against classical and quantum adversaries.
+Observers cannot link `HandshakeResponse` to its `Handshake` without the shared secrets. See [Metadata Privacy](../concepts/security/metadata-privacy.md#handshake-response-unlinkability) for detailed analysis against classical and quantum adversaries.
 
 ## Root Key Derivation
 

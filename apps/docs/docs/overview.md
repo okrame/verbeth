@@ -4,9 +4,22 @@ slug: /
 title: Overview
 ---
 
-# What is Verbeth
+# Verbeth, what is it?
 
 Verbeth is an end-to-end encrypted messaging protocol that uses Ethereum as its sole transport layer.
+
+**When non-repudiation matters**: audit trails, regulated workflows, legal agreements, on-chain governance, or any context where "who said what, and when" must be publicly and permanently checkable — and where that is a feature, not a liability. see threat model.md#non-repudiation
+
+
+---
+
+### Things that Verbeth does NOT cover
+
+- **Deniability**: on-chain transactions are permanent and attributable; there is no way to deny having sent a message
+- **Metadata privacy from RPC providers**: without self-hosting or future private retrieval techniques, several query pattern are likely visible (see [Metadata Privacy](./concepts/security/metadata-privacy.md))
+- **Active quantum post-compromise security**; an adversary with both a quantum computer and device access can track keys through classical DH ratchet steps (see [Cryptographic Guarantees](./concepts/security/cryptographic-guarantees.md#against-quantum-adversary))
+- **Spam filtering**: Ethereum's gas model provides economic resistance, but the protocol does not filter content
+
 
 ## Blockchain as Transport
 
@@ -49,7 +62,7 @@ Wallet Signature
 └─────────────────────────────────────┘
 ```
 
-A binding proof cryptographically ties these derived keys to your Ethereum address. This proof is verified on-chain or via ERC-1271/ERC-6492 for smart accounts.
+A binding proof cryptographically ties these derived keys to your Ethereum address. This proof is verified or via ERC-1271/ERC-6492 for smart accounts.
 
 ## Why Safe Accounts?
 

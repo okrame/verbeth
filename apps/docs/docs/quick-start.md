@@ -1,10 +1,10 @@
 ---
 sidebar_position: 1
 slug: /quick-start
-title: Quick Start
+title: Quickstart
 ---
 
-# Quick Start
+# Quickstart
 
 Get end-to-end encrypted messaging working in your dApp.
 
@@ -32,9 +32,10 @@ const signer = await provider.getSigner();
 const address = await signer.getAddress();
 
 // 2. Derive identity keys (requires 2 wallet signatures)
-const { identityKeyPair, identityProof } = await deriveIdentityKeyPairWithProof(
+const { keyPair, identityProof } = await deriveIdentityKeyPairWithProof(
   signer,
-  address
+  address,
+  executorAddress // this could either match the EOA address or not
 );
 
 // 3. Create executor for contract interactions
@@ -45,7 +46,7 @@ const executor = ExecutorFactory.createEOA(contract);
 const client = createVerbethClient({
   address,
   signer,
-  identityKeyPair,
+  keyPair,
   identityProof,
   executor,
   sessionStore, 
@@ -76,7 +77,7 @@ const { tx, ephemeralKeyPair, kemKeyPair } = await client.sendHandshake(
 );
 await tx.wait();
 
-// Store both secrets — needed to create the session when a response arrives
+// These secrets are needed to create the session when a response arrives
 await pendingContactStore.save({
   contactAddress: recipientAddress,
   ephemeralSecret: ephemeralKeyPair.secretKey,
@@ -86,7 +87,10 @@ await pendingContactStore.save({
 
 ### Respond to a handshake request
 
-When a `Handshake` event arrives on-chain, respond to establish the encrypted channel.
+When a `Handshake` event arrives on-chain, verify the sender's identity proof before responding.
+
+>**Note:** Always call `verifyHandshakeIdentity(handshakeEvent, provider)` before accepting. This checks that the sender's keys are cryptographically bound to their EVM address.   
+To see why go read the [Identity](./concepts/identity#why-not-just-use-the-transaction-signature) section.
 
 ```typescript
 // this public key is a Uint8Array from the on-chain handshake event
@@ -111,6 +115,8 @@ After the handshake exchange, both parties independently derive their local sess
 
 Call this when a `HandshakeResponse` event arrives on-chain matching your earlier handshake.
 
+>**Note:** Before creating the session, call `verifyAndExtractHandshakeResponseKeys(hsrEvent, storedEphemeralSecret, storedKemSecret, provider)` to verify the responder's identity and the hybrid tag.
+
 ```typescript
 // storedEphemeralSecret and storedKemSecret were saved after sendHandshake
 const session = client.createInitiatorSessionFromHsr({
@@ -131,8 +137,6 @@ await sessionStore.save(session);
 
 Call this right after `acceptHandshake` completes, using the values it returned alongside data from the original `Handshake` event.
 
->Note this means that the responder can have a session and start sending e2ee messages immediately, unlike the initiator that must wait for their response. 
-
 ```typescript
 const session = client.createResponderSession({
   contactAddress: handshakeEvent.sender,
@@ -145,6 +149,8 @@ const session = client.createResponderSession({
 
 await sessionStore.save(session);
 ```
+
+This means that the responder can have a session and start sending e2ee messages immediately, unlike the initiator that must wait for their response. 
 
 ## Use a session
 
@@ -163,6 +169,8 @@ const result = await client.sendMessage(
 
 console.log('Sent:', result.txHash);
 ```
+
+>`sendMessage()` encrypts and burns a ratchet slot immediately. After on-chain confirmation, call `client.confirmTx(result.txHash)` to finalise the pending record. If the transaction fails, the slot is lost but the session remains consistent.
 
 ### Decrypt incoming messages
 
@@ -200,7 +208,7 @@ const provider = new ethers.BrowserProvider(window.ethereum);
 const signer = await provider.getSigner();
 const address = await signer.getAddress();
 
-const { identityKeyPair, identityProof } = await deriveIdentityKeyPairWithProof(signer, address);
+const { keyPair, identityProof } = await deriveIdentityKeyPairWithProof(signer, address, address);
 
 const contract = new ethers.Contract(getVerbethAddress(), VERBETH_ABI, signer);
 const executor = ExecutorFactory.createEOA(contract);
@@ -208,7 +216,7 @@ const executor = ExecutorFactory.createEOA(contract);
 const client = createVerbethClient({
   address,
   signer,
-  identityKeyPair,
+  keyPair,
   identityProof,
   executor,
   sessionStore,  // your SessionStore implementation
