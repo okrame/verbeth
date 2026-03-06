@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Contract, Signer } from "ethers";
+import { BaseContract, Contract, Signer } from "ethers";
 import nacl from "tweetnacl";
 import {
   ExecutorFactory,
@@ -9,7 +9,6 @@ import {
   initiateHandshake,
   respondToHandshake,
 } from "../src/index.js";
-import type { VerbethV1 } from "@verbeth/contracts/typechain-types";
 import { IdentityKeyPair } from "../src/types.js";
 import { kem } from "../src/pq/kem.js";
 import { createMockIdentityProof } from "./helpers.js";
@@ -26,7 +25,7 @@ const fakeContract = {
   sendMessage: mockSendMessage,
   initiateHandshake: mockInitiateHandshake,
   respondToHandshake: mockRespondToHandshake,
-} as unknown as VerbethV1;
+} as unknown as BaseContract;
 
 const mockBundler = {
   sendUserOperation: vi.fn().mockResolvedValue("0x123"),

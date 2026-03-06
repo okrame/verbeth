@@ -5,165 +5,159 @@ title: Identity
 
 # Identity
 
-Verbeth binds cryptographic messaging keys to Ethereum addresses through deterministic derivation and signed proofs.
+In decentralized systems, identity is not as straightforward as it may seem. On blockchains, users are represented by addresses, but messaging protocols rely on encryption and signing keys that may exist indipendently.  
+
+Verbeth binds cryptographic messaging keys to Ethereum addresses. A single wallet signature produces all keys, and a signed proof ties them to your address.
+
+There are two distinct signing mechanisms in Verbeth:
+
+| | Identity Proof | Message Signature |
+|---|---|---|
+| **Algorithm** | ECDSA (wallet) | Ed25519 (derived key) |
+| **When** | Once, during setup | Every message |
+| **Purpose** | Prove key ownership | Authenticate messages |
+| **Verifier** | Anyone (on-chain compatible) | Conversation partner |
+
+## Why Not Just Use the Transaction Signature?
+
+Every EVM transaction is already signed. Couldn't that be enough? Not really, because the tx signature only proves that *some address* sent data to the contract. It says nothing about the encryption keys inside the payload. In fact, an attacker could submit a handshake containing someone else's public keys and the victim's messages would be readable by the attacker.
+
+The **identity proof** is a wallet signature that says "I own these specific encryption and signing keys." so that recipients can check it before trusting any keys.
+
+The **Ed25519 message signature** solves a different problem. Once a channel is established, messages flow through ratchet topics. Without per-message signatures, anyone who discovers a topic hash could inject fake messages. The Ed25519 signature on every message lets the recipient verify it actually came from the person they handshaked with, without needing the blockchain to confirm anything.
 
 ## Key Derivation
 
-A single wallet signature produces all identity keys:
+A single wallet signature seeds the entire key hierarchy:
 
 ```
-┌──────────────────────────────────────────────┐
-│  Seed Message:                               │
-│    "VerbEth Identity Seed v1"                │
-│    "Address: 0x..."                          │
-│    "Context: verbeth"                        │
-└──────────────────────────────────────────────┘
-                    ↓
-              Wallet Signature
-                    ↓
-┌──────────────────────────────────────────────┐
-│  IKM = HKDF(                                 │
-│    canonicalize(sig) || H(message) ||        │
-│    "verbeth/addr:" || address                │
-│  )                                           │
-└──────────────────────────────────────────────┘
-                    ↓
-          ┌────────┴────────┐────────┐
-          ↓                 ↓        ↓
-     X25519 key       Ed25519 key   secp256k1
-    (encryption)       (signing)   session key
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Seed message: "Verbeth Identity Seed v1 / Address: 0x... / Context: ... │
+└─────────────────────────────────┬────────────────────────────────────────┘
+                                  │
+                            Wallet signs
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  IKM = HKDF-SHA256(                                                      │
+│    input: canonicalize(sig) ‖ SHA256(message) ‖ "verbeth/addr:" ‖ addr   │
+│    salt:  "verbeth/seed-sig-v1"                                          │
+│    info:  "verbeth/ikm"                                                  │
+│  )                                                                       │
+└─────────────────────────────────┬────────────────────────────────────────┘
+                                  │
+                ┌─────────────────┼─────────────────┐
+                │                 │                 │
+                ▼                 ▼                 ▼
+        ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐
+        │   X25519     │  │   Ed25519    │  │   secp256k1      │
+        │  encryption  │  │   signing    │  │  session key *   │
+        │              │  │              │  │                  │
+        │ "verbeth-    │  │ "verbeth-    │  │ "verbeth-session-│
+        │  x25519-v1"  │  │  ed25519-v1" │  │  secp256k1-v1"   │
+        └──────────────┘  └──────────────┘  └──────────────────┘
+
+ * The session key is always derived but only used by apps that delegate
+   transactions to a Safe module (e.g. gasless messaging).
 ```
 
-The derivation is:
+Properties:
+- **Deterministic**: same signature always produces the same keys
+- **Reproducible**: user can regenerate keys by re-signing
+- **Isolated**: different addresses produce unrelated keys
+- **Memory-safe**: all intermediate material is wiped after derivation
 
-1. **Deterministic**: Same signature always produces same keys
-2. **Reproducible**: User can regenerate keys by re-signing
-3. **Isolated**: Different addresses produce unrelated keys
+### Unified Key Format
 
-### HKDF Chain
+Public keys are encoded as a 65-byte blob:
 
-```typescript
-// Intermediate Key Material
-const ikm = hkdf(sha256,
-  concat([canonicalSig, sha256(seedMessage), "verbeth/addr:" + address]),
-  "verbeth/seed-sig-v1",
-  "verbeth/ikm",
-  32
-);
-
-// Derive individual keys
-const x25519_sk = hkdf(sha256, ikm, "", "verbeth-x25519-v1", 32);
-const ed25519_seed = hkdf(sha256, ikm, "", "verbeth-ed25519-v1", 32);
-const session_sk = hkdf(sha256, ikm, "", "verbeth-session-secp256k1-v1", 32);
+```
+Byte 0       Bytes 1-32        Bytes 33-64
+┌──────┬──────────────────┬──────────────────┐
+│ 0x01 │  X25519 (32)     │  Ed25519 (32)    │
+└──────┴──────────────────┴──────────────────┘
 ```
 
-## Binding Proofs
+This format is used in handshake events so that recipients can extract both keys from a single field.
 
-A binding proof cryptographically ties derived keys to an Ethereum address:
+## Identity Proof
+
+The identity proof is an ECDSA signature that binds your derived keys to your Ethereum address. It's created once and included in every handshake you send.
+
+### Binding Message
 
 ```
 VerbEth Key Binding v1
 Address: 0xabc...
 PkEd25519: 0x123...
 PkX25519: 0x456...
-ExecutorAddres: 0xdef...
+ExecutorAddress: 0xdef...
 ChainId: 8453
+RpId: my-app
 ```
-
-This message is signed by the wallet, creating proof that:
-
-1. The signer controls the Ethereum address
-2. The signer authorizes these specific public keys
-3. The proof is bound to a specific chain and executor
-
-### Message Structure
 
 | Field | Purpose |
 |-------|---------|
-| `Address` | Signer's Ethereum address |
-| `PkEd25519` | Ed25519 signing public key |
-| `PkX25519` | X25519 encryption public key |
-| `ExecutorAddres` | Safe address that will send transactions |
-| `ChainId` | Chain ID for replay protection |
+| `Address` | Signer's EVM address (EOA) |
+| `PkEd25519` | Ed25519 public key (signing) |
+| `PkX25519` | X25519 public key (encryption) |
+| `ExecutorAddress` | Address that sends transactions (Safe or EOA) |
+| `ChainId` | Scopes the proof to a specific chain (prevents cross-chain proof replay) |
+| `RpId` | Scopes the proof to a specific app (prevents cross-app proof replay) |
 
-## Verification Standards
+### What It Proves
 
-Verbeth supports three verification methods:
-
-### EOA (Externally Owned Account)
-
-Standard `ecrecover` verifies the signature against the address.
-
-### ERC-1271 (Deployed Smart Accounts)
-
-For deployed Safe accounts or other smart wallets:
-
-```solidity
-function isValidSignature(bytes32 hash, bytes signature)
-  external view returns (bytes4);
-```
-
-The contract returns `0x1626ba7e` if the signature is valid.
-
-### ERC-6492 (Counterfactual Accounts)
-
-For Safe accounts that haven't been deployed yet:
+The identity proof establishes this chain of trust:
 
 ```
-signature = abi.encodePacked(
-  factory,
-  factoryCalldata,
-  originalSignature
-)
+Ethereum Address
+       │
+  ECDSA signature of binding message
+       │
+  "I control 0xabc... and I authorize
+   these X25519/Ed25519 keys"
+       │
+  ┌────┴─────┐
+  X25519     Ed25519
+  (encrypt)  (sign)
 ```
 
-Verification simulates deployment, then calls ERC-1271.
+Anyone who receives a handshake can verify:
+1. The wallet owner authorized these specific public keys
+2. The keys are bound to a specific chain and executor
+3. The proof wasn't issued for a different chain or app (cross-context proof replay)
 
-## Safe Account Integration
+### Verification
 
-When using a Safe account, the binding proof includes `ExecutorAddres`:
+Since the identity proof is just a standard signed message, Verbeth can verify it against many types of EVM account: plain EOAs via `ecrecover`, deployed smart accounts via ERC-1271, and even counterfactual accounts via ERC-6492.
 
-```typescript
-const { keyPair, sessionPrivateKey, sessionAddress } =
-  await deriveIdentityKeys(signer, address);
+## Message Signatures (Ed25519)
 
-const identityProof = await createBindingProof(
-  signer,
-  address,
-  derivedKeys,
-  safeAddress  // ExecutorAddres field
-);
-```
+After the handshake, every ratchet message carries an Ed25519 *detached* signature. This is separate from the identity proof and it uses the Ed25519 key that was authorized during identity setup.
 
-The derived `sessionPrivateKey` creates an Ethereum wallet that can be authorized by the Safe's session module. This enables:
 
-- Sending messages without repeated wallet signatures
-- Gasless transactions via paymaster
-- Programmatic messaging from backend services
+### What Gets Signed
 
-## Verification Flow
-
-When receiving a handshake or message:
+Each message signature covers the header + ciphertext as a single blob:
 
 ```
-1. Parse binding message
-2. Extract claimed address and public keys
-3. Verify signature:
-   - EOA: ecrecover
-   - Smart Account: ERC-1271
-   - Counterfactual: ERC-6492
-4. Compare extracted keys against message/handshake keys
-5. Validate ExecutorAddres matches msg.sender
-6. Check ChainId matches current chain
+Signed data = header (40 bytes) ‖ ciphertext (variable)
+
+Header layout:
+┌──────────────────┬──────────┬──────────┐
+│ DH ratchet key   │    pn    │    n     │
+│    (32 bytes)    │ (4B, BE) │ (4B, BE) │
+└──────────────────┴──────────┴──────────┘
+
+signature = Ed25519.sign_detached(header ‖ ciphertext, ed25519_secret_key)
+→ 64 bytes, detached
 ```
 
-If any step fails, the message is rejected.
+- **DH ratchet key**: the sender's current ratchet public key
+- **pn**: message count in the previous sending epoch
+- **n**: message number in the current epoch
+- **ciphertext**: nonce (24 bytes) + XSalsa20-Poly1305 output
 
-## Security Properties
+The recipient independently reconstructs the signed blob from the header and ciphertext, then verifies.
 
-| Property | Guarantee |
-|----------|-----------|
-| **Key binding** | Keys are provably controlled by address owner |
-| **Replay protection** | ChainId prevents cross-chain replay |
-| **Executor binding** | ExecutorAddres prevents unauthorized senders |
-| **Determinism** | Same inputs produce same keys (recovery) |
+See [Wire Format](../how-it-works/wire-format.md) for the full binary layout and verification order.

@@ -14,7 +14,18 @@ import {
   UserOpV07,
   PackedUserOperation,
 } from "./types.js";
-import type { VerbethV1 } from "@verbeth/contracts/typechain-types";
+
+/**
+ * this abi can be imported alongside `getVerbethAddress()` to create an ethers Contract instance.
+ */
+export const VERBETH_ABI = [
+  "function sendMessage(bytes calldata ciphertext, bytes32 topic, uint256 timestamp, uint256 nonce)",
+  "function initiateHandshake(bytes32 recipientHash, bytes pubKeys, bytes ephemeralPubKey, bytes plaintextPayload)",
+  "function respondToHandshake(bytes32 inResponseTo, bytes32 responderEphemeralR, bytes ciphertext)",
+  "event MessageSent(address indexed sender, bytes32 indexed topic, bytes payload)",
+  "event Handshake(bytes32 indexed recipientHash, address indexed sender, bytes pubKeys, bytes ephemeralPubKey, bytes plaintextPayload)",
+  "event HandshakeResponse(bytes32 indexed inResponseTo, address indexed sender, bytes32 responderEphemeralR, bytes ciphertext)",
+] as const;
 
 function pack128x128(high: bigint, low: bigint): bigint {
   return (high << 128n) | (low & ((1n << 128n) - 1n));
@@ -73,7 +84,7 @@ export interface IExecutor {
 
 // EOA Executor - Direct contract calls via wallet signer
 export class EOAExecutor implements IExecutor {
-  constructor(private contract: VerbethV1) {}
+  constructor(private contract: BaseContract) {}
 
   async sendMessage(
     ciphertext: Uint8Array,
@@ -81,7 +92,7 @@ export class EOAExecutor implements IExecutor {
     timestamp: number,
     nonce: bigint
   ): Promise<any> {
-    return this.contract.sendMessage(ciphertext, topic, timestamp, nonce);
+    return (this.contract as any).sendMessage(ciphertext, topic, timestamp, nonce);
   }
 
   async initiateHandshake(
@@ -90,7 +101,7 @@ export class EOAExecutor implements IExecutor {
     ephemeralPubKey: string,
     plaintextPayload: Uint8Array
   ): Promise<any> {
-    return this.contract.initiateHandshake(
+    return (this.contract as any).initiateHandshake(
       recipientHash,
       pubKeys,
       ephemeralPubKey,
@@ -103,7 +114,7 @@ export class EOAExecutor implements IExecutor {
     responderEphemeralR: string,
     ciphertext: Uint8Array
   ): Promise<any> {
-    return this.contract.respondToHandshake(inResponseTo, responderEphemeralR, ciphertext);
+    return (this.contract as any).respondToHandshake(inResponseTo, responderEphemeralR, ciphertext);
   }
 }
 
@@ -509,7 +520,7 @@ export class DirectEntryPointExecutor implements IExecutor {
 }
 
 export class ExecutorFactory {
-  static createEOA(contract: VerbethV1): IExecutor {
+  static createEOA(contract: BaseContract): IExecutor {
     return new EOAExecutor(contract);
   }
 
@@ -563,7 +574,7 @@ export class ExecutorFactory {
   // Auto-detect executor based on environment and signer type
   static async createAuto(
     signerOrAccount: any,
-    contract: VerbethV1,
+    contract: BaseContract,
     options?: {
       entryPointAddress?: string;
       entryPointContract?: Contract | BaseContract;
