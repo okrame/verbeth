@@ -60,7 +60,7 @@ For Verbeth the attribution is intentionally part of the shared public record, v
 
 ### Hidden delegation
 
-A planned extension (see [Roadmap](../../roadmap/contact-kem.md)) introduces will make the on-chain sender a relay, while the true principal's identity proof lives inside the encrypted envelope, visible only to the recipient. In short, the chain proves the relay submitted the transaction, but not who is really behind it.
+A planned extension introduces will make the on-chain sender a relay, while the true principal's identity proof lives inside the encrypted envelope, visible only to the recipient. In short, the chain proves the relay submitted the transaction, but not who is really behind it.
 
 In this case non-repudiation becomes **disclosure-dependent**: the recipient can establish true authorship by disclosing the hidden proof, while the principal can do so by disclosing the signed proof they created, and the relay can do so only if it was given that proof rather than acting as a blind broadcaster.
 
