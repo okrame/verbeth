@@ -42,8 +42,10 @@ For the cryptographic mechanisms see more in [Cryptographic Guarantees](./crypto
 ## Non-Repudiation
 
 [Non-repudiation](https://en.wikipedia.org/wiki/Non-repudiation) is the property that provides protection against an entity falsely denying having performed a particular action, such as sending a message or creating data.
-Verbeth provides it by design since every message is an on-chain tx publicly attributable to the account that authorized it (whether an EOA or a contract such as a Safe), verified by every node, and stored immutably. So, a sender cannot later deny having sent a message.
 
+### Direct sending (current protocol)
+
+Verbeth provides non-repudiation by design since every message is an on-chain tx publicly attributable to the account that authorized it (whether an EOA or a contract such as a Safe), verified by every node, and stored immutably. So, a sender cannot later deny having sent a message. Even when the on-chain `msg.sender` differs from the user's primary address (e.g. an ERC-4337 bundler or a Safe's `execTransaction`) there is always a traceable on-chain link back to the authorizing key, such as the UserOperation signature or a Safe owner signatures in calldata. 
 
 |  | Verbeth | Signal | XMTP |
 |---|---|---|---|
@@ -54,4 +56,26 @@ Verbeth provides it by design since every message is an on-chain tx publicly att
 
 Historically, Signal comes from the lineage of activists, journalists, and the principle that a saved chat log should never become a cryptographic affidavit. It achieves this through deniable authentication in that messages are verified with symmetric MAC keys that both parties share, so either side could plausibly have forged any message. Differently, in XMTP attribution is verifiable for participants, and technically for third parties too, if someone discloses the transcript along with the relevant public keys.
 
-For Verbeth the attribution is intentionally part of the shared public record, verifiable by anyone, indefinitely. Importantly, though, only the *fact* that a message was sent (and by whom) is public while the message content remains private unless one of the participants chooses to disclose it.  
+For Verbeth the attribution is intentionally part of the shared public record, verifiable by anyone, indefinitely. Importantly, though, only the *fact* that a message was sent (and by whom) is public while the message content remains private unless one of the participants chooses to disclose it.
+
+### Hidden delegation
+
+A planned extension (see [Roadmap](../../roadmap/contact-kem.md)) introduces will make the on-chain sender a relay, while the true principal's identity proof lives inside the encrypted envelope, visible only to the recipient. In short, the chain proves the relay submitted the transaction, but not who is really behind it.
+
+In this case non-repudiation becomes **disclosure-dependent**: the recipient can establish true authorship by disclosing the hidden proof, while the principal can do so by disclosing the signed proof they created, and the relay can do so only if it was given that proof rather than acting as a blind broadcaster.
+
+
+> **E.g.** Carl wants to contact Bob privately. He generates the handshake secrets and has Alice broadcast them. On-chain, only Alice appears. Bob decrypts the envelope, finds Carl's identity proof, and knows the session is with Carl. If accountability is needed later, any party can disclose the proof: Bob (who holds it), Carl (who signed it), or Alice (if Carl shared it with her).
+
+The disclosed proof is immediately verifiable by anyone and the relay transaction remains immutably on-chain with a timestamp. This makes Verbeth's disclosure-dependent non-repudiation stronger than XMTP's: in XMTP, messages are stored off-chain on network nodes and signed with MLS installation keys. Proving authorship to a third party requires exporting MLS-internal signatures and walking an indirect trust chain (installation key → inbox ID → wallet).
+
+Once disclosed, the proof is straightforward for a third party to verify, because the relay transaction is anchored on-chain, and the principal's authorship is shown by a wallet signature bound to that relay context:
+
+```
+Public non-repudiation (Verbeth, direct sending)
+  → Disclosure-dependent, disclosed-signature proof (Verbeth, hidden delegation)
+    → Disclosure-dependent, transcript-export proof (XMTP)
+      → Intentional deniability (Signal)
+```
+
+So applications that need sender privacy can opt into hidden delegation, accepting that accountability requires active disclosure rather than being freely readable from the public ledger.  
