@@ -96,6 +96,6 @@ Vitalik's case for [full-stack openness](https://vitalik.eth.limo/general/2025/0
 
 **When you need messaging without trust assumptions**: coordination between DAOs, cross-org communication, whistleblowing channels where the medium itself must be beyond any party's control.
 
-**When durability matters more than ephemerality**: Verbeth messages cannot be deleted. For contexts where the permanent record is the point — compliance, dispute resolution, public accountability — this is by design. For contexts that need deniability, look elsewhere (Signal, for instance).
+**When durability matters more than ephemerality**: Verbeth messages cannot be deleted. 
 
 For protocol details, see the [Handshake](./concepts/handshake.md) and [Double Ratchet](./concepts/ratchet/double-ratchet.md) concepts, or the [Protocol Flow](./how-it-works/protocol-flow.md) for the full on-chain sequence.
