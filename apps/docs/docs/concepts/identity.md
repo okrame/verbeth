@@ -48,13 +48,18 @@ A single wallet signature seeds the entire key hierarchy:
                 ▼                 ▼                 ▼
         ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐
         │   X25519     │  │   Ed25519    │  │   secp256k1      │
-        │  encryption  │  │   signing    │  │  session key *   │
+        │  encryption *│  │   signing    │  │  session key **  │
         │              │  │              │  │                  │
         │ "verbeth-    │  │ "verbeth-    │  │ "verbeth-session-│
         │  x25519-v1"  │  │  ed25519-v1" │  │  secp256k1-v1"   │
         └──────────────┘  └──────────────┘  └──────────────────┘
 
- * The session key is always derived but only used by apps that delegate
+ *  The X25519 identity key is a stable, long-term public key bound to the EOA.
+    The double ratchet uses ephemeral keys for forward secrecy, 
+    but this key serves as part of the published identity (like a prekey) 
+    for initial key agreement, session reset re-encryption, and any protocol 
+    extension needing an address-bound X25519 key.
+ ** The session key is always derived but only used by apps that delegate
    transactions to a Safe module (e.g. gasless messaging).
 ```
 
@@ -122,7 +127,7 @@ Ethereum Address
 Anyone who receives a handshake can verify:
 1. The wallet owner authorized these specific public keys
 2. The keys are bound to a specific chain and executor
-3. The proof wasn't issued for a different chain or app (cross-context proof replay)
+3. The proof wasn't issued for a different chain or app
 
 ### Verification
 

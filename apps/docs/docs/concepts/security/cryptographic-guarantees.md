@@ -24,11 +24,13 @@ This is when after a state compromise, security is eventually restored without m
 We achieve full PCS. When the next DH ratchet step occurs, both parties contribute fresh randomness to a new Diffie-Hellman exchange. The resulting shared secret is unknown to the attacker who only has the old state, so all subsequent keys are secure:
 
 ```
-Compromise here
-      |
-[msg 1] [msg 2] [msg 3] [DH ratchet] [msg 4] [msg 5]
-  x       x       x         |          ok      ok
-                             '-- Security restored
+Compromise at epoch i
+        |
+[RK_i known] [msg_i] [msg_{i+1}] [ next DH ratchet: dh_{i+1} ] [future messages]
+     x          x         x                 unknown to attacker       ok
+                                              |
+                                              '-- cannot compute RK_{i+1}
+                                                  security restored
 ```
 
 The attacker can read messages until the next DH exchange. After that, they are locked out. The speed of recovery depends on how quickly both parties send messages (each direction change triggers a DH ratchet).
