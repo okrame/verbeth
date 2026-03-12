@@ -1,67 +1,44 @@
 // tests/e2e.test.ts
-// This file contains end-to-end integration tests for handshaking and messaging
+// End-to-end integration tests using VerbethClient high-level API
 import { expect, describe, it, beforeAll, afterAll, beforeEach } from "vitest";
 import {
   JsonRpcProvider,
   Wallet,
   Contract,
   parseEther,
-  keccak256,
-  toUtf8Bytes,
 } from "ethers";
-import nacl from "tweetnacl";
-import { hkdf } from "@noble/hashes/hkdf";
-import { sha256 } from "@noble/hashes/sha2";
 import {
   ExecutorFactory,
-  initiateHandshake,
-  respondToHandshake,
   DirectEntryPointExecutor,
   EOAExecutor,
-  verifyHandshakeIdentity,
-  verifyHandshakeResponseIdentity,
-  sendEncryptedMessage,
-  decryptMessage,
   deriveIdentityKeyPairWithProof,
+  decryptAndExtractHandshakeKeys,
+  type VerbethClient,
 } from "../packages/sdk/src/index.js";
 import {
-  ERC1967Proxy__factory,
   EntryPoint__factory,
   type EntryPoint,
-  VerbethV1__factory,
   type VerbethV1,
   TestSmartAccount__factory,
   type TestSmartAccount,
 } from "../packages/contracts/typechain-types/index.js";
 import { AnvilSetup } from "./setup.js";
-import { createMockSmartAccountClient } from "./utils.js";
+import {
+  createMockSmartAccountClient,
+  createTestVerbethClient,
+  deployVerbeth,
+  waitForBlock,
+  hexToBytes,
+} from "./utils.js";
 
 const ENTRYPOINT_ADDR = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
 
-const hexToBytes = (hex: string) =>
-  new Uint8Array(Buffer.from(hex.slice(2), "hex"));
-
-const deriveTopic = (
-  shared: Uint8Array,
-  info: string,
-  salt: Uint8Array
-): `0x${string}` => {
-  const okm = hkdf(sha256, shared, salt, toUtf8Bytes(info), 32);
-  return keccak256(okm) as `0x${string}`;
-};
-
-const deriveDuplex = (
-  mySecret: Uint8Array,
-  theirPub: Uint8Array,
-  saltHex: `0x${string}`
-) => {
-  const shared = nacl.scalarMult(mySecret, theirPub);
-  const salt = hexToBytes(saltHex);
-  return {
-    topicOut: deriveTopic(shared, "verbeth:topic-out:v1", salt), // Initiator→Responder
-    topicIn: deriveTopic(shared, "verbeth:topic-in:v1", salt), // Responder→Initiator
-  } as const;
-};
+function extractPayloadBytes(ciphertext: string): Uint8Array {
+  if (typeof ciphertext === "string" && ciphertext.startsWith("0x")) {
+    return hexToBytes(ciphertext);
+  }
+  return new TextEncoder().encode(ciphertext);
+}
 
 describe("End-to-End Handshake and Messaging Tests", () => {
   let anvil: AnvilSetup;
@@ -77,8 +54,12 @@ describe("End-to-End Handshake and Messaging Tests", () => {
   let eoaAccount1IdentityKeys: any;
   let smartAccountExecutor: DirectEntryPointExecutor;
   let eoaAccount1Executor: EOAExecutor;
-  let eoaAccount2Executor: EOAExecutor;
   let bundler: Wallet;
+
+  let aliceClient: VerbethClient;
+  let aliceSessionStore: import("./utils.js").InMemorySessionStore;
+  let bobClient: VerbethClient;
+  let bobSessionStore: import("./utils.js").InMemorySessionStore;
 
   beforeAll(async () => {
     anvil = new AnvilSetup(8547);
@@ -109,27 +90,7 @@ describe("End-to-End Handshake and Messaging Tests", () => {
 
     entryPoint = EntryPoint__factory.connect(ENTRYPOINT_ADDR, provider);
 
-    const VERBETHFactory = new VerbethV1__factory(deployer);
-    const VERBETHImpl = await VERBETHFactory.deploy();
-    await VERBETHImpl.deploymentTransaction()?.wait();
-
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    const initData = VERBETHFactory.interface.encodeFunctionData(
-      "initialize",
-      []
-    );
-
-    const proxyFactory = new ERC1967Proxy__factory(deployer);
-    const proxy = await proxyFactory.deploy(
-      await VERBETHImpl.getAddress(),
-      initData
-    );
-    await proxy.deploymentTransaction()?.wait();
-
-    VERBETH = VERBETHV1__factory.connect(await proxy.getAddress(), deployer);
-
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    VERBETH = await deployVerbeth(deployer);
 
     const testSmartAccountFactory = new TestSmartAccount__factory(deployer);
     smartAccount = await testSmartAccountFactory.deploy(
@@ -137,8 +98,7 @@ describe("End-to-End Handshake and Messaging Tests", () => {
       smartAccountOwner.address
     );
     await smartAccount.deploymentTransaction()?.wait();
-
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((r) => setTimeout(r, 200));
 
     let deployerNonce = await provider.getTransactionCount(
       deployer.address,
@@ -151,7 +111,7 @@ describe("End-to-End Handshake and Messaging Tests", () => {
       nonce: deployerNonce++,
     });
     await fundTx1.wait();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((r) => setTimeout(r, 100));
 
     const fundTx2 = await deployer.sendTransaction({
       to: eoaAccount1.address,
@@ -159,7 +119,7 @@ describe("End-to-End Handshake and Messaging Tests", () => {
       nonce: deployerNonce++,
     });
     await fundTx2.wait();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((r) => setTimeout(r, 100));
 
     const fundTx3 = await deployer.sendTransaction({
       to: eoaAccount2.address,
@@ -167,23 +127,20 @@ describe("End-to-End Handshake and Messaging Tests", () => {
       nonce: deployerNonce++,
     });
     await fundTx3.wait();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((r) => setTimeout(r, 100));
 
-    // Derive identity keys with executorAddres for binding proof
     const smartAccountAddr = await smartAccount.getAddress();
     smartAccountIdentityKeys = await deriveIdentityKeyPairWithProof(
       smartAccountOwner,
       smartAccountAddr,
-      smartAccountAddr // executorAddres = smart account address
+      smartAccountAddr
     );
 
-    // For EOA, the executor is the EOA itself (no Safe in this test)
     eoaAccount1IdentityKeys = await deriveIdentityKeyPairWithProof(
       eoaAccount1,
       eoaAccount1.address,
-      eoaAccount1.address // executorAddres = EOA address (acts as its own executor)
+      eoaAccount1.address
     );
-
   }, 180000);
 
   afterAll(async () => {
@@ -191,7 +148,6 @@ describe("End-to-End Handshake and Messaging Tests", () => {
   });
 
   beforeEach(async () => {
-    // Force cleanup and wait for any pending operations
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     await provider.getTransactionCount(bundler.address, "latest");
@@ -215,40 +171,43 @@ describe("End-to-End Handshake and Messaging Tests", () => {
       VERBETH.connect(eoaAccount1)
     ) as EOAExecutor;
 
-    eoaAccount2Executor = ExecutorFactory.createEOA(
-      VERBETH.connect(eoaAccount2)
-    ) as EOAExecutor;
+    // Create VerbethClient instances with fresh in-memory stores
+    const smartAccountAddr = await smartAccount.getAddress();
+    ({ client: aliceClient, sessionStore: aliceSessionStore } = createTestVerbethClient(
+      smartAccountAddr,
+      smartAccountOwner,
+      smartAccountIdentityKeys.keyPair,
+      smartAccountIdentityKeys.identityProof,
+      smartAccountExecutor
+    ));
+
+    ({ client: bobClient, sessionStore: bobSessionStore } = createTestVerbethClient(
+      eoaAccount1.address,
+      eoaAccount1,
+      eoaAccount1IdentityKeys.keyPair,
+      eoaAccount1IdentityKeys.identityProof,
+      eoaAccount1Executor
+    ));
   });
 
   describe("Smart Account to EOA", () => {
-    it("should complete full handshake and bidirectional messaging flow", async () => {
-      // 1. Smart Account initiates handshake with EOA
-      const ephemeralKeys = nacl.box.keyPair();
-      const initiateHandshakeTx = await initiateHandshake({
-        executor: smartAccountExecutor,
-        recipientAddress: eoaAccount1.address,
-        identityKeyPair: smartAccountIdentityKeys.keyPair,
-        ephemeralPubKey: ephemeralKeys.publicKey,
-        plaintextPayload: "Hello EOA from Smart Account!",
-        identityProof: smartAccountIdentityKeys.identityProof,
-        signer: smartAccountOwner,
-      });
+    it("should complete full handshake and bidirectional ratchet messaging flow", async () => {
+      // 1. Alice (Smart Account) sends handshake to Bob (EOA)
+      const handshakeResult = await aliceClient.sendHandshake(
+        eoaAccount1.address,
+        "Hello EOA from Smart Account!"
+      );
 
-      const initiateReceipt = await initiateHandshakeTx.wait();
+      const initiateReceipt = await handshakeResult.tx.wait();
       expect(initiateReceipt.status).toBe(1);
-
-      while ((await provider.getBlockNumber()) < initiateReceipt.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await waitForBlock(provider, initiateReceipt.blockNumber);
 
       // 2. Verify handshake identity
-      const handshakeFilter = VERBETH.filters.Handshake();
       const handshakeEvents = await VERBETH.queryFilter(
-        handshakeFilter,
+        VERBETH.filters.Handshake(),
         initiateReceipt.blockNumber,
         initiateReceipt.blockNumber
       );
-
       expect(handshakeEvents).toHaveLength(1);
       const handshakeEvent = handshakeEvents[0];
 
@@ -260,38 +219,33 @@ describe("End-to-End Handshake and Messaging Tests", () => {
         plaintextPayload: handshakeEvent.args.plaintextPayload,
       };
 
-      const isValidHandshake = await verifyHandshakeIdentity(
+      const isValidHandshake = await aliceClient.verify.verifyHandshakeIdentity(
         handshakeLog,
         provider
       );
       expect(isValidHandshake).toBe(true);
 
-      // 3. EOA responds to handshake
-      const respondTx = await respondToHandshake({
-        executor: eoaAccount1Executor,
-        initiatorPubKey: ephemeralKeys.publicKey,
-        responderIdentityKeyPair: eoaAccount1IdentityKeys.keyPair,
-        note: "Hello back from EOA!",
-        identityProof: eoaAccount1IdentityKeys.identityProof,
-        signer: eoaAccount1,
-        initiatorIdentityPubKey: smartAccountIdentityKeys.keyPair.publicKey,
-      });
+      // 3. Get Alice's full ephemeral key from event (X25519 + ML-KEM = 1216 bytes)
+      const aliceEphemeralPubKeyFromEvent = hexToBytes(
+        handshakeEvent.args.ephemeralPubKey
+      );
 
-      const respondReceipt = await respondTx.tx.wait();
+      // 4. Bob accepts handshake
+      const acceptResult = await bobClient.acceptHandshake(
+        aliceEphemeralPubKeyFromEvent,
+        "Hello back from EOA!"
+      );
+
+      const respondReceipt = await acceptResult.tx.wait();
       expect(respondReceipt.status).toBe(1);
+      await waitForBlock(provider, respondReceipt.blockNumber);
 
-      while ((await provider.getBlockNumber()) < respondReceipt.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-
-      // 4. Verify handshake response identity
-      const responseFilter = VERBETH.filters.HandshakeResponse();
+      // 5. Verify handshake response identity
       const responseEvents = await VERBETH.queryFilter(
-        responseFilter,
+        VERBETH.filters.HandshakeResponse(),
         respondReceipt.blockNumber,
         respondReceipt.blockNumber
       );
-
       expect(responseEvents).toHaveLength(1);
       const responseEvent = responseEvents[0];
 
@@ -302,165 +256,133 @@ describe("End-to-End Handshake and Messaging Tests", () => {
         ciphertext: responseEvent.args.ciphertext,
       };
 
-      const { topicOut: saToEoaTopic, topicIn: eoaToSaTopic } = deriveDuplex(
-        smartAccountIdentityKeys.keyPair.secretKey, // Alice (initiator)
-        eoaAccount1IdentityKeys.keyPair.publicKey, // Bob (responder)
-        responseEvent.args.inResponseTo as `0x${string}`
-      );
-
-      const isValidResponse = await verifyHandshakeResponseIdentity(
+      const isValidResponse = await aliceClient.verify.verifyHandshakeResponseIdentity(
         responseLog,
         eoaAccount1IdentityKeys.keyPair.publicKey,
-        ephemeralKeys.secretKey,
+        handshakeResult.ephemeralKeyPair.secretKey,
         provider
       );
       expect(isValidResponse).toBe(true);
 
-      // 5. Smart Account sends message to EOA
+      // 6. Alice decrypts HSR to get responder's ratchet pub key + KEM ciphertext
+      let ciphertextJson = responseEvent.args.ciphertext;
+      if (typeof ciphertextJson === "string" && ciphertextJson.startsWith("0x")) {
+        ciphertextJson = new TextDecoder().decode(hexToBytes(ciphertextJson));
+      }
+
+      const hsrKeys = decryptAndExtractHandshakeKeys(
+        ciphertextJson,
+        handshakeResult.ephemeralKeyPair.secretKey
+      );
+      expect(hsrKeys).not.toBeNull();
+
+      // 7. Create ratchet sessions
+      const aliceSession = aliceClient.createInitiatorSession({
+        contactAddress: eoaAccount1.address,
+        initiatorEphemeralSecret: handshakeResult.ephemeralKeyPair.secretKey,
+        responderEphemeralPubKey: hsrKeys!.ephemeralPubKey,
+        inResponseToTag: responseEvent.args.inResponseTo as `0x${string}`,
+        kemCiphertext: hsrKeys!.kemCiphertext,
+        initiatorKemSecret: handshakeResult.kemKeyPair.secretKey,
+      });
+
+      const bobSession = bobClient.createResponderSession({
+        contactAddress: await smartAccount.getAddress(),
+        responderEphemeralSecret: acceptResult.responderEphemeralSecret,
+        responderEphemeralPublic: acceptResult.responderEphemeralPublic,
+        initiatorEphemeralPubKey: aliceEphemeralPubKeyFromEvent,
+        salt: acceptResult.salt,
+        kemSharedSecret: acceptResult.kemSharedSecret,
+      });
+
+      // Save sessions to stores
+      await aliceSessionStore.save(aliceSession);
+      await bobSessionStore.save(bobSession);
+
+      // 8. Alice sends message to Bob via double ratchet
       const message1 = "First message from Smart Account to EOA";
-
-      const sendTx1 = await sendEncryptedMessage({
-        executor: smartAccountExecutor,
-        topic: saToEoaTopic, // Initiator to Responder
-        message: message1,
-        recipientPubKey: eoaAccount1IdentityKeys.keyPair.publicKey,
-        senderAddress: await smartAccount.getAddress(),
-        senderSignKeyPair: {
-          secretKey: smartAccountIdentityKeys.keyPair.signingSecretKey,
-          publicKey: smartAccountIdentityKeys.keyPair.signingPublicKey,
-        },
-        timestamp: Math.floor(Date.now() / 1000),
-      });
-
-      const sendReceipt1 = await sendTx1.wait();
-      expect(sendReceipt1.status).toBe(1);
-
-      while ((await provider.getBlockNumber()) < sendReceipt1.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-
-      // 6. EOA responds with message to Smart Account
-      const message2 = "Response message from EOA to Smart Account";
-
-      const sendTx2 = await sendEncryptedMessage({
-        executor: eoaAccount1Executor,
-        topic: eoaToSaTopic, // Responder to Initiator
-        message: message2,
-        recipientPubKey: smartAccountIdentityKeys.keyPair.publicKey,
-        senderAddress: eoaAccount1.address,
-        senderSignKeyPair: {
-          secretKey: eoaAccount1IdentityKeys.keyPair.signingSecretKey,
-          publicKey: eoaAccount1IdentityKeys.keyPair.signingPublicKey,
-        },
-        timestamp: Math.floor(Date.now() / 1000) + 1,
-      });
-
-      const sendReceipt2 = await sendTx2.wait();
-      expect(sendReceipt2.status).toBe(1);
-
-      while ((await provider.getBlockNumber()) < sendReceipt2.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-
-      // 7. Verify both messages can be decrypted
-      const messageFilter = VERBETH.filters.MessageSent();
-
-      const saMessageEvents = await VERBETH.queryFilter(
-        messageFilter,
-        sendReceipt1.blockNumber,
-        sendReceipt1.blockNumber
+      const sendResult1 = await aliceClient.sendMessage(
+        aliceSession.conversationId,
+        message1
       );
 
-      const eoaMessageEvents = await VERBETH.queryFilter(
-        messageFilter,
-        sendReceipt2.blockNumber,
-        sendReceipt2.blockNumber
-      );
+      const sendReceipt1 = await provider.waitForTransaction(sendResult1.txHash);
+      expect(sendReceipt1!.status).toBe(1);
+      await waitForBlock(provider, sendReceipt1!.blockNumber);
 
+      // Query MessageSent event and decrypt
+      const msgEvents1 = await VERBETH.queryFilter(
+        VERBETH.filters.MessageSent(),
+        sendReceipt1!.blockNumber,
+        sendReceipt1!.blockNumber
+      );
       const smartAccountAddress = await smartAccount.getAddress();
-      const saMessageEvent = saMessageEvents.find(
-        (event) => event.args.sender === smartAccountAddress
-      );
-      const eoaMessageEvent = eoaMessageEvents.find(
-        (event) => event.args.sender === eoaAccount1.address
-      );
+      const saMsg = msgEvents1.find((e) => e.args.sender === smartAccountAddress);
+      expect(saMsg).toBeDefined();
 
-      expect(saMessageEvent).toBeDefined();
-      expect(eoaMessageEvent).toBeDefined();
+      const msgPayload1 = extractPayloadBytes(saMsg!.args.ciphertext);
 
-      // EOA decrypts Smart Account's message
-      let saCiphertextJson = saMessageEvent!.args.ciphertext;
-      if (
-        typeof saMessageEvent!.args.ciphertext === "string" &&
-        saMessageEvent!.args.ciphertext.startsWith("0x")
-      ) {
-        try {
-          const bytes = new Uint8Array(
-            Buffer.from(saMessageEvent!.args.ciphertext.slice(2), "hex")
-          );
-          saCiphertextJson = new TextDecoder().decode(bytes);
-        } catch (err) {}
-      }
-
-      const eoaDecryptedMessage = decryptMessage(
-        saCiphertextJson,
-        eoaAccount1IdentityKeys.keyPair.secretKey,
+      const decrypted1 = await bobClient.decryptMessage(
+        sendResult1.topic,
+        msgPayload1,
         smartAccountIdentityKeys.keyPair.signingPublicKey
       );
-      expect(eoaDecryptedMessage).toBe(message1);
+      expect(decrypted1).not.toBeNull();
+      expect(decrypted1!.plaintext).toBe(message1);
 
-      // Smart Account decrypts EOA's message
-      let eoaCiphertextJson = eoaMessageEvent!.args.ciphertext;
-      if (
-        typeof eoaMessageEvent!.args.ciphertext === "string" &&
-        eoaMessageEvent!.args.ciphertext.startsWith("0x")
-      ) {
-        try {
-          const bytes = new Uint8Array(
-            Buffer.from(eoaMessageEvent!.args.ciphertext.slice(2), "hex")
-          );
-          eoaCiphertextJson = new TextDecoder().decode(bytes);
-        } catch (err) {}
-      }
+      // 9. Bob responds via double ratchet
+      const message2 = "Response message from EOA to Smart Account";
+      const sendResult2 = await bobClient.sendMessage(
+        bobSession.conversationId,
+        message2
+      );
 
-      const saDecryptedMessage = decryptMessage(
-        eoaCiphertextJson,
-        smartAccountIdentityKeys.keyPair.secretKey,
+      const sendReceipt2 = await provider.waitForTransaction(sendResult2.txHash);
+      expect(sendReceipt2!.status).toBe(1);
+      await waitForBlock(provider, sendReceipt2!.blockNumber);
+
+      const msgEvents2 = await VERBETH.queryFilter(
+        VERBETH.filters.MessageSent(),
+        sendReceipt2!.blockNumber,
+        sendReceipt2!.blockNumber
+      );
+      const eoaMsg = msgEvents2.find((e) => e.args.sender === eoaAccount1.address);
+      expect(eoaMsg).toBeDefined();
+
+      const msgPayload2 = extractPayloadBytes(eoaMsg!.args.ciphertext);
+
+      const decrypted2 = await aliceClient.decryptMessage(
+        sendResult2.topic,
+        msgPayload2,
         eoaAccount1IdentityKeys.keyPair.signingPublicKey
       );
-      expect(saDecryptedMessage).toBe(message2);
+      expect(decrypted2).not.toBeNull();
+      expect(decrypted2!.plaintext).toBe(message2);
     }, 60000);
   });
 
   describe("EOA to Smart Account E2E", () => {
-    it("should complete full handshake and bidirectional messaging flow", async () => {
-      // 1. EOA initiates handshake with Smart Account
-      const ephemeralKeys = nacl.box.keyPair();
-      const initiateHandshakeTx = await initiateHandshake({
-        executor: eoaAccount1Executor,
-        recipientAddress: await smartAccount.getAddress(),
-        identityKeyPair: eoaAccount1IdentityKeys.keyPair,
-        ephemeralPubKey: ephemeralKeys.publicKey,
-        plaintextPayload: "Hello Smart Account from EOA!",
-        identityProof: eoaAccount1IdentityKeys.identityProof,
-        signer: eoaAccount1,
-      });
+    it("should complete full handshake and bidirectional ratchet messaging flow", async () => {
+      // Swap roles: Bob (EOA) initiates, Alice (SA) responds
+      const eoaClient = bobClient;
+      const saClient = aliceClient;
 
-      const initiateReceipt = await initiateHandshakeTx.wait();
+      // 1. EOA sends handshake to Smart Account
+      const handshakeResult = await eoaClient.sendHandshake(
+        await smartAccount.getAddress(),
+        "Hello Smart Account from EOA!"
+      );
+
+      const initiateReceipt = await handshakeResult.tx.wait();
       expect(initiateReceipt.status).toBe(1);
-
-      while ((await provider.getBlockNumber()) < initiateReceipt.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await waitForBlock(provider, initiateReceipt.blockNumber);
 
       // 2. Verify handshake identity
-      const handshakeFilter = VERBETH.filters.Handshake();
       const handshakeEvents = await VERBETH.queryFilter(
-        handshakeFilter,
+        VERBETH.filters.Handshake(),
         initiateReceipt.blockNumber,
         initiateReceipt.blockNumber
       );
-
       expect(handshakeEvents).toHaveLength(1);
       const handshakeEvent = handshakeEvents[0];
 
@@ -472,38 +394,33 @@ describe("End-to-End Handshake and Messaging Tests", () => {
         plaintextPayload: handshakeEvent.args.plaintextPayload,
       };
 
-      const isValidHandshake = await verifyHandshakeIdentity(
+      const isValidHandshake = await eoaClient.verify.verifyHandshakeIdentity(
         handshakeLog,
         provider
       );
       expect(isValidHandshake).toBe(true);
 
-      // 3. Smart Account responds to handshake
-      const respondTx = await respondToHandshake({
-        executor: smartAccountExecutor,
-        initiatorPubKey: ephemeralKeys.publicKey,
-        responderIdentityKeyPair: smartAccountIdentityKeys.keyPair,
-        note: "Hello back from Smart Account!",
-        identityProof: smartAccountIdentityKeys.identityProof,
-        signer: smartAccountOwner,
-        initiatorIdentityPubKey: eoaAccount1IdentityKeys.keyPair.publicKey,
-      });
+      // 3. Get EOA's ephemeral key from event
+      const eoaEphemeralPubKeyFromEvent = hexToBytes(
+        handshakeEvent.args.ephemeralPubKey
+      );
 
-      const respondReceipt = await respondTx.tx.wait();
+      // 4. Smart Account accepts handshake
+      const acceptResult = await saClient.acceptHandshake(
+        eoaEphemeralPubKeyFromEvent,
+        "Hello back from Smart Account!"
+      );
+
+      const respondReceipt = await acceptResult.tx.wait();
       expect(respondReceipt.status).toBe(1);
+      await waitForBlock(provider, respondReceipt.blockNumber);
 
-      while ((await provider.getBlockNumber()) < respondReceipt.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-
-      // 4. Verify handshake response identity
-      const responseFilter = VERBETH.filters.HandshakeResponse();
+      // 5. Verify handshake response identity
       const responseEvents = await VERBETH.queryFilter(
-        responseFilter,
+        VERBETH.filters.HandshakeResponse(),
         respondReceipt.blockNumber,
         respondReceipt.blockNumber
       );
-
       expect(responseEvents).toHaveLength(1);
       const responseEvent = responseEvents[0];
 
@@ -514,136 +431,110 @@ describe("End-to-End Handshake and Messaging Tests", () => {
         ciphertext: responseEvent.args.ciphertext,
       };
 
-      const { topicOut: eoaToSaTopic, topicIn: saToEoaTopic } = deriveDuplex(
-        eoaAccount1IdentityKeys.keyPair.secretKey, // Alice (initiator)
-        smartAccountIdentityKeys.keyPair.publicKey, // Bob (responder)
-        responseEvent.args.inResponseTo as `0x${string}`
-      );
-
-      const isValidResponse = await verifyHandshakeResponseIdentity(
+      const isValidResponse = await eoaClient.verify.verifyHandshakeResponseIdentity(
         responseLog,
         smartAccountIdentityKeys.keyPair.publicKey,
-        ephemeralKeys.secretKey,
+        handshakeResult.ephemeralKeyPair.secretKey,
         provider
       );
       expect(isValidResponse).toBe(true);
 
-      // 5. EOA sends message to Smart Account
+      // 6. EOA decrypts HSR
+      let ciphertextJson = responseEvent.args.ciphertext;
+      if (typeof ciphertextJson === "string" && ciphertextJson.startsWith("0x")) {
+        ciphertextJson = new TextDecoder().decode(hexToBytes(ciphertextJson));
+      }
+
+      const hsrKeys = decryptAndExtractHandshakeKeys(
+        ciphertextJson,
+        handshakeResult.ephemeralKeyPair.secretKey
+      );
+      expect(hsrKeys).not.toBeNull();
+
+      // 7. Create ratchet sessions
+      const smartAccountAddr = await smartAccount.getAddress();
+
+      const eoaSession = eoaClient.createInitiatorSession({
+        contactAddress: smartAccountAddr,
+        initiatorEphemeralSecret: handshakeResult.ephemeralKeyPair.secretKey,
+        responderEphemeralPubKey: hsrKeys!.ephemeralPubKey,
+        inResponseToTag: responseEvent.args.inResponseTo as `0x${string}`,
+        kemCiphertext: hsrKeys!.kemCiphertext,
+        initiatorKemSecret: handshakeResult.kemKeyPair.secretKey,
+      });
+
+      const saSession = saClient.createResponderSession({
+        contactAddress: eoaAccount1.address,
+        responderEphemeralSecret: acceptResult.responderEphemeralSecret,
+        responderEphemeralPublic: acceptResult.responderEphemeralPublic,
+        initiatorEphemeralPubKey: eoaEphemeralPubKeyFromEvent,
+        salt: acceptResult.salt,
+        kemSharedSecret: acceptResult.kemSharedSecret,
+      });
+
+      // Save sessions to stores
+      await bobSessionStore.save(eoaSession);
+      await aliceSessionStore.save(saSession);
+
+      // 8. EOA sends message to Smart Account
       const message1 = "First message from EOA to Smart Account";
-
-      const sendTx1 = await sendEncryptedMessage({
-        executor: eoaAccount1Executor,
-        topic: eoaToSaTopic, // Initiator to Responder
-        message: message1,
-        recipientPubKey: smartAccountIdentityKeys.keyPair.publicKey,
-        senderAddress: eoaAccount1.address,
-        senderSignKeyPair: {
-          secretKey: eoaAccount1IdentityKeys.keyPair.signingSecretKey,
-          publicKey: eoaAccount1IdentityKeys.keyPair.signingPublicKey,
-        },
-        timestamp: Math.floor(Date.now() / 1000),
-      });
-
-      const sendReceipt1 = await sendTx1.wait();
-      expect(sendReceipt1.status).toBe(1);
-
-      while ((await provider.getBlockNumber()) < sendReceipt1.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-
-      // 6. Smart Account responds with message to EOA
-      const message2 = "Response message from Smart Account to EOA";
-
-      const sendTx2 = await sendEncryptedMessage({
-        executor: smartAccountExecutor,
-        topic: saToEoaTopic, // Responder to Initiator
-        message: message2,
-        recipientPubKey: eoaAccount1IdentityKeys.keyPair.publicKey,
-        senderAddress: await smartAccount.getAddress(),
-        senderSignKeyPair: {
-          secretKey: smartAccountIdentityKeys.keyPair.signingSecretKey,
-          publicKey: smartAccountIdentityKeys.keyPair.signingPublicKey,
-        },
-        timestamp: Math.floor(Date.now() / 1000) + 1,
-      });
-
-      const sendReceipt2 = await sendTx2.wait();
-      expect(sendReceipt2.status).toBe(1);
-
-      while ((await provider.getBlockNumber()) < sendReceipt2.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-
-      // 7. Verify both messages can be decrypted
-      const messageFilter = VERBETH.filters.MessageSent();
-
-      const eoaMessageEvents = await VERBETH.queryFilter(
-        messageFilter,
-        sendReceipt1.blockNumber,
-        sendReceipt1.blockNumber
+      const sendResult1 = await eoaClient.sendMessage(
+        eoaSession.conversationId,
+        message1
       );
 
-      const saMessageEvents = await VERBETH.queryFilter(
-        messageFilter,
-        sendReceipt2.blockNumber,
-        sendReceipt2.blockNumber
+      const sendReceipt1 = await provider.waitForTransaction(sendResult1.txHash);
+      expect(sendReceipt1!.status).toBe(1);
+      await waitForBlock(provider, sendReceipt1!.blockNumber);
+
+      const msgEvents1 = await VERBETH.queryFilter(
+        VERBETH.filters.MessageSent(),
+        sendReceipt1!.blockNumber,
+        sendReceipt1!.blockNumber
       );
+      const eoaMsg = msgEvents1.find((e) => e.args.sender === eoaAccount1.address);
+      expect(eoaMsg).toBeDefined();
 
-      const eoaMessageEvent = eoaMessageEvents.find(
-        (event) => event.args.sender === eoaAccount1.address
-      );
-      const smartAccountAddress = await smartAccount.getAddress();
-      const saMessageEvent = saMessageEvents.find(
-        (event) => event.args.sender === smartAccountAddress
-      );
+      const msgPayload1 = extractPayloadBytes(eoaMsg!.args.ciphertext);
 
-      expect(eoaMessageEvent).toBeDefined();
-      expect(saMessageEvent).toBeDefined();
-
-      // Smart Account decrypts EOA's message
-      let eoaCiphertextJson = eoaMessageEvent!.args.ciphertext;
-      if (
-        typeof eoaMessageEvent!.args.ciphertext === "string" &&
-        eoaMessageEvent!.args.ciphertext.startsWith("0x")
-      ) {
-        try {
-          const bytes = new Uint8Array(
-            Buffer.from(eoaMessageEvent!.args.ciphertext.slice(2), "hex")
-          );
-          eoaCiphertextJson = new TextDecoder().decode(bytes);
-        } catch (err) {}
-      }
-
-      const saDecryptedMessage = decryptMessage(
-        eoaCiphertextJson,
-        smartAccountIdentityKeys.keyPair.secretKey,
+      const decrypted1 = await saClient.decryptMessage(
+        sendResult1.topic,
+        msgPayload1,
         eoaAccount1IdentityKeys.keyPair.signingPublicKey
       );
-      expect(saDecryptedMessage).toBe(message1);
+      expect(decrypted1).not.toBeNull();
+      expect(decrypted1!.plaintext).toBe(message1);
 
-      // EOA decrypts Smart Account's message
-      let saCiphertextJson = saMessageEvent!.args.ciphertext;
-      if (
-        typeof saMessageEvent!.args.ciphertext === "string" &&
-        saMessageEvent!.args.ciphertext.startsWith("0x")
-      ) {
-        try {
-          const bytes = new Uint8Array(
-            Buffer.from(saMessageEvent!.args.ciphertext.slice(2), "hex")
-          );
-          saCiphertextJson = new TextDecoder().decode(bytes);
-        } catch (err) {
-        }
-      }
+      // 9. Smart Account responds
+      const message2 = "Response message from Smart Account to EOA";
+      const sendResult2 = await saClient.sendMessage(
+        saSession.conversationId,
+        message2
+      );
 
-      const eoaDecryptedMessage = decryptMessage(
-        saCiphertextJson,
-        eoaAccount1IdentityKeys.keyPair.secretKey,
+      const sendReceipt2 = await provider.waitForTransaction(sendResult2.txHash);
+      expect(sendReceipt2!.status).toBe(1);
+      await waitForBlock(provider, sendReceipt2!.blockNumber);
+
+      const msgEvents2 = await VERBETH.queryFilter(
+        VERBETH.filters.MessageSent(),
+        sendReceipt2!.blockNumber,
+        sendReceipt2!.blockNumber
+      );
+      const saMsg = msgEvents2.find(
+        (e) => e.args.sender === smartAccountAddr
+      );
+      expect(saMsg).toBeDefined();
+
+      const msgPayload2 = extractPayloadBytes(saMsg!.args.ciphertext);
+
+      const decrypted2 = await eoaClient.decryptMessage(
+        sendResult2.topic,
+        msgPayload2,
         smartAccountIdentityKeys.keyPair.signingPublicKey
       );
-      expect(eoaDecryptedMessage).toBe(message2);
+      expect(decrypted2).not.toBeNull();
+      expect(decrypted2!.plaintext).toBe(message2);
     }, 60000);
   });
-
-
 });

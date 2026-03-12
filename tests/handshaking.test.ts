@@ -1,5 +1,5 @@
-// tests/handshakeresp.test.ts
-// This file contains integration tests for the Smart Accounts Handshaking via Direct EntryPoint
+// tests/handshaking.test.ts
+// Integration tests for Smart Account handshaking via VerbethClient
 import { expect, describe, it, beforeAll, afterAll, beforeEach } from "vitest";
 import {
   JsonRpcProvider,
@@ -9,31 +9,31 @@ import {
   getBytes,
 } from "ethers";
 
-import nacl from "tweetnacl";
 import {
   ExecutorFactory,
-  initiateHandshake,
-  respondToHandshake,
   DirectEntryPointExecutor,
   deriveIdentityKeyPairWithProof,
-  verifyHandshakeIdentity,
-  verifyHandshakeResponseIdentity,
   computeHybridTagFromInitiator,
-  decodeUnifiedPubKeys,
+  decryptAndExtractHandshakeKeys,
   kem,
+  type VerbethClient,
 } from "../packages/sdk/src/index.js";
 
 import {
-  ERC1967Proxy__factory,
   EntryPoint__factory,
   type EntryPoint,
-  VerbethV1__factory,
   type VerbethV1,
   TestSmartAccount__factory,
   type TestSmartAccount,
 } from "../packages/contracts/typechain-types/index.js";
 import { AnvilSetup } from "./setup.js";
-import { createMockSmartAccountClient } from "./utils.js";
+import {
+  createMockSmartAccountClient,
+  createTestVerbethClient,
+  deployVerbeth,
+  waitForBlock,
+  hexToBytes,
+} from "./utils.js";
 
 const ENTRYPOINT_ADDR = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
 
@@ -55,8 +55,11 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
   let ownerIdentityKeys: any;
   let responderIdentityKeys: any;
 
+  let initiatorClient: VerbethClient;
+  let responderClient: VerbethClient;
+
   beforeAll(async () => {
-    anvil = new AnvilSetup(8545);
+    anvil = new AnvilSetup(8546);
     const forkUrl = "https://base-rpc.publicnode.com";
 
     await anvil.start(forkUrl);
@@ -88,26 +91,7 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
 
     entryPoint = EntryPoint__factory.connect(ENTRYPOINT_ADDR, provider);
 
-    const verbEthFactory = new VerbethV1__factory(deployer);
-    const verbEthImpl = await verbEthFactory.deploy();
-    await verbEthImpl.deploymentTransaction()?.wait();
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    const initData = verbEthFactory.interface.encodeFunctionData(
-      "initialize",
-      []
-    );
-
-    const proxyFactory = new ERC1967Proxy__factory(deployer);
-    const proxy = await proxyFactory.deploy(
-      await verbEthImpl.getAddress(),
-      initData
-    );
-    await proxy.deploymentTransaction()?.wait();
-
-    verbEth = VerbethV1__factory.connect(await proxy.getAddress(), deployer);
-
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    verbEth = await deployVerbeth(deployer);
 
     const testSmartAccountFactory = new TestSmartAccount__factory(deployer);
     testSmartAccount = await testSmartAccountFactory.deploy(
@@ -115,14 +99,14 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       smartAccountOwner.address
     );
     await testSmartAccount.deploymentTransaction()?.wait();
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((r) => setTimeout(r, 200));
 
     responderSmartAccount = await testSmartAccountFactory.deploy(
       ENTRYPOINT_ADDR,
       responderOwner.address
     );
     await responderSmartAccount.deploymentTransaction()?.wait();
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((r) => setTimeout(r, 200));
 
     let deployerNonce = await provider.getTransactionCount(
       deployer.address,
@@ -135,7 +119,7 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       nonce: deployerNonce++,
     });
     await fundTx1.wait();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((r) => setTimeout(r, 100));
 
     const fundTx2 = await deployer.sendTransaction({
       to: await responderSmartAccount.getAddress(),
@@ -143,23 +127,22 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       nonce: deployerNonce++,
     });
     await fundTx2.wait();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((r) => setTimeout(r, 100));
 
-    // Derive identity keys with executorAddres (3rd param) for binding proof
     const testSmartAccountAddr = await testSmartAccount.getAddress();
     ownerIdentityKeys = await deriveIdentityKeyPairWithProof(
       smartAccountOwner,
       testSmartAccountAddr,
-      testSmartAccountAddr // executorAddres = smart account address
+      testSmartAccountAddr
     );
 
     const responderSmartAccountAddr = await responderSmartAccount.getAddress();
     responderIdentityKeys = await deriveIdentityKeyPairWithProof(
       responderOwner,
       responderSmartAccountAddr,
-      responderSmartAccountAddr // executorAddres = smart account address
+      responderSmartAccountAddr
     );
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((r) => setTimeout(r, 300));
   }, 180000);
 
   afterAll(async () => {
@@ -167,15 +150,10 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
   });
 
   beforeEach(async () => {
-    // Long wait to ensure blockchain state is settled
     await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    // Force block queries
     await provider.getBlockNumber();
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    // CRITICAL: Create TWO SEPARATE bundler wallet instances
-    // Each executor needs its own wallet to avoid nonce conflicts!
     const initiatorBundler = new Wallet(
       "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926d",
       provider
@@ -186,18 +164,16 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       provider
     );
 
-    // Force nonce queries with both fresh wallets
     await initiatorBundler.getNonce("latest");
     await responderBundler.getNonce("latest");
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    // Create executors with SEPARATE bundler wallets
     executor = ExecutorFactory.createDirectEntryPoint(
       await testSmartAccount.getAddress(),
       entryPoint.connect(initiatorBundler) as unknown as Contract,
       await verbEth.getAddress(),
       createMockSmartAccountClient(testSmartAccount, smartAccountOwner),
-      initiatorBundler // Use initiatorBundler
+      initiatorBundler
     ) as DirectEntryPointExecutor;
 
     responderExecutor = ExecutorFactory.createDirectEntryPoint(
@@ -205,10 +181,27 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       entryPoint.connect(responderBundler) as unknown as Contract,
       await verbEth.getAddress(),
       createMockSmartAccountClient(responderSmartAccount, responderOwner),
-      responderBundler // Use responderBundler
+      responderBundler
     ) as DirectEntryPointExecutor;
 
     await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // Create VerbethClient instances with fresh in-memory stores
+    ({ client: initiatorClient } = createTestVerbethClient(
+      await testSmartAccount.getAddress(),
+      smartAccountOwner,
+      ownerIdentityKeys.keyPair,
+      ownerIdentityKeys.identityProof,
+      executor
+    ));
+
+    ({ client: responderClient } = createTestVerbethClient(
+      await responderSmartAccount.getAddress(),
+      responderOwner,
+      responderIdentityKeys.keyPair,
+      responderIdentityKeys.identityProof,
+      responderExecutor
+    ));
   });
 
   async function waitForNonceSync() {
@@ -218,74 +211,74 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
   }
 
   it("should respond to handshake from smart account via canonical EntryPoint", async () => {
-    const ephemeralKeys = nacl.box.keyPair();
+    // Initiator sends handshake via VerbethClient
+    const handshakeResult = await initiatorClient.sendHandshake(
+      await responderSmartAccount.getAddress(),
+      "Hello from initiator smart account!"
+    );
 
-    const initiateHandshakeTx = await initiateHandshake({
-      executor,
-      recipientAddress: await responderSmartAccount.getAddress(),
-      identityKeyPair: ownerIdentityKeys.keyPair,
-      ephemeralPubKey: ephemeralKeys.publicKey,
-      plaintextPayload: "Hello from initiator smart account!",
-      identityProof: ownerIdentityKeys.identityProof,
-      signer: smartAccountOwner,
-    });
-
-    const initiateReceipt = await initiateHandshakeTx.wait();
+    const initiateReceipt = await handshakeResult.tx.wait();
     expect(initiateReceipt.status).toBe(1);
-
     await waitForNonceSync();
 
-    const handshakeFilter = verbEth.filters.Handshake();
     const handshakeEvents = await verbEth.queryFilter(
-      handshakeFilter,
+      verbEth.filters.Handshake(),
       initiateReceipt.blockNumber,
       initiateReceipt.blockNumber
     );
-
     expect(handshakeEvents).toHaveLength(1);
 
-    const decodedInitiator = decodeUnifiedPubKeys(
-      Uint8Array.from(
-        Buffer.from(handshakeEvents[0].args.pubKeys.slice(2), "hex")
-      )
+    // Get initiator's full ephemeral key from event
+    const aliceEphemeralPubKeyFromEvent = hexToBytes(
+      handshakeEvents[0].args.ephemeralPubKey
     );
-    if (!decodedInitiator) throw new Error("Invalid initiator unified pubkeys");
-    const initiatorIdentityPubKey = decodedInitiator.identityPubKey;
 
-    const respondTx = await respondToHandshake({
-      executor: responderExecutor,
-      initiatorPubKey: ephemeralKeys.publicKey,
-      responderIdentityKeyPair: responderIdentityKeys.keyPair,
-      note: "Hello back from responder smart account!",
-      identityProof: responderIdentityKeys.identityProof,
-      signer: responderOwner,
-      initiatorIdentityPubKey,
-    });
-    const respondReceipt = await respondTx.tx.wait();
+    // Responder accepts handshake via VerbethClient
+    const acceptResult = await responderClient.acceptHandshake(
+      aliceEphemeralPubKeyFromEvent,
+      "Hello back from responder smart account!"
+    );
+
+    const respondReceipt = await acceptResult.tx.wait();
     expect(respondReceipt.status).toBe(1);
 
-    const responseFilter = verbEth.filters.HandshakeResponse();
-
-    while ((await provider.getBlockNumber()) < respondReceipt.blockNumber) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    await waitForBlock(provider, respondReceipt.blockNumber);
 
     const responseEvents = await verbEth.queryFilter(
-      responseFilter,
+      verbEth.filters.HandshakeResponse(),
       respondReceipt.blockNumber,
       respondReceipt.blockNumber
     );
-
     expect(responseEvents).toHaveLength(1);
 
     const responseEvent = responseEvents[0];
     expect(responseEvent.args.responder).toBe(
       await responderSmartAccount.getAddress()
     );
+
+    // Verify tag using computeHybridTagFromInitiator
     const Rbytes = getBytes(responseEvent.args.responderEphemeralR);
-    const expectedTag = computeTagFromInitiator(
-      ephemeralKeys.secretKey,
-      Rbytes
+
+    // Decrypt HSR to get KEM ciphertext, then decapsulate
+    let ciphertextJson = responseEvent.args.ciphertext;
+    if (typeof ciphertextJson === "string" && ciphertextJson.startsWith("0x")) {
+      ciphertextJson = new TextDecoder().decode(hexToBytes(ciphertextJson));
+    }
+    const hsrKeys = decryptAndExtractHandshakeKeys(
+      ciphertextJson,
+      handshakeResult.ephemeralKeyPair.secretKey
+    );
+    expect(hsrKeys).not.toBeNull();
+    expect(hsrKeys!.kemCiphertext).toBeDefined();
+
+    const kemSecret = kem.decapsulate(
+      hsrKeys!.kemCiphertext!,
+      handshakeResult.kemKeyPair.secretKey
+    );
+    const expectedTag = computeHybridTagFromInitiator(
+      handshakeResult.ephemeralKeyPair.secretKey,
+      Rbytes,
+      kemSecret
     );
     expect(responseEvent.args.inResponseTo).toBe(expectedTag);
   }, 30000);
@@ -293,104 +286,83 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
   it("should handle multiple handshake responses", async () => {
     const handshakeCount = 3;
     const handshakeData: Array<{
-      ephemeralKeys: nacl.BoxKeyPair;
+      handshakeResult: any;
       initiateReceipt: any;
-      inResponseTo: string;
     }> = [];
 
-    // CRITICAL: Send handshakes ONE AT A TIME and wait for each to complete
     for (let i = 0; i < handshakeCount; i++) {
-      const ephemeralKeys = nacl.box.keyPair();
+      const handshakeResult = await initiatorClient.sendHandshake(
+        await responderSmartAccount.getAddress(),
+        `Batch handshake ${i + 1}`
+      );
 
-      const initiateHandshakeTx = await initiateHandshake({
-        executor,
-        recipientAddress: await responderSmartAccount.getAddress(),
-        identityKeyPair: ownerIdentityKeys.keyPair,
-        ephemeralPubKey: ephemeralKeys.publicKey,
-        plaintextPayload: `Batch handshake ${i + 1}`,
-        identityProof: ownerIdentityKeys.identityProof,
-        signer: smartAccountOwner,
-      });
-
-      const initiateReceipt = await initiateHandshakeTx.wait();
-
-      // CRITICAL: Wait for block to be mined AND extra time for nonce sync
-      while ((await provider.getBlockNumber()) < initiateReceipt.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      // Extra delay to ensure nonce is updated
+      const initiateReceipt = await handshakeResult.tx.wait();
+      await waitForBlock(provider, initiateReceipt.blockNumber);
       await new Promise((resolve) => setTimeout(resolve, 200));
 
-      handshakeData.push({
-        ephemeralKeys,
-        initiateReceipt,
-        inResponseTo: initiateReceipt.hash,
-      });
+      handshakeData.push({ handshakeResult, initiateReceipt });
     }
 
-    // Now respond to each handshake ONE AT A TIME
     const responseReceipts: any[] = [];
     for (let i = 0; i < handshakeData.length; i++) {
-      const handshakeFilter = verbEth.filters.Handshake();
-      const handshakeEventsForItem = await verbEth.queryFilter(
-        handshakeFilter,
+      const handshakeEvents = await verbEth.queryFilter(
+        verbEth.filters.Handshake(),
         handshakeData[i].initiateReceipt.blockNumber,
         handshakeData[i].initiateReceipt.blockNumber
       );
-      if (handshakeEventsForItem.length !== 1)
-        throw new Error("Expected 1 handshake event for item");
-      const decodedInitiatorForItem = decodeUnifiedPubKeys(
-        Uint8Array.from(
-          Buffer.from(handshakeEventsForItem[0].args.pubKeys.slice(2), "hex")
-        )
+      expect(handshakeEvents).toHaveLength(1);
+
+      const aliceEphemeralPubKeyFromEvent = hexToBytes(
+        handshakeEvents[0].args.ephemeralPubKey
       );
-      if (!decodedInitiatorForItem)
-        throw new Error("Invalid initiator unified pubkeys for item");
-      const initiatorIdentityPubKey = decodedInitiatorForItem.identityPubKey;
 
-      const respondTx = await respondToHandshake({
-        executor: responderExecutor,
-        initiatorPubKey: handshakeData[i].ephemeralKeys.publicKey,
-        responderIdentityKeyPair: responderIdentityKeys.keyPair,
-        note: `Batch response ${i + 1}`,
-        identityProof: responderIdentityKeys.identityProof,
-        signer: responderOwner,
-        initiatorIdentityPubKey,
-      });
+      const acceptResult = await responderClient.acceptHandshake(
+        aliceEphemeralPubKeyFromEvent,
+        `Batch response ${i + 1}`
+      );
 
-      const respondReceipt = await respondTx.tx.wait();
-
-      // CRITICAL: Wait for block to be mined AND extra time for nonce sync
-      while ((await provider.getBlockNumber()) < respondReceipt.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      // Extra delay to ensure nonce is updated
+      const respondReceipt = await acceptResult.tx.wait();
+      await waitForBlock(provider, respondReceipt.blockNumber);
       await new Promise((resolve) => setTimeout(resolve, 200));
 
       responseReceipts.push(respondReceipt);
     }
 
-    const responseFilter = verbEth.filters.HandshakeResponse();
     const fromBlock = responseReceipts[0].blockNumber;
     const toBlock = responseReceipts[responseReceipts.length - 1].blockNumber;
-
-    while ((await provider.getBlockNumber()) < toBlock) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    await waitForBlock(provider, toBlock);
 
     const responseEvents = await verbEth.queryFilter(
-      responseFilter,
+      verbEth.filters.HandshakeResponse(),
       fromBlock,
       toBlock
     );
-
     expect(responseEvents.length).toBeGreaterThanOrEqual(handshakeCount);
 
     for (let i = 0; i < handshakeCount; i++) {
-      const expectedTagI = computeTagFromInitiator(
-        handshakeData[i].ephemeralKeys.secretKey,
-        getBytes(responseEvents[i].args.responderEphemeralR)
+      const Rbytes = getBytes(responseEvents[i].args.responderEphemeralR);
+
+      // Decrypt HSR to get KEM ciphertext for tag verification
+      let ciphertextJson = responseEvents[i].args.ciphertext;
+      if (typeof ciphertextJson === "string" && ciphertextJson.startsWith("0x")) {
+        ciphertextJson = new TextDecoder().decode(hexToBytes(ciphertextJson));
+      }
+      const hsrKeys = decryptAndExtractHandshakeKeys(
+        ciphertextJson,
+        handshakeData[i].handshakeResult.ephemeralKeyPair.secretKey
       );
+      expect(hsrKeys).not.toBeNull();
+
+      const kemSecret = kem.decapsulate(
+        hsrKeys!.kemCiphertext!,
+        handshakeData[i].handshakeResult.kemKeyPair.secretKey
+      );
+      const expectedTagI = computeHybridTagFromInitiator(
+        handshakeData[i].handshakeResult.ephemeralKeyPair.secretKey,
+        Rbytes,
+        kemSecret
+      );
+
       const matchingEvent = responseEvents.find(
         (event) => event.args.inResponseTo === expectedTagI
       );
@@ -402,29 +374,22 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
   }, 60000);
 
   it("should fail gracefully when responding to non-existent handshake", async () => {
-    const fakeHandshakeId = "0x" + "99".repeat(32);
+    // Use a random ephemeral key — contract doesn't validate handshake existence
+    const acceptResult = await responderClient.acceptHandshake(
+      ownerIdentityKeys.keyPair.publicKey,
+      "Response to non-existent handshake"
+    );
 
-    const respondTx = await respondToHandshake({
-      executor: responderExecutor,
-      initiatorPubKey: ownerIdentityKeys.keyPair.publicKey,
-      responderIdentityKeyPair: responderIdentityKeys.keyPair,
-      note: "Response to non-existent handshake",
-      identityProof: responderIdentityKeys.identityProof,
-      signer: responderOwner,
-    });
-
-    const respondReceipt = await respondTx.tx.wait();
+    const respondReceipt = await acceptResult.tx.wait();
     expect(respondReceipt.status).toBe(1);
 
-    const responseFilter = verbEth.filters.HandshakeResponse();
     const responseEvents = await verbEth.queryFilter(
-      responseFilter,
+      verbEth.filters.HandshakeResponse(),
       respondReceipt.blockNumber,
       respondReceipt.blockNumber
     );
 
     expect(responseEvents).toHaveLength(1);
-    expect(responseEvents[0].args.inResponseTo).not.toBe(fakeHandshakeId);
     expect(
       /^0x[0-9a-fA-F]{64}$/.test(responseEvents[0].args.inResponseTo)
     ).toBe(true);
@@ -442,187 +407,122 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
     ];
 
     for (let i = 0; i < testNotes.length; i++) {
-      const ephemeralKeys = nacl.box.keyPair();
+      const handshakeResult = await initiatorClient.sendHandshake(
+        await responderSmartAccount.getAddress(),
+        `Note length test ${i + 1}`
+      );
 
-      const initiateHandshakeTx = await initiateHandshake({
-        executor,
-        recipientAddress: await responderSmartAccount.getAddress(),
-        identityKeyPair: ownerIdentityKeys.keyPair,
-        ephemeralPubKey: ephemeralKeys.publicKey,
-        plaintextPayload: `Note length test ${i + 1}`,
-        identityProof: ownerIdentityKeys.identityProof,
-        signer: smartAccountOwner,
-      });
-
-      const initiateReceipt = await initiateHandshakeTx.wait();
-
-      // Wait for block before querying
-      while ((await provider.getBlockNumber()) < initiateReceipt.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      const initiateReceipt = await handshakeResult.tx.wait();
+      await waitForBlock(provider, initiateReceipt.blockNumber);
       await new Promise((resolve) => setTimeout(resolve, 200));
 
-      const handshakeFilter = verbEth.filters.Handshake();
-      const events = await verbEth.queryFilter(
-        handshakeFilter,
+      const handshakeEvents = await verbEth.queryFilter(
+        verbEth.filters.Handshake(),
         initiateReceipt.blockNumber,
         initiateReceipt.blockNumber
       );
-      if (events.length !== 1) {
-        throw new Error(`Expected 1 Handshake event, got ${events.length}`);
-      }
-      const ev = events[0];
+      expect(handshakeEvents).toHaveLength(1);
 
-      const decodedInitiator = decodeUnifiedPubKeys(
-        Uint8Array.from(Buffer.from(ev.args.pubKeys.slice(2), "hex"))
-      );
-      if (!decodedInitiator)
-        throw new Error("Invalid initiator unified pubkeys");
-      const initiatorIdentityPubKey = decodedInitiator.identityPubKey;
-
-      const aliceEphemeralPubKeyFromEvent = Uint8Array.from(
-        Buffer.from(ev.args.ephemeralPubKey.slice(2), "hex")
+      const aliceEphemeralPubKeyFromEvent = hexToBytes(
+        handshakeEvents[0].args.ephemeralPubKey
       );
 
-      const respondTx = await respondToHandshake({
-        executor: responderExecutor,
-        initiatorPubKey: aliceEphemeralPubKeyFromEvent,
-        responderIdentityKeyPair: responderIdentityKeys.keyPair,
-        note: `Batch verification response ${i + 1}`,
-        identityProof: responderIdentityKeys.identityProof,
-        signer: responderOwner,
-        initiatorIdentityPubKey,
-      });
+      const acceptResult = await responderClient.acceptHandshake(
+        aliceEphemeralPubKeyFromEvent,
+        `Batch verification response ${i + 1}`
+      );
 
-      const respondReceipt = await respondTx.tx.wait();
+      const respondReceipt = await acceptResult.tx.wait();
       expect(respondReceipt.status).toBe(1);
 
-      // Wait for block before next iteration
-      while ((await provider.getBlockNumber()) < respondReceipt.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await waitForBlock(provider, respondReceipt.blockNumber);
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
   }, 60000);
 
   it("should verify handshake identity successfully", async () => {
-    const ephemeralKeys = nacl.box.keyPair();
+    const handshakeResult = await initiatorClient.sendHandshake(
+      await responderSmartAccount.getAddress(),
+      "Identity verification test handshake"
+    );
 
-    const initiateHandshakeTx = await initiateHandshake({
-      executor,
-      recipientAddress: await responderSmartAccount.getAddress(),
-      identityKeyPair: ownerIdentityKeys.keyPair,
-      ephemeralPubKey: ephemeralKeys.publicKey,
-      plaintextPayload: "Identity verification test handshake",
-      identityProof: ownerIdentityKeys.identityProof,
-      signer: smartAccountOwner,
-    });
-
-    const initiateReceipt = await initiateHandshakeTx.wait();
+    const initiateReceipt = await handshakeResult.tx.wait();
     expect(initiateReceipt.status).toBe(1);
 
-    const handshakeFilter = verbEth.filters.Handshake();
     const handshakeEvents = await verbEth.queryFilter(
-      handshakeFilter,
+      verbEth.filters.Handshake(),
       initiateReceipt.blockNumber,
       initiateReceipt.blockNumber
     );
-
     expect(handshakeEvents).toHaveLength(1);
-    const handshakeEvent = handshakeEvents[0];
 
     const handshakeLog = {
-      recipientHash: handshakeEvent.args.recipientHash,
-      sender: handshakeEvent.args.sender,
-      pubKeys: handshakeEvent.args.pubKeys,
-      ephemeralPubKey: handshakeEvent.args.ephemeralPubKey,
-      plaintextPayload: handshakeEvent.args.plaintextPayload,
+      recipientHash: handshakeEvents[0].args.recipientHash,
+      sender: handshakeEvents[0].args.sender,
+      pubKeys: handshakeEvents[0].args.pubKeys,
+      ephemeralPubKey: handshakeEvents[0].args.ephemeralPubKey,
+      plaintextPayload: handshakeEvents[0].args.plaintextPayload,
     };
 
-    const isValidHandshake = await verifyHandshakeIdentity(
+    const isValid = await initiatorClient.verify.verifyHandshakeIdentity(
       handshakeLog,
       provider
     );
-
-    expect(isValidHandshake).toBe(true);
+    expect(isValid).toBe(true);
   }, 30000);
 
   it("should verify handshake response identity successfully", async () => {
-    const aliceEphemeralKeys = nacl.box.keyPair();
+    const handshakeResult = await initiatorClient.sendHandshake(
+      await responderSmartAccount.getAddress(),
+      "Response identity verification test"
+    );
 
-    const initiateHandshakeTx = await initiateHandshake({
-      executor,
-      recipientAddress: await responderSmartAccount.getAddress(),
-      identityKeyPair: ownerIdentityKeys.keyPair,
-      ephemeralPubKey: aliceEphemeralKeys.publicKey,
-      plaintextPayload: "Response identity verification test",
-      identityProof: ownerIdentityKeys.identityProof,
-      signer: smartAccountOwner,
-    });
+    const initiateReceipt = await handshakeResult.tx.wait();
 
-    const initiateReceipt = await initiateHandshakeTx.wait();
-
-    const handshakeFilter = verbEth.filters.Handshake();
     const handshakeEvents = await verbEth.queryFilter(
-      handshakeFilter,
+      verbEth.filters.Handshake(),
       initiateReceipt.blockNumber,
       initiateReceipt.blockNumber
     );
-
     expect(handshakeEvents).toHaveLength(1);
-    const handshakeEvent = handshakeEvents[0];
 
-    const aliceEphemeralPubKeyFromEvent = new Uint8Array(
-      Buffer.from(handshakeEvent.args.ephemeralPubKey.slice(2), "hex")
+    const aliceEphemeralPubKeyFromEvent = hexToBytes(
+      handshakeEvents[0].args.ephemeralPubKey
     );
 
-    const respondTx = await respondToHandshake({
-      executor: responderExecutor,
-      initiatorPubKey: aliceEphemeralPubKeyFromEvent,
-      responderIdentityKeyPair: responderIdentityKeys.keyPair,
-      note: "Response identity verification test",
-      identityProof: responderIdentityKeys.identityProof,
-      signer: responderOwner,
-    });
+    const acceptResult = await responderClient.acceptHandshake(
+      aliceEphemeralPubKeyFromEvent,
+      "Response identity verification test"
+    );
 
-    const respondReceipt = await respondTx.tx.wait();
+    const respondReceipt = await acceptResult.tx.wait();
     expect(respondReceipt.status).toBe(1);
+    await waitForBlock(provider, respondReceipt.blockNumber);
 
-    // ADD THIS: Wait for block to be mined
-    while ((await provider.getBlockNumber()) < respondReceipt.blockNumber) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
-
-    const responseFilter = verbEth.filters.HandshakeResponse();
     const responseEvents = await verbEth.queryFilter(
-      responseFilter,
+      verbEth.filters.HandshakeResponse(),
       respondReceipt.blockNumber,
       respondReceipt.blockNumber
     );
-
     expect(responseEvents).toHaveLength(1);
-    const responseEvent = responseEvents[0];
 
     const responseLog = {
-      inResponseTo: responseEvent.args.inResponseTo,
-      responder: responseEvent.args.responder,
+      inResponseTo: responseEvents[0].args.inResponseTo,
+      responder: responseEvents[0].args.responder,
       responderEphemeralR: responseEvents[0].args.responderEphemeralR,
-      ciphertext: responseEvent.args.ciphertext,
+      ciphertext: responseEvents[0].args.ciphertext,
     };
 
-    const isValidResponse = await verifyHandshakeResponseIdentity(
+    const isValid = await initiatorClient.verify.verifyHandshakeResponseIdentity(
       responseLog,
       responderIdentityKeys.keyPair.publicKey,
-      aliceEphemeralKeys.secretKey,
+      handshakeResult.ephemeralKeyPair.secretKey,
       provider
     );
-
-    expect(isValidResponse).toBe(true);
+    expect(isValid).toBe(true);
   }, 30000);
 
   it("should fail handshake identity verification with invalid identity proof", async () => {
-    const ephemeralKeys = nacl.box.keyPair();
-
     const invalidWallet = new Wallet(
       "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba",
       provider
@@ -636,43 +536,43 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
       signature: invalidSignature,
     };
 
-    const initiateHandshakeTx = await initiateHandshake({
-      executor,
-      recipientAddress: await responderSmartAccount.getAddress(),
-      identityKeyPair: ownerIdentityKeys.keyPair,
-      ephemeralPubKey: ephemeralKeys.publicKey,
-      plaintextPayload: "Invalid identity verification test",
-      identityProof: invalidIdentityProof,
-      signer: smartAccountOwner,
-    });
+    // Create a client with invalid identity proof
+    const { client: invalidClient } = createTestVerbethClient(
+      await testSmartAccount.getAddress(),
+      smartAccountOwner,
+      ownerIdentityKeys.keyPair,
+      invalidIdentityProof,
+      executor
+    );
 
-    const initiateReceipt = await initiateHandshakeTx.wait();
+    const handshakeResult = await invalidClient.sendHandshake(
+      await responderSmartAccount.getAddress(),
+      "Invalid identity verification test"
+    );
+
+    const initiateReceipt = await handshakeResult.tx.wait();
     expect(initiateReceipt.status).toBe(1);
 
-    const handshakeFilter = verbEth.filters.Handshake();
     const handshakeEvents = await verbEth.queryFilter(
-      handshakeFilter,
+      verbEth.filters.Handshake(),
       initiateReceipt.blockNumber,
       initiateReceipt.blockNumber
     );
-
     expect(handshakeEvents).toHaveLength(1);
-    const handshakeEvent = handshakeEvents[0];
 
     const handshakeLog = {
-      recipientHash: handshakeEvent.args.recipientHash,
-      sender: handshakeEvent.args.sender,
-      pubKeys: handshakeEvent.args.pubKeys,
-      ephemeralPubKey: handshakeEvent.args.ephemeralPubKey,
-      plaintextPayload: handshakeEvent.args.plaintextPayload,
+      recipientHash: handshakeEvents[0].args.recipientHash,
+      sender: handshakeEvents[0].args.sender,
+      pubKeys: handshakeEvents[0].args.pubKeys,
+      ephemeralPubKey: handshakeEvents[0].args.ephemeralPubKey,
+      plaintextPayload: handshakeEvents[0].args.plaintextPayload,
     };
 
-    const isValidHandshake = await verifyHandshakeIdentity(
+    const isValid = await initiatorClient.verify.verifyHandshakeIdentity(
       handshakeLog,
       provider
     );
-
-    expect(isValidHandshake).toBe(false);
+    expect(isValid).toBe(false);
   }, 30000);
 
   it("should handle identity verification for multiple handshakes and responses", async () => {
@@ -684,29 +584,17 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
     }[] = [];
 
     for (let i = 0; i < handshakeCount; i++) {
-      const aliceEphemeralKeys = nacl.box.keyPair();
+      const handshakeResult = await initiatorClient.sendHandshake(
+        await responderSmartAccount.getAddress(),
+        `Batch verification test ${i + 1}`
+      );
 
-      const initiateHandshakeTx = await initiateHandshake({
-        executor,
-        recipientAddress: await responderSmartAccount.getAddress(),
-        identityKeyPair: ownerIdentityKeys.keyPair,
-        ephemeralPubKey: aliceEphemeralKeys.publicKey,
-        plaintextPayload: `Batch verification test ${i + 1}`,
-        identityProof: ownerIdentityKeys.identityProof,
-        signer: smartAccountOwner,
-      });
-
-      const initiateReceipt = await initiateHandshakeTx.wait();
-
-      // Wait for block
-      while ((await provider.getBlockNumber()) < initiateReceipt.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      const initiateReceipt = await handshakeResult.tx.wait();
+      await waitForBlock(provider, initiateReceipt.blockNumber);
       await new Promise((resolve) => setTimeout(resolve, 200));
 
-      const handshakeFilter = verbEth.filters.Handshake();
       const handshakeEvents = await verbEth.queryFilter(
-        handshakeFilter,
+        verbEth.filters.Handshake(),
         initiateReceipt.blockNumber,
         initiateReceipt.blockNumber
       );
@@ -719,35 +607,26 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
         plaintextPayload: handshakeEvents[0].args.plaintextPayload,
       };
 
-      const isValidHandshake = await verifyHandshakeIdentity(
+      const isValidHandshake = await initiatorClient.verify.verifyHandshakeIdentity(
         handshakeLog,
         provider
       );
 
-      const aliceEphemeralPubKeyFromEvent = new Uint8Array(
-        Buffer.from(handshakeEvents[0].args.ephemeralPubKey.slice(2), "hex")
+      const aliceEphemeralPubKeyFromEvent = hexToBytes(
+        handshakeEvents[0].args.ephemeralPubKey
       );
 
-      const respondTx = await respondToHandshake({
-        executor: responderExecutor,
-        initiatorPubKey: aliceEphemeralPubKeyFromEvent,
-        responderIdentityKeyPair: responderIdentityKeys.keyPair,
-        note: `Batch verification response ${i + 1}`,
-        identityProof: responderIdentityKeys.identityProof,
-        signer: responderOwner,
-      });
+      const acceptResult = await responderClient.acceptHandshake(
+        aliceEphemeralPubKeyFromEvent,
+        `Batch verification response ${i + 1}`
+      );
 
-      const respondReceipt = await respondTx.tx.wait();
-
-      // Wait for block
-      while ((await provider.getBlockNumber()) < respondReceipt.blockNumber) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      const respondReceipt = await acceptResult.tx.wait();
+      await waitForBlock(provider, respondReceipt.blockNumber);
       await new Promise((resolve) => setTimeout(resolve, 200));
 
-      const responseFilter = verbEth.filters.HandshakeResponse();
       const responseEvents = await verbEth.queryFilter(
-        responseFilter,
+        verbEth.filters.HandshakeResponse(),
         respondReceipt.blockNumber,
         respondReceipt.blockNumber
       );
@@ -759,10 +638,10 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
         ciphertext: responseEvents[0].args.ciphertext,
       };
 
-      const isValidResponse = await verifyHandshakeResponseIdentity(
+      const isValidResponse = await initiatorClient.verify.verifyHandshakeResponseIdentity(
         responseLog,
         responderIdentityKeys.keyPair.publicKey,
-        aliceEphemeralKeys.secretKey,
+        handshakeResult.ephemeralKeyPair.secretKey,
         provider
       );
 
@@ -772,7 +651,6 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
         responseValid: isValidResponse,
       });
 
-      // Wait before next iteration
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
