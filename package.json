@@ -28,7 +28,7 @@
     }
   },
   "dependencies": {
-    "@verbeth/contracts": "workspace:^0.1.0",
-    "@verbeth/sdk": "workspace:^0.1.0"
+    "@verbeth/contracts": "workspace:*",
+    "@verbeth/sdk": "workspace:*"
   }
 }
