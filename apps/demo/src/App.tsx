@@ -14,11 +14,9 @@ import {
 import { InitialForm } from './components/InitialForm.js';
 import { IdentityCreation } from './components/IdentityCreation.js';
 import { ChatLayout } from "./components/ChatLayout.js";
-import { SessionSetupPrompt } from './components/SessionSetupPrompt.js';
 import { WalletButton } from './components/WalletButton.js';
 import { WalletPanel } from './components/WalletPanel.js';
 import { useChatActions } from './hooks/useChatActions.js';
-import { useSessionSetup } from './hooks/useSessionSetup.js';
 import { useInitIdentity } from './hooks/useInitIdentity.js';
 import { usePendingSessionReset } from './hooks/usePendingSessionReset.js';
 import { sessionStore, pendingStore } from './services/StorageAdapters.js';
@@ -56,23 +54,9 @@ function AppContent({ chainId }: { chainId: number }) {
     identityProof,
     executor,
     identitySigner,
-    safeAddr,
     needsIdentityCreation,
     identityContext,
-    // Session state
-    sessionSignerAddr,
-    needsSessionSetup,
-    isSafeDeployed,
-    isModuleEnabled,
-    setIsSafeDeployed,
-    setIsModuleEnabled,
-    setNeedsSessionSetup,
     signingStep,
-    // Actions
-    needsModeSelection,
-    fastModeAvailable,
-    fastModeUnavailableReason,
-    executionMode,
     emitterAddress,
     createIdentity,
   } = useInitIdentity({
@@ -86,26 +70,6 @@ function AppContent({ chainId }: { chainId: number }) {
       setSelectedContactAddress(null);
       setVerbethClient(null);
     },
-  });
-
-  // useSessionSetup receives state from useInitIdentity
-  const {
-    sessionSignerBalance,
-    refreshSessionBalance,
-    setupSession,
-  } = useSessionSetup({
-    walletClient,
-    address,
-    safeAddr,
-    sessionSignerAddr,
-    chainId,
-    readProvider,
-    isSafeDeployed,
-    isModuleEnabled,
-    setIsSafeDeployed,
-    setIsModuleEnabled,
-    setNeedsSessionSetup,
-    executionMode,
   });
 
   // ===========================================================================
@@ -273,13 +237,9 @@ function AppContent({ chainId }: { chainId: number }) {
         isOpen={isPanelOpen}
         onClose={() => setIsPanelOpen(false)}
         identityKeyPair={identityKeyPair}
-        executionMode={executionMode}
-        sessionSignerAddr={sessionSignerAddr}
-        sessionSignerBalance={sessionSignerBalance}
         pendingHandshakes={pendingHandshakes}
         onAcceptHandshake={acceptHandshake}
         onRejectHandshake={removePendingHandshake}
-        safeAddr={safeAddr}
         canLoadMore={canLoadMore}
         isLoadingMore={isLoadingMore}
         backfillCooldown={backfillCooldown}
@@ -294,30 +254,12 @@ function AppContent({ chainId }: { chainId: number }) {
         <div className="flex-1 min-h-0 flex flex-col">
           <div className="flex-1 min-h-0 flex flex-col">
 
-            {/* Session Setup Prompt - show when wallet connected but session not ready */}
-            {isConnected && sessionSignerAddr && !needsIdentityCreation && (needsSessionSetup || (sessionSignerBalance !== null && sessionSignerBalance < BigInt(0.0001 * 1e18))) && (
-              <SessionSetupPrompt
-                sessionSignerAddr={sessionSignerAddr}
-                sessionSignerBalance={sessionSignerBalance}
-                needsSessionSetup={needsSessionSetup}
-                isSafeDeployed={isSafeDeployed}
-                isModuleEnabled={isModuleEnabled}
-                onSetupSession={setupSession}
-                onRefreshBalance={refreshSessionBalance}
-                loading={loading}
-              />
-            )}
-
-            {(needsIdentityCreation || needsModeSelection) ? (
+            {needsIdentityCreation ? (
               <IdentityCreation
                 loading={loading}
                 onCreateIdentity={createIdentity}
                 address={address ?? ''}
                 signingStep={signingStep}
-                needsModeSelection={needsModeSelection}
-                fastModeAvailable={fastModeAvailable}
-                fastModeUnavailableReason={fastModeUnavailableReason}
-                chainId={chainId}
               />
             ) : showHandshakeForm ? (
               <>

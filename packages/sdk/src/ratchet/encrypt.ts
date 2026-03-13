@@ -13,6 +13,7 @@
 import nacl from 'tweetnacl';
 import { RatchetSession, MessageHeader, EncryptResult } from './types.js';
 import { kdfChainKey } from './kdf.js';
+import { padPlaintext } from './padding.js';
 
 /**
  * Encode message header as 40 bytes for signing.
@@ -54,9 +55,12 @@ export function ratchetEncrypt(
     n: session.sendingMsgNumber,
   };
 
-  // 3. Encrypt with message key using XSalsa20-Poly1305
+  // 3. Pad plaintext and encrypt with message key using XSalsa20-Poly1305
+  const padded = padPlaintext(plaintext);
   const nonce = nacl.randomBytes(nacl.secretbox.nonceLength); // 24 bytes
-  const ciphertext = nacl.secretbox(plaintext, nonce, messageKey);
+  const ciphertext = nacl.secretbox(padded, nonce, messageKey);
+  // Wipe padded buffer after encryption
+  try { padded.fill(0); } catch {}
 
   // 4. Combine nonce + ciphertext
   const encryptedPayload = new Uint8Array(nonce.length + ciphertext.length);

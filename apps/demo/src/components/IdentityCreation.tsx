@@ -1,18 +1,10 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { ExecutionMode } from '../types.js';
-import { useState } from 'react';
-
 
 interface IdentityCreationProps {
     loading: boolean;
-    onCreateIdentity: (mode: ExecutionMode) => void;
-    onImportIdentity?: () => void;
+    onCreateIdentity: () => void;
     address: string;
     signingStep?: 1 | 2 | null;
-    needsModeSelection: boolean;
-    fastModeAvailable: boolean;
-    fastModeUnavailableReason?: string;
-    chainId: number;
 }
 
 function Spinner() {
@@ -100,87 +92,12 @@ function StepIndicator({ step }: { step: 1 | 2 }) {
     );
 }
 
-function ModeCard({
-    mode,
-    title,
-    description,
-    details,
-    recommended,
-    disabled,
-    disabledReason,
-    comingSoon,
-    onClick,
-}: {
-    mode: ExecutionMode;
-    title: string;
-    description: string;
-    details: string[];
-    recommended?: boolean;
-    disabled?: boolean;
-    disabledReason?: string;
-    comingSoon?: boolean;
-    onClick: () => void;
-}) {
-    return (
-        <button
-            onClick={onClick}
-            disabled={disabled || comingSoon}
-            className={`w-full text-left p-4 rounded-lg border transition-all ${
-                disabled || comingSoon
-                    ? 'border-gray-700 bg-gray-800/50 opacity-60 cursor-not-allowed'
-                    : 'border-gray-700 hover:border-blue-500 hover:bg-gray-800'
-            }`}
-        >
-            <div className="flex items-center gap-2 mb-2">
-                <span className="font-semibold text-white">{title}</span>
-                {recommended && (
-                    <span className="text-xs px-2 py-0.5 bg-blue-600 rounded-full">
-                        Recommended
-                    </span>
-                )}
-                {comingSoon && (
-                    <span className="text-xs px-2 py-0.5 bg-gray-600 rounded-full">
-                        Coming Soon
-                    </span>
-                )}
-            </div>
-            <p className="text-sm text-gray-400 mb-2">{description}</p>
-            <ul className="text-xs text-gray-500 space-y-1">
-                {details.map((detail, i) => (
-                    <li key={i}>• {detail}</li>
-                ))}
-            </ul>
-            {disabledReason && (
-                <p className="text-xs text-yellow-500 mt-2">{disabledReason}</p>
-            )}
-        </button>
-    );
-}
-
 export function IdentityCreation({
     loading,
     onCreateIdentity,
-    onImportIdentity,
     address,
     signingStep,
-    needsModeSelection,
-    fastModeAvailable,
-    fastModeUnavailableReason,
-    chainId,
 }: IdentityCreationProps) {
-    //Track selected mode locally before identity creation starts
-    const [selectedMode, setSelectedMode] = useState<ExecutionMode | null>(null);
-
-    const handleModeSelect = (mode: ExecutionMode) => {
-        setSelectedMode(mode);
-    };
-
-    const handleCreateIdentity = () => {
-        if (selectedMode) {
-            onCreateIdentity(selectedMode);
-        }
-    };
-
     return (
         <div className="flex items-center justify-center min-h-[60vh]">
             <div className="border border-gray-800 rounded-lg p-8 w-full max-w-md">
@@ -196,125 +113,24 @@ export function IdentityCreation({
                             : "Not connected"}
                     </p>
                     <h2 className="text-2xl font-semibold mb-2">
-                        {needsModeSelection && !selectedMode
-                            ? "Choose Your Experience"
-                            : "Create Your Identity"}
+                        Create Your Identity
                     </h2>
                 </div>
 
-                {/* Mode Selection (before identity creation) */}
-                {needsModeSelection && !selectedMode && !signingStep && (
-                    <div className="space-y-3 mb-6">
-                        <ModeCard
-                            mode="fast"
-                            title="⚡ Fast Mode"
-                            description="No wallet popups after setup"
-                            details={[
-                                "One-time setup transaction",
-                                "Fund session signer (~0.001 ETH)",
-                                "All future messages are instant",
-                            ]}
-                            recommended={fastModeAvailable}
-                            disabled={!fastModeAvailable}
-                            disabledReason={!fastModeAvailable ? (fastModeUnavailableReason ?? `Helper not deployed on chain ${chainId}`) : undefined}
-                            onClick={() => handleModeSelect('fast')}
-                        />
-
-                        <ModeCard
-                            mode="classic"
-                            title="🔐 Classic Mode"
-                            description="Simple & minimal"
-                            details={[
-                                "No setup required",
-                                "No funding required",
-                                "Each message requires wallet confirmation",
-                            ]}
-                            onClick={() => handleModeSelect('classic')}
-                        />
-
-                        <ModeCard
-                            mode="custom"
-                            title="⚙️ Custom Mode"
-                            description="Use your existing Safe"
-                            details={[
-                                "Import any Safe you control (1/1 threshold)",
-                                "On-chain verification of requirements",
-                            ]}
-                            comingSoon
-                            onClick={() => {}}
-                        />
-                    </div>
-                )}
-
-                {/* Mode selected badge */}
-                {selectedMode && !signingStep && (
-                    <div className="mb-4 flex items-center justify-between">
-                        <span className={`px-3 py-1 rounded-full text-sm ${
-                            selectedMode === 'fast' ? 'bg-blue-900 text-blue-200' : 'bg-gray-700 text-gray-300'
-                        }`}>
-                            {selectedMode === 'fast' ? '⚡ Fast Mode' : '🔐 Classic Mode'}
-                        </span>
-                        <button
-                            onClick={() => setSelectedMode(null)}
-                            className="text-xs text-gray-500 hover:text-gray-300"
-                        >
-                            Change
-                        </button>
-                    </div>
-                )}
-
-                {/* Create Identity button (after mode selection) */}
-                {selectedMode && (
+                {!signingStep && (
                     <div className="space-y-4">
                         <button
-                            onClick={handleCreateIdentity}
+                            onClick={onCreateIdentity}
                             disabled={loading}
                             className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
                         >
                             {loading ? "Creating..." : "Create Identity"}
                         </button>
 
-                        {/* Mode-specific info */}
-                        <div className="text-xs text-gray-500 text-center">
-                            {selectedMode === 'classic' ? (
-                                <p>
-                                    You'll sign two messages to derive your identity keys.
-                                    Each future message will require wallet confirmation.
-                                </p>
-                            ) : (
-                                <p>
-                                    You'll sign two messages to derive your identity keys.
-                                    After a one-time setup, messages are sent without popups.
-                                </p>
-                            )}
-                        </div>
-                    </div>
-                )}
-
-                {/* Back to mode selection if not started */}
-                {!needsModeSelection && !selectedMode && !signingStep && (
-                    <div className="space-y-4">
-                        <button
-                            onClick={() => onCreateIdentity('fast')}
-                            disabled={loading || !fastModeAvailable}
-                            className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
-                        >
-                            {loading ? "Creating..." : "Create New"}
-                        </button>
-
-                        <button
-                            onClick={onImportIdentity}
-                            disabled={true}
-                            className="w-full px-4 py-3 bg-gray-600 cursor-not-allowed rounded font-medium opacity-50"
-                        >
-                            Import Previous Identity (Coming Soon)
-                        </button>
-
                         <div className="text-xs text-gray-500 text-center">
                             <p>
-                                You will be asked to sign two messages.
-                                The first signature deterministically derives your identity keys.
-                                The second signature creates an Identity Proof.
+                                You'll sign two messages to derive your identity keys.
+                                Each message requires wallet confirmation.
                             </p>
                         </div>
                     </div>

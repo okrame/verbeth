@@ -3,7 +3,7 @@ import { useAccount, useDisconnect, useConnect, useBalance, type Connector } fro
 import { motion, AnimatePresence } from 'framer-motion';
 import { CopyIcon, CheckIcon, PowerIcon, ChevronLeftIcon } from 'lucide-react';
 import type { IdentityKeyPair } from '@verbeth/sdk';
-import type { ExecutionMode, PendingHandshake, SyncProgress } from '../types.js';
+import type { PendingHandshake, SyncProgress } from '../types.js';
 import { AddressAvatar } from './AddressAvatar.js';
 import { HistoryScanner } from './HistoryScanner.js';
 
@@ -35,13 +35,9 @@ interface WalletPanelProps {
   isOpen: boolean;
   onClose: () => void;
   identityKeyPair: IdentityKeyPair | null;
-  executionMode: ExecutionMode | null;
-  sessionSignerAddr: string | null;
-  sessionSignerBalance: bigint | null;
   pendingHandshakes: PendingHandshake[];
   onAcceptHandshake: (h: PendingHandshake, msg: string) => void;
   onRejectHandshake: (id: string) => void;
-  safeAddr?: string | null;
   // History scanner
   canLoadMore: boolean;
   isLoadingMore: boolean;
@@ -83,13 +79,9 @@ export function WalletPanel({
   isOpen,
   onClose,
   identityKeyPair,
-  executionMode,
-  sessionSignerAddr,
-  sessionSignerBalance,
   pendingHandshakes,
   onAcceptHandshake,
   onRejectHandshake,
-  safeAddr,
   canLoadMore,
   isLoadingMore,
   backfillCooldown,
@@ -108,8 +100,6 @@ export function WalletPanel({
   const powerRef = useRef<HTMLDivElement>(null);
   const addrCopy = useCopied();
   const pubkeyCopy = useCopied();
-  const safeCopy = useCopied();
-  const signerCopy = useCopied();
 
   // Reset view when panel closes
   useEffect(() => {
@@ -151,7 +141,6 @@ export function WalletPanel({
     return eth < 0.0001 ? '<0.0001' : eth.toFixed(4);
   };
 
-  const showSession = (executionMode === 'fast' || executionMode === 'custom') && sessionSignerAddr;
   const showHistoryScanner = !!address && !!identityKeyPair;
 
   return (
@@ -258,39 +247,6 @@ export function WalletPanel({
                             }
                           </button>
                         </div>
-                        {safeAddr && (
-                          <div>
-                            <div className="text-[10px] text-gray-500 uppercase tracking-wide mb-1">Executor (safe)</div>
-                            <button
-                              onClick={() => safeCopy.copy(safeAddr)}
-                              className="group flex items-center gap-1.5 text-xs font-mono text-gray-300 hover:text-white transition-colors"
-                            >
-                              <span>{safeAddr.slice(0, 6)}...{safeAddr.slice(-4)}</span>
-                              {safeCopy.copied
-                                ? <CheckIcon size={12} className="text-green-400 shrink-0" />
-                                : <CopyIcon size={12} className="text-gray-500 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
-                              }
-                            </button>
-                          </div>
-                        )}
-                        {showSession && sessionSignerAddr && (
-                          <div>
-                            <div className="text-[10px] text-gray-500 uppercase tracking-wide mb-1">Session signer</div>
-                            <button
-                              onClick={() => signerCopy.copy(sessionSignerAddr)}
-                              className="group flex items-center gap-1.5 text-xs font-mono text-gray-300 hover:text-white transition-colors"
-                            >
-                              <span>{sessionSignerAddr.slice(0, 6)}...{sessionSignerAddr.slice(-4)}</span>
-                              {signerCopy.copied
-                                ? <CheckIcon size={12} className="text-green-400 shrink-0" />
-                                : <CopyIcon size={12} className="text-gray-500 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
-                              }
-                            </button>
-                            {sessionSignerBalance !== null && (
-                              <div className="text-xs text-gray-500 mt-0.5">{formatBalance(sessionSignerBalance)} ETH</div>
-                            )}
-                          </div>
-                        )}
                       </div>
                     </>
                   )}

@@ -1,6 +1,7 @@
 // tests/handshaking.test.ts
 // Integration tests for Smart Account handshaking via VerbethClient
 import { expect, describe, it, beforeAll, afterAll, beforeEach } from "vitest";
+import nacl from "tweetnacl";
 import {
   JsonRpcProvider,
   Wallet,
@@ -374,9 +375,16 @@ describe("Smart Account Handshake Response via Direct EntryPoint", () => {
   }, 60000);
 
   it("should fail gracefully when responding to non-existent handshake", async () => {
-    // Use a random ephemeral key — contract doesn't validate handshake existence
+    // Use a random ephemeral key with KEM — contract doesn't validate handshake existence
+    // Must include KEM public key (32 + 1184 = 1216 bytes) for PQ-hybrid requirement
+    const fakeEphemeral = nacl.box.keyPair();
+    const fakeKem = kem.generateKeyPair();
+    const fakeExtendedKey = new Uint8Array(32 + kem.publicKeyBytes);
+    fakeExtendedKey.set(fakeEphemeral.publicKey, 0);
+    fakeExtendedKey.set(fakeKem.publicKey, 32);
+
     const acceptResult = await responderClient.acceptHandshake(
-      ownerIdentityKeys.keyPair.publicKey,
+      fakeExtendedKey,
       "Response to non-existent handshake"
     );
 

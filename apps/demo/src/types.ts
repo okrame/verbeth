@@ -14,21 +14,6 @@ export const BACKFILL_COOLDOWN_MS       = 3_000;
 export const ACCUMULATION_INTERVAL_MS   = 4_000;
 export const FALLBACK_POLL_INTERVAL_MS  = 5_000;
 
-export const SAFE_MODULE_ADDRESS = (
-  import.meta.env.VITE_SAFE_SESSION_MODULE as `0x${string}` | undefined
-)?.trim();
-
-export function hasSafeModuleAddress(): boolean {
-  return Boolean(SAFE_MODULE_ADDRESS);
-}
-
-export function getSafeModuleAddressOrThrow(): `0x${string}` {
-  if (!SAFE_MODULE_ADDRESS) {
-    throw new Error("[verbeth] Missing VITE_SAFE_SESSION_MODULE");
-  }
-  return SAFE_MODULE_ADDRESS as `0x${string}`;
-}
-
 /* --------------------------- EVENT SIGNATURES ---------------------------- */
 export const EVENT_SIGNATURES = {
   MessageSent: keccak256(
@@ -104,7 +89,7 @@ export interface PendingHandshake {
   previousConversationId?: string;
 }
 
-export type ExecutionMode = 'classic' | 'fast' | 'custom';
+export type ExecutionMode = 'classic';
 
 export interface StoredIdentity {
   address: string;
@@ -148,8 +133,8 @@ export interface StoredRatchetSession {
   topicEpoch: number;
 
   // === Stealth ===
-  stealthRootKey: string;
-  stealthChainKey: string;
+  stealthRootKey?: string;
+  stealthChainKey?: string;
 }
 
 export interface StoredSkippedKey {
@@ -295,9 +280,9 @@ export function serializeRatchetSession(session: SDKRatchetSession): StoredRatch
     previousTopicExpiry: session.previousTopicExpiry,
     topicEpoch: session.topicEpoch,
 
-    // Stealth
-    stealthRootKey: hexlify(session.stealthRootKey),
-    stealthChainKey: hexlify(session.stealthChainKey),
+    // Stealth (optional — not present in current SDK)
+    stealthRootKey: "stealthRootKey" in session && session.stealthRootKey ? hexlify(session.stealthRootKey as Uint8Array) : undefined,
+    stealthChainKey: "stealthChainKey" in session && session.stealthChainKey ? hexlify(session.stealthChainKey as Uint8Array) : undefined,
   };
 }
 
@@ -344,7 +329,7 @@ export function deserializeRatchetSession(stored: StoredRatchetSession): SDKRatc
     topicEpoch: stored.topicEpoch,
 
     // Stealth
-    stealthRootKey: getBytes(stored.stealthRootKey),
-    stealthChainKey: getBytes(stored.stealthChainKey),
+    ...(stored.stealthRootKey ? { stealthRootKey: getBytes(stored.stealthRootKey) } : {}),
+    ...(stored.stealthChainKey ? { stealthChainKey: getBytes(stored.stealthChainKey) } : {}),
   };
 }

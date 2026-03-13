@@ -22,6 +22,7 @@ import {
   TOPIC_TRANSITION_WINDOW_MS,
 } from './types.js';
 import { kdfRootKey, kdfChainKey, dh, generateDHKeyPair, deriveTopic } from './kdf.js';
+import { unpadPlaintext } from './padding.js';
 
 /**
  * Decrypt a message using the ratchet.
@@ -99,7 +100,13 @@ export function ratchetDecrypt(
     return null;
   }
 
-  // 8. Update session state
+  // 8. Unpad plaintext
+  const unpadded = unpadPlaintext(plaintext);
+  if (!unpadded) {
+    return null;
+  }
+
+  // 9. Update session state
   newSession = {
     ...newSession,
     receivingChainKey: newReceivingChainKey,
@@ -109,7 +116,7 @@ export function ratchetDecrypt(
 
   return {
     session: newSession,
-    plaintext,
+    plaintext: unpadded,
   };
 }
 
@@ -236,6 +243,11 @@ function trySkippedKeys(
     return null;
   }
 
+  const unpadded = unpadPlaintext(plaintext);
+  if (!unpadded) {
+    return null;
+  }
+
   const newSkippedKeys = [...session.skippedKeys];
   newSkippedKeys.splice(idx, 1);
 
@@ -251,7 +263,7 @@ function trySkippedKeys(
       skippedKeys: newSkippedKeys,
       updatedAt: Date.now(),
     },
-    plaintext,
+    plaintext: unpadded,
   };
 }
 
