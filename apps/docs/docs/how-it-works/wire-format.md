@@ -1,9 +1,9 @@
 ---
 sidebar_position: 1
-title: Wire Format
+title: Wire Format (wip)
 ---
 
-# Wire Format (WIP...)
+# Wire Format (PAGE WIP...)
 
 This page describes how ratchet messages are packed into bytes for on-chain submission, and how recipients process them.
 

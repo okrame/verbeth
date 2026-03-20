@@ -1,9 +1,9 @@
 ---
 sidebar_position: 3
-title: Ratchet Internals
+title: Ratchet Internals (wip)
 ---
 
-# Ratchet Internals (WIP...)
+# Ratchet Internals (PAGE WIP...)
 
 Implementation details of the Double Ratchet. For the conceptual overview, see [Double Ratchet](../concepts/ratchet/double-ratchet.md).
 
