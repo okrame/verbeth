@@ -54,6 +54,14 @@ This is an honest limitation shared by all major double-ratchet protocols today.
 For how PQ security compares across protocols, see [here](../handshake.md#other-pq-secure-handshake-protocols).
 
 
+### Symmetric Encryption: XSalsa20-Poly1305
+
+After each ratchet step, the derived message key is used to encrypt the payload with XSalsa20-Poly1305 (`nacl.secretbox`). The message key is 32 bytes (256-bit), produced by HMAC-SHA256 over the current chain key.
+
+XSalsa20-Poly1305 is post-quantum safe for symmetric encryption. Grover's algorithm, the most relevant quantum attack against symmetric ciphers, provides at most a quadratic speedup, reducing the effective key strength from 256 to 128 bits. 128-bit post-quantum security is above the accepted security threshold.
+
+This means that even if a future quantum adversary records ciphertext today, they cannot brute-force message keys derived from the ratchet chain, the symmetric layer remains secure regardless of quantum advances.
+
 ### Limitations recap
 
 - After the hybrid handshake, ongoing ratchet re-keying uses X25519 only. So Verbeth stays HNDL-resistant against passive recording, because later keys still descend from the original PQ-secure root key. But it does not provide full post-quantum PCS after a live state compromise, since recovery would rely on new X25519 ratchet steps rather than a fresh PQ exchange.  
