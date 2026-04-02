@@ -45,7 +45,7 @@ For a deeper analysis of forward secrecy, post-compromise security, and post-qua
 
 <sup>1</sup> A planned **Contact KEM** integration will allow recipients to publish ML-KEM keys on-chain, enabling hybrid-encrypted first-message payloads. Under the hood the 2-step handshake flow remains unchanged, but first contact will be protected, hence simulating an offline initiation.
 
-<sup>2</sup> Only ephemeral keys participate in key derivation: `SK = KDF(DH(EKa, EKb) || KEM_SS)`. Even if all long-term keys are later compromised, past sessions are unrecoverable because both ephemeral secrets were deleted after use. (Differently, in Signal, if both Bob's identity key and signed prekey are compromised, all sessions established under that prekey are recoverable, and althogh this is mitigated via prekey rotation, there is always an active window.)
+<sup>2</sup> Only ephemeral keys participate in key derivation: `SK = KDF(DH(EKa, EKb) || KEM_SS)`. Even if all long-term keys are later compromised, past sessions are unrecoverable because both ephemeral secrets were deleted after use. (Differently, in Signal, if both Bob's identity key and signed prekey are compromised, all sessions established under that prekey are recoverable, and although this is mitigated via prekey rotation, there is always an active window.)
 
 
 
@@ -53,4 +53,4 @@ For a deeper analysis of forward secrecy, post-compromise security, and post-qua
 
 - [Protocol Flow](../how-it-works/protocol-flow.md) — the full step-by-step exchange, on-chain events, and code
 - [Double Ratchet](./ratchet/double-ratchet.md) — what happens after the handshake
-- [Wire Format](../how-it-works/wire-format.md) — how messages are encoded on-chain
+- [Wire Formats](../how-it-works/wire-formats.md) — how messages are encoded on-chain

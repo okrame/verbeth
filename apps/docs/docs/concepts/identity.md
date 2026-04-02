@@ -5,7 +5,7 @@ title: Identity
 
 # Identity
 
-In decentralized systems, identity is not as straightforward as it may seem. On blockchains, users are represented by addresses, but messaging protocols rely on encryption and signing keys that may exist indipendently.  
+In decentralized systems, identity is not as straightforward as it may seem. On blockchains, users are represented by addresses, but messaging protocols rely on encryption and signing keys that may exist independently.  
 
 Verbeth binds cryptographic messaging keys to Ethereum addresses. A single wallet signature produces all keys, and a signed proof ties them to your address.
 
@@ -57,10 +57,11 @@ A single wallet signature seeds the entire key hierarchy:
  *  The X25519 identity key is a stable, long-term public key bound to the EOA.
     The double ratchet uses ephemeral keys for forward secrecy, 
     but this key serves as part of the published identity (like a prekey) 
-    for initial key agreement, session reset re-encryption, and any protocol 
-    extension needing an address-bound X25519 key.
+    for future contact key discovery, session reset re-encryption, and any 
+    protocol extension needing an address-bound X25519 key.
  ** The session key is always derived but only used by apps that delegate
-   transactions to a Safe module (e.g. gasless messaging).
+   transactions to a Safe module. The session signer submits a normal 
+   transaction and pays gas, or a relay service can sponsor it.
 ```
 
 Properties:
@@ -162,4 +163,4 @@ signature = Ed25519.sign_detached(header ‖ ciphertext, ed25519_secret_key)
 
 The recipient independently reconstructs the signed blob from the header and ciphertext, then verifies.
 
-See [Wire Format](../how-it-works/wire-format.md) for the full binary layout and verification order.
+See [Wire Formats](../how-it-works/wire-formats.md) for the full binary layout and verification order.

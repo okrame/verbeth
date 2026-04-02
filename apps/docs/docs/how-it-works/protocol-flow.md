@@ -1,124 +1,132 @@
 ---
-sidebar_position: 2
-title: Protocol Flow (wip)
+sidebar_position: 1
+title: Protocol Flow
 ---
 
-# Protocol Flow (PAGE WIP...)
+# Protocol Flow
 
-This page details the full handshake exchange — the sequence of on-chain events, cryptographic operations, and key derivations that establish an encrypted channel. For the conceptual overview, see [Handshake](../concepts/handshake.md).
+This page walks through the full handshake exchange and the post-handshake messaging lifecycle, including how topics evolve across ratchet epochs. 
 
-## Handshake Sequence
+## Handshake sequence
+
+The [handshake](../concepts/handshake.md) turns two strangers into a pair sharing a post-quantum root key. Everything happens through two on-chain events.
 
 ```
-Alice (Initiator)                              Bob (Responder)
-─────────────────                              ───────────────
+Alice (Initiator)                                    Bob (Responder)
+─────────────────                                    ───────────────
 
 1. Generate ephemeral X25519 keypair (a, A)
 2. Generate ML-KEM-768 keypair (kemPk, kemSk)
-3. Create identity proof
+3. Create identity binding proof (ECDSA)
 
-        ─────── Handshake Event ───────►
-        │ recipientHash: H(bob_addr)    │
-        │ ephemeralPubKey: A            │
-        │ kemPublicKey: kemPk           │
-        │ identityProof: {...}          │
-        └───────────────────────────────┘
+        ──────────── Handshake event ────────────►
+        │ recipientHash: keccak256("contact:" + bob) 
+        │ pubKeys: [0x01 ‖ X25519_id ‖ Ed25519_id]    
+        │ ephemeralPubKey: [A ‖ kemPk]  (1216 bytes)   
+        │ plaintextPayload: { plaintextPayload, identityProof }
+        └─────────────────────────────────────────
 
-                                        4. Generate ephemeral keypair (r, R)
-                                        5. Compute X25519: x_ss = ECDH(r, A)
-                                        6. Encapsulate KEM: (ct, kem_ss) = Encap(kemPk)
-                                        7. Compute hybrid tag:
-                                           tag = HKDF(x_ss || kem_ss, "verbeth:hsr-hybrid:v1")
-                                        8. Encrypt response to A
+                                          4. Generate tag keypair (r, R)
+                                          5. Generate ratchet keypair (rk_s, rk_p)
+                                          6. ECDH: x_ss = DH(r, A)
+                                          7. KEM encapsulate: (ct, kem_ss) = Encap(kemPk)
+                                          8. Compute hybrid tag from x_ss and kem_ss
+                                          9. Encrypt response payload to A using rk_s
 
-        ◄───── HandshakeResponse ──────
-        │ inResponseTo: tag             │
-        │ responderEphemeralR: R        │
-        │ ciphertext: Enc(A, response)  │
-        └───────────────────────────────┘
+        ◄────────── HandshakeResponse event ──────────
+        │ inResponseTo: hybrid_tag                      
+        │ responderEphemeralR: R  (tag pubkey, not rk_p)
+        │ ciphertext: NaCl.box(response, A, rk_s)       
+        └─────────────────────────────────────────────
 
-9. Decrypt response, extract R, ct
-10. Compute X25519: x_ss = ECDH(a, R)
-11. Decapsulate KEM: kem_ss = Decap(ct, kemSk)
-12. Verify tag matches
-13. Derive root key from hybrid secret
+10. Decrypt response, extract rk_p and ct
+11. ECDH: x_ss = DH(a, R)
+12. KEM decapsulate: kem_ss = Decap(ct, kemSk)
+13. Verify hybrid tag matches inResponseTo
+14. Derive hybrid root key from x_ss ‖ kem_ss
 
-        ═══════ Channel Established ═══════
+        ═══════════ Channel established ═══════════
 ```
 
-## Hybrid Tag Computation
+### Two keypairs in the response
 
-The `inResponseTo` tag links a response to its handshake using the hybrid secret. This prevents on-chain observers from correlating the two events:
+The responder generates two separate X25519 keypairs. The tag keypair `(r, R)` is used only for the hybrid tag computation. `R` goes on-chain as `responderEphemeralR`. The ratchet keypair `(rk_s, rk_p)` goes inside the encrypted payload and becomes the first DH key in the double ratchet session.
 
-```typescript
-function computeHybridTag(
-  ecdhSecret: Uint8Array,  // X25519 shared secret
-  kemSecret: Uint8Array    // ML-KEM shared secret
-): `0x${string}` {
-  const okm = hkdf(sha256, kemSecret, ecdhSecret, "verbeth:hsr-hybrid:v1", 32);
-  return keccak256(okm);
-}
+This separation matters because without it, the on-chain `R` would equal the first message's DH header key, allowing an observer to link the `HandshakeResponse` to the subsequent conversation.
+
+>**Hybrid tag computation**:
+The `inResponseTo` tag combines both classical and post-quantum shared secrets so that neither a classical nor a quantum adversary can link the response to its handshake. The computation in `crypto.ts` works as follows.
+
+```
+ecdhShared  = X25519(r, A)
+okm         = HKDF-SHA256(ikm=kemSecret, salt=ecdhShared, info="verbeth:hsr-hybrid:v1", len=32)
+tag         = keccak256(okm)
 ```
 
-Observers cannot link `HandshakeResponse` to its `Handshake` without the shared secrets. See [Metadata Privacy](../concepts/security/metadata-privacy.md#handshake-response-unlinkability) for detailed analysis against classical and quantum adversaries.
+The initiator repeats this with their own private key `a` and the on-chain `R` to verify the match. Without both secrets, the tag is computationally indistinguishable from random. See [Metadata Privacy](../concepts/security/metadata-privacy.md#handshake-response-unlinkability) for the full threat analysis.
 
-## Root Key Derivation
 
-The initial root key for the [Double Ratchet](../concepts/ratchet/double-ratchet.md) combines both secrets:
+### Root key derivation
 
-```typescript
-function hybridInitialSecret(
-  x25519Secret: Uint8Array,
-  kemSecret: Uint8Array
-): Uint8Array {
-  const combined = concat([x25519Secret, kemSecret]);
-  return hkdf(sha256, combined, zeros(32), "VerbethHybrid", 32);
-}
+Once both parties hold the X25519 shared secret and the ML-KEM shared secret, they combine them into a single hybrid root key (see `ratchet/kdf.ts`).
+
+```
+combined    = x25519Secret ‖ kemSecret
+hybridRoot  = HKDF-SHA256(ikm=combined, salt=zeros(32), info="VerbethHybrid", len=32)
 ```
 
-This root key is post-quantum secure. All subsequent ratchet keys derive from it, propagating PQ security through the entire conversation.
+All subsequent ratchet keys descend from this root. Because it incorporates ML-KEM, the entire session is post-quantum secure from message zero. See [Ratcheting](./ratcheting.md) for the formal derivation chain.
 
-## On-Chain Events
+## Session bootstrapping
 
-### Handshake Event
+The initiator and responder initialize their ratchet sessions differently (see `ratchet/session.ts`).
 
-```solidity
-event Handshake(
-  bytes32 indexed recipientHash,
-  address indexed sender,
-  bytes ephemeralPubKey,    // 32 bytes X25519
-  bytes kemPublicKey,       // 1184 bytes ML-KEM-768
-  bytes plaintextPayload    // Identity proof + note
-);
+**Responder (Bob)** computes `DH(rk_s, A)` and derives `(RK_0, CK_0_send)` from the hybrid root key. Bob can send immediately but has no receiving chain yet. That gets established when Alice's first message arrives carrying a new DH public key.
+
+**Initiator (Alice)** derives the same `(RK_0, CK_0)` that Bob did, then immediately performs one DH ratchet step. Alice generates a fresh keypair, computes `DH(sk_1, rk_p)`, and derives `(RK_1, CK_1_send)`. She sets `CK_0` as her receiving chain key so she can decrypt Bob's messages right away. Alice also pre-computes epoch 1 topics at this point (see `session.ts`), so she already knows where to listen before any message is sent.
+
+## Post-handshake messaging and topic lifecycle
+
+After the handshake, messages flow through ratchet topics. Topics are bytes32 values derived from the root key and DH output at each ratchet step, and they serve as the on-chain address of the conversation (see [Topic Ratcheting](../concepts/ratchet/topic-ratcheting.md) for the rationale).
+
+The topic lifecycle is more nuanced than "topics change at every DH ratchet step." It involves pre-computation, promotion, grace windows, and convergence.
+
+```
+Epoch 0 (handshake)              Epoch 1 (Alice sends)            Epoch 2 (Bob sends)
+───────────────────              ─────────────────────            ────────────────────
+
+Alice inits session:             Alice's first message:           Bob receives, ratchets:
+ currentTopic = epoch0           emitted on epoch0 topic          sees new DH key from Alice
+ nextTopic = epoch1 (precomp)    (outbound not yet promoted)      computes epoch2 topics
+                                                                  promotes epoch1 → current
+Bob inits session:               Bob receives:                    retains epoch1 as previous
+ currentTopic = epoch0           message arrives on epoch0        (5 min grace window)
+ nextTopic = none                or possibly on pre-computed
+                                 nextTopic if timing overlaps
 ```
 
-### HandshakeResponse Event
+>The diagram above shows the typical flow where Alice sends first, but this ordering is not required as shown [here](./ratcheting.md#initiator-vs-responder-asymmetry).
 
-```solidity
-event HandshakeResponse(
-  bytes32 indexed inResponseTo,  // Hybrid tag
-  address indexed responder,
-  bytes responderEphemeralR,     // 32 bytes X25519
-  bytes ciphertext               // Encrypted response (includes KEM ciphertext)
-);
+### How topic transitions work
+
+1. **Pre-computation.** When the initiator bootstraps, epoch 1 topics are already computed and stored as `nextTopicOutbound` / `nextTopicInbound` (see `session.ts`). During a DH ratchet step, the same happens for the next epoch (see `decrypt.ts`).
+
+2. **Promotion.** When a message arrives on `nextTopicInbound`, the `SessionManager` promotes it to `currentTopicInbound`. The old current topic moves to `previousTopicInbound`. See `SessionManager.ts`.
+
+3. **Grace window.** The previous inbound topic is retained with a `TOPIC_TRANSITION_WINDOW_MS` (5 minutes) expiry timestamp. This handles messages that were sent before the ratchet step but are still in the mempool or delayed by block reordering.
+
+4. **Convergence.** When the next DH ratchet step occurs, `previousTopicInbound` is overwritten with whatever was current at that point. The old previous topic is discarded. So at most three inbound topics are active at any time (current, next, previous).
+
+This is important for blockchain delivery because messages can arrive out of order across block boundaries. The combination of pre-computed next topics, a grace window for old topics, and the skip key mechanism (see [Ratcheting](./ratcheting.md)) ensures no legitimate messages are lost during topic transitions.
+
+### Message flow within an epoch
+
+Within a single DH epoch, all messages from the same sender share the same topic. The symmetric chain ratchet advances the chain key for each message, producing a unique message key every time. The on-chain event carries the sender address, topic, and the encrypted binary payload described in [Wire Formats](./wire-formats.md).
+
+```
+sender: 0xAlice
+topic:  epoch1_outbound
+payload: [version ‖ Ed25519_sig ‖ header{dh, pn, n} ‖ ciphertext]
 ```
 
-## Gas Considerations
-
-| Component | Size | Notes |
-|-----------|------|-------|
-| X25519 ephemeral | 32 bytes | Minimal |
-| ML-KEM public key | 1184 bytes | Dominates handshake cost |
-| ML-KEM ciphertext | 1088 bytes | In encrypted response |
-| Identity proof | ~500 bytes | Signature + message |
-
-Handshake initiation costs more due to the KEM public key. The response is encrypted, so the KEM ciphertext is hidden in the blob.
-
-## Executor Abstraction
-
-Handshake transactions can be sent via:
-
-- **EOA**: Direct wallet transaction
-- **Safe Module**: Session key authorized by Safe
-
-The identity proof's `ExecutorAddress` field specifies which address will send the transaction, enabling verification regardless of executor type.
+The recipient finds the message by filtering for their active inbound topics, verifies the Ed25519 signature over header and ciphertext, then feeds the header into the ratchet for decryption. If the header carries a new DH public key, a DH ratchet step is triggered, which advances the epoch and derives new topics.

@@ -35,3 +35,7 @@ ignition/deployments/chain-84532
 .vercel/
 /tests/scan-engine.test.ts
 /tests/scan-test-report.md
+
+
+#Ignore vscode AI rules
+.github/instructions/codacy.instructions.md

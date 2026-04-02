@@ -22,9 +22,9 @@ The algorithm combines two ratcheting mechanisms:
         v               v               v
     ┌────────┐      ┌────────┐      ┌────────┐
     | CK 0   |      | CK 0   |      | CK 0   |
-    |  → MK₀ |      |  → MK₀ |      |  → MK₀ |      <-- Symmetric chain ratchet
-    |  → MK₁ |      |  → MK₁ |      |  → MK₁ |          (per message)
-    |  → MK₂ |      |  → ... |      |  → ... |
+    |  → MK_0|      |  → MK_0|      |  → MK_0|      <-- Symmetric chain ratchet
+    |  → MK_1|      |  → MK_1|      |  → MK_1|          (per message)
+    |  → MK_2|      |  → ... |      |  → ... |
     └────────┘      └────────┘      └────────┘
 ```
 
@@ -55,7 +55,7 @@ Each ratchet session tracks:
 | `skippedKeys` | Stored keys for out-of-order messages |
 | Topic fields | Current, next, and previous topics per direction |
 
-**Session state must be persisted after every encrypt/decrypt operation.** Rolling back to stale state creates duplicate message keys and breaks security guarantees. See [Ratchet Internals](../../how-it-works/ratchet-internals.md) for the full TypeScript interface.
+**Session state must be persisted after every encrypt/decrypt operation.** Rolling back to stale state creates duplicate message keys and breaks security guarantees. See [Ratcheting](../../how-it-works/ratcheting.md) for the full TypeScript interface.
 
 ### Duplicate message replay
 
@@ -76,5 +76,5 @@ So, these bounds prevent DoS via malicious skip counts while tolerating real-wor
 ## Next steps
 
 - [Topic Ratcheting](./topic-ratcheting.md) -- how conversation topics evolve for metadata privacy
-- [Ratchet Internals](../../how-it-works/ratchet-internals.md) -- KDFs, code, full session state
-- [Wire Format](../../how-it-works/wire-format.md) -- binary layout of ratchet messages
+- [Ratcheting](../../how-it-works/ratcheting.md) -- KDFs, code, full session state
+- [Wire Formats](../../how-it-works/wire-formats.md) -- binary layout of ratchet messages

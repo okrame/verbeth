@@ -33,7 +33,7 @@ Vitalik Buterin proposed a simple litmus test for decentralized systems:
 
 Verbeth is designed toward passing this test. The reader of these docs can decide herself if this in fact the case.
 
-> To get all the nice [cryptographic guarantees](concepts/security/cryptographic-guarantees.md), ratchet sessions, pending messages, and contact metadata live in app-managed storage via [`SessionStore`](how-it-works/wire-format.md) and [`PendingStore`](how-it-works/wire-format.md) interfaces that each application implements. If an app disappears without exporting that state, the on-chain ciphertext is preserved but users lose the keys to decrypt it. This is because the protocol does not prescribe where you store your state, only that you must store it. 
+> To get all the nice [cryptographic guarantees](concepts/security/cryptographic-guarantees.md), ratchet sessions, pending messages, and contact metadata live in app-managed storage via [`SessionStore`](how-it-works/message-store.md#sessionstore) and [`PendingStore`](how-it-works/message-store.md#pendingstore) interfaces that each application implements. If an app disappears without exporting that state, the on-chain ciphertext is preserved but users lose the keys to decrypt it. This is because the protocol does not prescribe where you store your state, only that you must store it. 
 
 A companion question matters just as much: "If the original team wanted to interfere, could they stop the system from working or selectively prevent people from using it?"   
 Again, the answer is left to the readers. Suffice to say that Verbeth bets everything on [full-stack openness](https://vitalik.eth.limo/general/2025/09/24/openness_and_verifiability.html).
