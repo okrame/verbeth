@@ -41,9 +41,12 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       collapsible: true,
       items: [
-        'how-it-works/wire-format',
         'how-it-works/protocol-flow',
-        'how-it-works/ratchet-internals',
+        'how-it-works/ratcheting',
+        'how-it-works/verbeth-client',
+        'how-it-works/verbeth-contract',
+        'how-it-works/message-store',
+        'how-it-works/wire-formats',
       ],
     },
     {

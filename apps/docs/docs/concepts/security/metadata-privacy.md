@@ -27,7 +27,7 @@ Let's say 0x123 emits a `Handshake` whose `recipientHash` is `hash(0x789)`, and 
 
 **Against a quantum adversary**: A quantum computer could solve the X25519 DH from the public keys. But the tag derivation *also* requires the ML-KEM shared secret. The ML-KEM ciphertext is inside the encrypted response payload which cannot be decrypted without 0x123's ephemeral secret. So even a quantum adversary cannot link the handshake to its response.
 
-For the exact tag computation, see [Protocol Flow](../../how-it-works/protocol-flow.md#hybrid-tag-computation).
+For the exact tag computation, see [Protocol Flow](../../how-it-works/protocol-flow.md#two-keypairs-in-the-response).
 
 ## Handshake-to-Message Unlinkability
 
@@ -56,4 +56,8 @@ When you query for messages, the RPC sees which topics you subscribe to, when yo
 - **Decoy queries**: noise injection to obscure real interest patterns
 - **Query aggregation**: batching queries across multiple topics to reduce per-topic signal
 
-A future integration of [Labeled Private Set Intersection](../../roadmap/metadata-privacy-psi.md) will allow clients to query an untrusted indexer without revealing which topics or recipients they are interested in. The indexer sees only opaque, homomorphically encrypted queries, making topic-level correlation infeasible even for a fully malicious provider.
+A future integration of will allow clients to query an untrusted indexer without revealing which topics or recipients they are interested in. The indexer sees only opaque, homomorphically encrypted queries, making topic-level correlation infeasible even for a fully malicious provider.
+
+## Ciphertext Length Analysis
+
+On-chain ciphertext lengths are visible to everyone. Without mitigation, message length alone can reveal information (e.g. distinguishing a "yes" from a paragraph). See [here](../../how-it-works/ratcheting.md#ciphertext-padding) how Verbeth pads all plaintext into fixed-size buckets before encryption. 
