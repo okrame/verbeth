@@ -4,7 +4,7 @@ Hi all
 
 I have been working on a predraft for a post-quantum resistant encrypted messaging over EVM event logs and I wanted to share it early for feedback before trying to turn it into a formal ERC submission. Also, I want to gather opinions if this needs a standardization at all.
 
-[Public draft link goes here](PUBLIC_URL_HERE)
+[ERC pre-draft](./ERC-pre-draft.md)
 
 The goal is to standardize a small transport and wire format surface that independent clients can actually interoperate on, not to standardize indexing, notifications, storage, spam control, account abstraction UX or inbox behavior. Those concerns are left to frontend applications.
 

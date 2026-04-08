@@ -1,4 +1,5 @@
 ---
+
 title: Event-Log Encrypted Messaging
 description: A minimal application-layer standard for post-quantum-resistant encrypted messaging over EVM event logs.
 author: Marco (@okrame)
@@ -7,9 +8,8 @@ status: Draft
 type: Standards Track
 category: ERC
 created: 2026-04-08
----
 
-> Note: this document is a pre-draft working paper kept in the Verbeth repository.
+---
 
 ## Abstract
 
