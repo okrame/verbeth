@@ -3,7 +3,7 @@
 title: Event-Log Encrypted Messaging
 description: A minimal application-layer standard for post-quantum-resistant encrypted messaging over EVM event logs.
 author: Marco (@okrame)
-discussions-to:
+discussions-to: https://ethereum-magicians.org/t/hybrid-post-quantum-e2ee-messaging-over-evm-event-logs/28198
 status: Draft
 type: Standards Track
 category: ERC
