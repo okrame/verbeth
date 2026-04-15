@@ -30,7 +30,7 @@ ignition/deployments/chain-84532
 *apps/notes/
 .claudeignore
 *.claude/
-*.md
+/*.md
 *myplans
 .vercel/
 /tests/scan-engine.test.ts
