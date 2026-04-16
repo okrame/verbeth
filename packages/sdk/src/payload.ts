@@ -15,11 +15,29 @@ export interface HandshakeContent {
   identityProof: IdentityProof;  
 }
 
+function isIdentityProof(value: unknown): value is IdentityProof {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as IdentityProof).message === 'string' &&
+    typeof (value as IdentityProof).signature === 'string'
+  );
+}
+
+function isHandshakeContent(value: unknown): value is HandshakeContent {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as HandshakeContent).plaintextPayload === 'string' &&
+    isIdentityProof((value as HandshakeContent).identityProof)
+  );
+}
+
 export function parseHandshakePayload(plaintextPayload: string): HandshakeContent {
   try {
     const parsed = JSON.parse(plaintextPayload);
-    if (typeof parsed === 'object' && parsed.plaintextPayload && parsed.identityProof) {
-      return parsed as HandshakeContent;
+    if (isHandshakeContent(parsed)) {
+      return parsed;
     }
   } catch (e) {
   }

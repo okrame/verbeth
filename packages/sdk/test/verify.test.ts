@@ -2,9 +2,10 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { hexlify, getAddress } from "ethers";
-import { verifyIdentityProof } from "../src/verify.js";
+import { encodeUnifiedPubKeys } from "../src/payload.js";
+import { verifyHandshakeIdentity, verifyIdentityProof } from "../src/verify.js";
 import { parseBindingMessage } from "../src/utils.js";
-import type { IdentityProof, IdentityContext } from "../src/types.js";
+import type { HandshakeLog, IdentityProof, IdentityContext } from "../src/types.js";
 
 // Stub makeViemPublicClient so verifyIdentityProof uses our mock client
 vi.mock("../src/utils.js", async (importOriginal) => {
@@ -175,5 +176,33 @@ describe("verifyIdentityProof", () => {
       fakeProvider,
     );
     expect(result).toBe(false);
+  });
+});
+
+describe("verifyHandshakeIdentity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedMakeClient.mockResolvedValue({
+      verifyMessage: vi.fn().mockResolvedValue(true),
+    } as any);
+  });
+
+  it("accepts handshake payloads with an empty plaintextPayload", async () => {
+    const handshakePayload = JSON.stringify({
+      plaintextPayload: "",
+      identityProof: makeProof(),
+    });
+
+    const handshakeEvent: HandshakeLog = {
+      recipientHash: "0x" + "11".repeat(32),
+      sender: TEST_SAFE_ADDRESS,
+      pubKeys: hexlify(encodeUnifiedPubKeys(pkX25519, pkEd25519)),
+      ephemeralPubKey: "0x" + "22".repeat(32),
+      plaintextPayload: hexlify(new TextEncoder().encode(handshakePayload)),
+    };
+
+    const result = await verifyHandshakeIdentity(handshakeEvent, fakeProvider);
+
+    expect(result).toBe(true);
   });
 });
