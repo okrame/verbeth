@@ -1,6 +1,7 @@
 {
   "name": "verbeth",
   "private": true,
+  "packageManager": "pnpm@10.30.1",
   "scripts": {
     "test:scan-engine": "./packages/sdk/node_modules/.bin/vitest run tests/scan-engine.test.ts --config vitest.integration.config.mjs --pool=threads",
     "test:integration": "./packages/sdk/node_modules/.bin/vitest run tests/*.test.ts --config vitest.integration.config.mjs --pool=threads",
